@@ -49,6 +49,10 @@ packages/backend/alembic/versions/*.py
 
 # Frontend build cache
 .eslintcache
+*.tsbuildinfo
+
+# PDF.js worker (pre-built binary, installed via pdfjs-dist)
+packages/frontend/public/pdf.worker.min.mjs
 
 # Linter caches
 .ruff_cache/
