@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.uv/
+
+# Build outputs
+dist/
+build/
+.vite/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+coverage/
+.coverage
+.pytest_cache/
+.playwright/
+.playwright-mcp/
+test-results/
+playwright-report/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+*.pyd
+*.so
+
+# Logs
+*.log
+npm-debug.log*
+
+# Alembic
+packages/backend/alembic/versions/*.py
+
+# Frontend build cache
+.eslintcache
+
+# Linter caches
+.ruff_cache/
+
+# Superpowers brainstorm artifacts
+.superpowers/
+
+# Documentation (design docs, plans — not needed in repo)
+docs/
+
+# Scratch/experiment folders
+experiment_pdf/
+
+# Editor/tool configs
+.opencode/
+
+# CI/CD — excluded until ready for deployment
+.github/
+
+# Claude Code local config and memory
+.claude/

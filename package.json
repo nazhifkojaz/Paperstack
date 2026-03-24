@@ -1,0 +1,16 @@
+{
+  "name": "paperstack",
+  "private": true,
+  "version": "0.0.1",
+  "description": "PDF viewer and management app for students and academics",
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter frontend dev\" \"cd packages/backend && uv run uvicorn app.main:app --reload\"",
+    "test:frontend": "pnpm --filter frontend test",
+    "test:e2e": "pnpm --filter frontend test:e2e",
+    "test:backend": "cd packages/backend && uv run pytest"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "rollup-plugin-visualizer": "^7.0.1"
+  }
+}
