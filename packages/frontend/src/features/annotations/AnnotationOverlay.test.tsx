@@ -68,15 +68,19 @@ describe('AnnotationOverlay', () => {
       // Expected: x = 400/800 = 0.5, y = 500/1000 = 0.5
       // w = |600-400|/800 = 0.25, h = |700-500|/1000 = 0.2
       expect(createMock).toHaveBeenCalledWith(
-        {
+        expect.objectContaining({
           set_id: 'set-1',
           page_number: 1,
           type: 'rect',
-          rects: [{ x: 0.5, y: 0.5, w: 0.25, h: expect.any(Number) }],
           color: '#FF0000',
-        },
-        expect.objectContaining({
-          onSuccess: expect.any(Function),
+          rects: expect.arrayContaining([
+            expect.objectContaining({
+              x: 0.5,
+              y: 0.5,
+              w: 0.25,
+              h: expect.closeTo(0.2, 5),
+            }),
+          ]),
         })
       )
     })
@@ -106,15 +110,19 @@ describe('AnnotationOverlay', () => {
 
       // Should normalize to positive width/height with correct x,y
       expect(createMock).toHaveBeenCalledWith(
-        {
+        expect.objectContaining({
           set_id: 'set-1',
           page_number: 1,
           type: 'rect',
-          rects: [{ x: 0.5, y: 0.5, w: 0.25, h: expect.any(Number) }],
           color: '#FF0000',
-        },
-        expect.objectContaining({
-          onSuccess: expect.any(Function),
+          rects: expect.arrayContaining([
+            expect.objectContaining({
+              x: 0.5,
+              y: 0.5,
+              w: 0.25,
+              h: expect.closeTo(0.2, 5),
+            }),
+          ]),
         })
       )
     })

@@ -1,12 +1,11 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
-import { toast } from 'sonner';
 import { StickyNote } from 'lucide-react';
 import { useAnnotationStore } from '@/stores/annotationStore';
 import { useAnnotationSets, useMultiSetAnnotations, useCreateAnnotation, useUpdateAnnotation } from '@/api/annotations';
-import { useExplainAnnotation } from '@/api/chat';
-import { useQueryClient } from '@tanstack/react-query';
 import type { TextLayerHandle } from '@/features/viewer/TextLayer';
 import { useTextMatcher } from './useTextMatcher';
+import { useRectCreate } from './useRectCreate';
+import { useAnnotationExplain } from './useAnnotationExplain';
 import { NotePopover } from './NotePopover';
 import { AnnotationToolbar } from './AnnotationToolbar';
 import { AnnotationContextMenu } from './AnnotationContextMenu';
@@ -20,8 +19,10 @@ interface AnnotationOverlayProps {
 }
 
 export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, className = '' }: AnnotationOverlayProps) => {
-    // Change 1: Remove activeTool references, use isDrawingRect instead
+    // Store integration
     const { isDrawingRect, selectedSetId, hiddenSetIds, selectedAnnotationId, setSelectedAnnotationId, contextMenu, setContextMenu, setIsDrawingRect } = useAnnotationStore();
+
+    // Data fetching
     const { data: allSets } = useAnnotationSets(pdfId);
     const visibleSetIds = useMemo(
         () => (allSets ?? []).filter(s => !hiddenSetIds.has(s.id)).map(s => s.id),
@@ -29,19 +30,37 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
     );
     const { data: annotations } = useMultiSetAnnotations(visibleSetIds);
     const { mutate: createAnnotation } = useCreateAnnotation();
-
-    const containerRef = useRef<HTMLDivElement>(null);
-    const [dragStart, setDragStart] = useState<{ x: number, y: number } | null>(null);
-    const [dragCurrent, setDragCurrent] = useState<{ x: number, y: number } | null>(null);
-    const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-    const [explainAnnotationId, setExplainAnnotationId] = useState<string | null>(null);
-    const [explainStatusMessage, setExplainStatusMessage] = useState<string>('');
-
     const { mutate: updateAnnotation } = useUpdateAnnotation();
-    const { mutate: explainAnnotation } = useExplainAnnotation();
-    const queryClient = useQueryClient();
 
-    // Change 2 & 3: Remove onDragMove from destructuring, wire onDragEndCallbackRef
+    // Refs and local state
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+
+    // Custom hooks
+    const rectCreate = useRectCreate({
+        containerRef,
+        isDrawingRect,
+        selectedSetId,
+        onCreate: (rect) => {
+            createAnnotation({
+                set_id: selectedSetId!,
+                page_number: pageNumber,
+                type: 'rect',
+                rects: [rect],
+                color: '#FF0000',
+            });
+        },
+        onDrawingEnd: () => setIsDrawingRect(false),
+    });
+
+    const annotationExplain = useAnnotationExplain({
+        onSuccess: (_explanation, _noteContent, annotationId) => {
+            // Open the note popover to show the explanation
+            setEditingNoteId(annotationId);
+        },
+    });
+
+    // Annotation drag for move/resize
     const {
         isDragging,
         previewRect: dragPreviewRect,
@@ -50,9 +69,9 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         startMove,
         onDragEnd,
         onDragEndCallbackRef,
-    } = useAnnotationDrag(containerRef);
+    } = useAnnotationDrag(containerRef as React.RefObject<HTMLDivElement>);
 
-    // Change 3: Wire onDragEndCallbackRef
+    // Wire drag end callback
     const handleDragEnd = () => {
         const result = onDragEnd();
         if (!result) return;
@@ -68,14 +87,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
     };
 
     onDragEndCallbackRef.current = handleDragEnd;
-
-    // Change 4: Clear local drag state when isDrawingRect becomes false
-    useEffect(() => {
-        if (!isDrawingRect) {
-            setDragStart(null);
-            setDragCurrent(null);
-        }
-    }, [isDrawingRect]);
 
     // Clear annotation selection on scroll so the toolbar doesn't linger
     useEffect(() => {
@@ -100,135 +111,28 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         return resolvedAnnotations.filter(a => a.page_number === pageNumber);
     }, [resolvedAnnotations, pageNumber]);
 
-    const getNormalizedCoordinates = (e: React.MouseEvent) => {
-        if (!containerRef.current) return null;
-        const rect = containerRef.current.getBoundingClientRect();
-        return {
-            x: (e.clientX - rect.left) / rect.width,
-            y: (e.clientY - rect.top) / rect.height,
-        };
-    };
-
-    const handleMouseDown = (e: React.MouseEvent) => {
-        // Only allow drawing when isDrawingRect is true
-        if (!isDrawingRect || !selectedSetId) return;
-        const coords = getNormalizedCoordinates(e);
-        if (coords) {
-            setDragStart(coords);
-            setDragCurrent(coords);
-        }
-    };
-
-    const handleMouseMove = (e: React.MouseEvent) => {
-        // Change 2: Remove onDragMove call - hook handles it internally
-        // The hook now uses document-level listeners
-        if (!dragStart) return;
-        const coords = getNormalizedCoordinates(e);
-        if (coords) {
-            setDragCurrent(coords);
-        }
-    };
-
-    const handleMouseUp = () => {
-        // Note: Drag end is handled by the hook via onDragEndCallbackRef
-        // and document-level listeners
-
-        if (!dragStart || !dragCurrent || !selectedSetId) {
-            setDragStart(null);
-            setDragCurrent(null);
-            return;
-        }
-
-        const x = Math.min(dragStart.x, dragCurrent.x);
-        const y = Math.min(dragStart.y, dragCurrent.y);
-        const w = Math.abs(dragCurrent.x - dragStart.x);
-        const h = Math.abs(dragCurrent.y - dragStart.y);
-
-        if (w > 0.01 && h > 0.01) {
-            createAnnotation({
-                set_id: selectedSetId,
-                page_number: pageNumber,
-                type: 'rect',
-                rects: [{ x, y, w, h }],
-                color: '#FF0000',
-            }, {
-                onSuccess: () => {
-                    // Change 10: One-shot rect - after creation, turn off drawing mode
-                    setIsDrawingRect(false);
-                },
-            });
-        }
-
-        setDragStart(null);
-        setDragCurrent(null);
-    };
-
+    // Handler for explain feature
     const handleExplainThis = (annotationId: string) => {
         const ann = pageAnnotations.find(a => a.id === annotationId);
-        if (!ann || !ann.selected_text) return;
+        if (!ann) return;
 
         setSelectedAnnotationId(annotationId);
-        setEditingNoteId(annotationId);
-        setExplainAnnotationId(annotationId);
-        setExplainStatusMessage('Generating explanation...');
-
-        explainAnnotation(
-            {
-                pdf_id: pdfId,
-                annotation_id: annotationId,
-                selected_text: ann.selected_text,
-                page_number: ann.page_number,
-            },
-            {
-                onSuccess: (result) => {
-                    // Synchronously update cache so NotePopover sees the new note_content
-                    queryClient.setQueryData(
-                        ['annotations', ann.set_id],
-                        (old: any[] | undefined) => {
-                            if (!old) return old;
-                            return old.map(a =>
-                                a.id === annotationId ? { ...a, note_content: result.note_content } : a
-                            );
-                        }
-                    );
-                    setExplainAnnotationId(null);
-                    setExplainStatusMessage('');
-                },
-                onError: (err: Error) => {
-                    setExplainAnnotationId(null);
-                    setExplainStatusMessage('');
-                    toast.error(`Explanation failed: ${err.message}`);
-                },
-            }
-        );
+        annotationExplain.explain(ann, pdfId);
     };
 
     if (visibleSetIds.length === 0 && !selectedSetId) return null;
 
-    // Change 5: Container pointer-events-none by default, pointer-events-auto cursor-crosshair when isDrawingRect
+    // Container pointer-events-none by default, pointer-events-auto cursor-crosshair when isDrawingRect
     const containerClasses = `absolute inset-0 z-30 ${isDrawingRect ? 'pointer-events-auto cursor-crosshair' : 'pointer-events-none'} ${className}`;
-
-    let createPreviewRect = null;
-    if (dragStart && dragCurrent && isDrawingRect) {
-        const x = Math.min(dragStart.x, dragCurrent.x);
-        const y = Math.min(dragStart.y, dragCurrent.y);
-        const w = Math.abs(dragCurrent.x - dragStart.x);
-        const h = Math.abs(dragCurrent.y - dragStart.y);
-        createPreviewRect = { x, y, w, h };
-    }
 
     return (
         <div
             ref={containerRef}
             className={containerClasses}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={() => {
-                setDragStart(null);
-                setDragCurrent(null);
-                // Note: onDragEnd is called by the hook's document-level listener
-            }}
+            onMouseDown={rectCreate.handleMouseDown}
+            onMouseMove={rectCreate.handleMouseMove}
+            onMouseUp={rectCreate.handleMouseUp}
+            onMouseLeave={rectCreate.handleMouseLeave}
             onClick={(e) => {
                 // If clicking directly on the overlay background (not on an annotation <g>),
                 // clear the selection
@@ -366,12 +270,12 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                     ));
                 })()}
 
-                {createPreviewRect && (
+                {rectCreate.previewRect && (
                     <rect
-                        x={`${createPreviewRect.x * 100}%`}
-                        y={`${createPreviewRect.y * 100}%`}
-                        width={`${createPreviewRect.w * 100}%`}
-                        height={`${createPreviewRect.h * 100}%`}
+                        x={`${rectCreate.previewRect.x * 100}%`}
+                        y={`${rectCreate.previewRect.y * 100}%`}
+                        width={`${rectCreate.previewRect.w * 100}%`}
+                        height={`${rectCreate.previewRect.h * 100}%`}
                         fill="transparent"
                         stroke="#FF0000"
                         strokeWidth={2}
@@ -391,11 +295,10 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                         containerRef={containerRef}
                         onClose={() => {
                             setEditingNoteId(null);
-                            setExplainAnnotationId(null);
-                            setExplainStatusMessage('');
+                            annotationExplain.clearExplain();
                         }}
-                        isExplaining={explainAnnotationId === noteAnn.id}
-                        explainStatusMessage={explainStatusMessage}
+                        isExplaining={annotationExplain.isExplaining && annotationExplain.explainingId === noteAnn.id}
+                        explainStatusMessage={annotationExplain.statusMessage}
                     />
                 );
             })()}
