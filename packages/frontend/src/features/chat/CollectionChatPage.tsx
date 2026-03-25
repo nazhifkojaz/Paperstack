@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Markdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -16,10 +16,12 @@ import {
     useCreateConversation,
     useChatHistory,
     useDeleteConversation,
-    streamChat,
-    type ContextChunk,
+    type Conversation,
 } from '@/api/chat';
+import { useChatStream, type StreamingMessage } from '@/hooks/useChatStream';
+import { ChatMessageList } from '@/components/chat/ChatMessageList';
 import { DeleteConversationDialog } from './DeleteConversationDialog';
+import { BASE_URL } from '@/lib/config';
 
 export function CollectionChatPage() {
     const { collectionId } = useParams<{ collectionId: string }>();
@@ -28,17 +30,29 @@ export function CollectionChatPage() {
 
     const [activeConvId, setActiveConvId] = useState<string | null>(null);
     const [deletingConv, setDeletingConv] = useState<{ id: string; title: string } | null>(null);
-    const [input, setInput] = useState('');
-    const [isSending, setIsSending] = useState(false);
-    const [streamContent, setStreamContent] = useState('');
-    const [streamChunks, setStreamChunks] = useState<ContextChunk[]>([]);
-    const [isStreaming, setIsStreaming] = useState(false);
-    const bottomRef = useRef<HTMLDivElement>(null);
 
     const { data: conversations = [], isLoading: loadingConvs } = useConversations(undefined, collectionId);
     const createConversation = useCreateConversation();
     const deleteConversation = useDeleteConversation();
     const { data: history = [] } = useChatHistory(activeConvId);
+
+    // Use the shared streaming hook
+    const {
+        input,
+        setInput,
+        isSending,
+        handleSend,
+        handleKeyDown,
+        clearStreaming,
+        bottomRef,
+        streamingMessage,
+    } = useChatStream({
+        conversationId: activeConvId,
+        invalidateQueryKeys: [['chat-history', activeConvId]],
+        onError: (error) => {
+            toast.error(error);
+        },
+    });
 
     // Auto-select first conversation
     useEffect(() => {
@@ -47,18 +61,12 @@ export function CollectionChatPage() {
         }
     }, [conversations, loadingConvs, activeConvId]);
 
-    // Scroll to bottom
-    useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [history, streamContent]);
-
     const handleNewConversation = async () => {
         if (!collectionId) return;
         try {
             const conv = await createConversation.mutateAsync({ collection_id: collectionId });
             setActiveConvId(conv.id);
-            setStreamContent('');
-            setStreamChunks([]);
+            clearStreaming();
         } catch {
             toast.error('Failed to create conversation');
         }
@@ -75,8 +83,7 @@ export function CollectionChatPage() {
             );
             if (activeConvId === id) {
                 setActiveConvId(null);
-                setStreamContent('');
-                setStreamChunks([]);
+                clearStreaming();
             }
         } catch {
             toast.error('Failed to delete conversation');
@@ -85,54 +92,15 @@ export function CollectionChatPage() {
         }
     };
 
-    const handleSend = async () => {
-        const message = input.trim();
-        if (!message || isSending || !activeConvId) return;
-
-        setInput('');
-        setIsSending(true);
-        setIsStreaming(true);
-        setStreamContent('');
-        setStreamChunks([]);
-
-        try {
-            await streamChat({
-                conversationId: activeConvId,
-                message,
-                onToken: (token) => setStreamContent((s) => s + token),
-                onDone: (_messageId, chunks) => {
-                    setIsStreaming(false);
-                    setStreamChunks(chunks);
-                    queryClient.invalidateQueries({ queryKey: ['chat-history', activeConvId] });
-                    setTimeout(() => { setStreamContent(''); setStreamChunks([]); }, 100);
-                },
-                onError: (err) => {
-                    setIsStreaming(false);
-                    setStreamContent('');
-                    toast.error(err.message);
-                },
-            });
-        } finally {
-            setIsSending(false);
-        }
-    };
-
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
-    };
-
-    const allMessages = [
+    // Combined message list: persisted history + in-flight streaming message
+    const displayMessages = [
         ...history,
-        ...(isStreaming || streamContent ? [{
-            id: 'streaming',
+        ...(streamingMessage ? [{
+            id: streamingMessage.id,
             role: 'assistant' as const,
-            content: streamContent,
-            context_chunks: streamChunks.length > 0 ? streamChunks : null,
-            created_at: new Date().toISOString(),
-            isStreaming,
+            content: streamingMessage.content,
+            context_chunks: streamingMessage.isStreaming ? null : streamingMessage.context_chunks,
+            isStreaming: streamingMessage.isStreaming,
         }] : []),
     ];
 
@@ -182,7 +150,7 @@ export function CollectionChatPage() {
                                             ? 'bg-primary/10 text-primary'
                                             : 'hover:bg-muted text-muted-foreground'
                                     }`}
-                                    onClick={() => { setActiveConvId(conv.id); setStreamContent(''); setStreamChunks([]); }}
+                                    onClick={() => { setActiveConvId(conv.id); clearStreaming(); }}
                                 >
                                     <span className="text-xs flex-1 min-w-0" title={title}>
                                         {displayTitle}
@@ -223,57 +191,16 @@ export function CollectionChatPage() {
                 ) : (
                     <>
                         <ScrollArea className="flex-1 px-4 py-3">
-                            {allMessages.length === 0 && (
-                                <p className="text-sm text-muted-foreground text-center mt-12">
-                                    Ask a question about the papers in this collection.
-                                </p>
-                            )}
-                            <div className="flex flex-col gap-4 max-w-3xl mx-auto">
-                                {allMessages.map((msg) => (
-                                    <div key={msg.id} className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                                        <div className={`rounded-lg px-4 py-2.5 text-sm max-w-[80%] break-words ${
-                                            msg.role === 'user'
-                                                ? 'bg-primary text-primary-foreground'
-                                                : 'bg-muted text-foreground'
-                                        }`}>
-                                            {!msg.content && ('isStreaming' in msg && msg.isStreaming)
-                                                ? <Loader2 className="h-3 w-3 animate-spin" />
-                                                : msg.role === 'user'
-                                                    ? <span className="whitespace-pre-wrap">{msg.content}</span>
-                                                    : <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0"><Markdown>{msg.content}</Markdown></div>
-                                            }
-                                            {('isStreaming' in msg && msg.isStreaming) && msg.content && (
-                                                <span className="inline-block w-1 h-3 bg-current ml-0.5 animate-pulse" />
-                                            )}
-                                        </div>
-                                        {msg.role === 'assistant' && msg.context_chunks && msg.context_chunks.length > 0 && (
-                                            <div className="flex flex-wrap gap-1 max-w-[80%]">
-                                                {msg.context_chunks.map((chunk) => {
-                                                    const title = chunk.pdf_title;
-                                                    const label = title
-                                                        ? `${title.length > 18 ? title.slice(0, 18) + '…' : title} · p.${chunk.page_number}`
-                                                        : `p.${chunk.page_number}`;
-                                                    return (
-                                                        <Badge
-                                                            key={chunk.chunk_id}
-                                                            variant="outline"
-                                                            className={`text-xs ${chunk.pdf_id ? 'cursor-pointer hover:bg-primary/10 transition-colors' : ''}`}
-                                                            title={chunk.snippet}
-                                                            onClick={() => {
-                                                                if (chunk.pdf_id) {
-                                                                    window.open(`${import.meta.env.BASE_URL}viewer/${chunk.pdf_id}`, '_blank');
-                                                                }
-                                                            }}
-                                                        >
-                                                            {label}
-                                                        </Badge>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
+                            <ChatMessageList
+                                messages={displayMessages}
+                                isSending={isSending}
+                                emptyMessage="Ask a question about the papers in this collection."
+                                onChunkClickUrl={(chunk) => {
+                                    if (chunk.pdf_id) {
+                                        window.open(`${BASE_URL}/viewer/${chunk.pdf_id}`, '_blank');
+                                    }
+                                }}
+                            />
                             <div ref={bottomRef} />
                         </ScrollArea>
 
@@ -290,7 +217,7 @@ export function CollectionChatPage() {
                             />
                             <Button
                                 size="icon"
-                                onClick={handleSend}
+                                onClick={() => handleSend()}
                                 disabled={!input.trim() || isSending}
                                 className="shrink-0 h-10 w-10"
                             >

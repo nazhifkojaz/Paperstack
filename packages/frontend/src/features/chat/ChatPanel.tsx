@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
-import Markdown from 'react-markdown';
-import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { MessageSquare, Plus, Send, Loader2, BookOpen, AlertCircle, RefreshCw, Trash2 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 import { useChatStore } from '@/stores/chatStore';
@@ -18,10 +16,11 @@ import {
     useDeleteConversation,
     useChatHistory,
     streamChat,
-    type ChatMessage,
     type Conversation,
     type ContextChunk,
 } from '@/api/chat';
+import { useChatStream, type StreamingMessage } from '@/hooks/useChatStream';
+import { ChatMessageList } from '@/components/chat/ChatMessageList';
 import { DeleteConversationDialog } from './DeleteConversationDialog';
 
 interface ChatPanelProps {
@@ -29,22 +28,43 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
-    const { isPanelOpen, activeConversationId, setActiveConversationId, streamingMessage,
-        startStreaming, appendToken, finalizeStreaming, clearStreaming } = useChatStore();
+    const { isPanelOpen, activeConversationId, setActiveConversationId } = useChatStore();
     const { setCurrentPage } = usePdfViewerStore();
     const queryClient = useQueryClient();
 
-    const [input, setInput] = useState('');
-    const [isSending, setIsSending] = useState(false);
-    const [indexError, setIndexError] = useState<string | null>(null);
-    const [lastMessage, setLastMessage] = useState<string>('');
     const [deletingConv, setDeletingConv] = useState<{ id: string; title: string } | null>(null);
-    const bottomRef = useRef<HTMLDivElement>(null);
 
     const { data: conversations = [], isLoading: loadingConvs } = useConversations(pdfId);
     const createConversation = useCreateConversation();
     const { mutateAsync: deleteConversation, isPending: isDeletingConv } = useDeleteConversation();
     const { data: history = [] } = useChatHistory(activeConversationId);
+
+    // Use the shared streaming hook
+    const {
+        input,
+        setInput,
+        isSending,
+        indexError,
+        setIndexError,
+        handleSend,
+        handleRetry,
+        handleKeyDown,
+        clearStreaming,
+        bottomRef,
+        streamingMessage,
+    } = useChatStream({
+        conversationId: activeConversationId,
+        invalidateQueryKeys: [
+            ['chat-history', activeConversationId],
+            ['chat-conversations', pdfId, undefined],
+        ],
+        onMessageStart: () => setIndexError(null),
+        onError: (error, isQuotaError, isIndexError) => {
+            if (isIndexError) {
+                setIndexError(error);
+            }
+        },
+    });
 
     // Auto-select first conversation or create one
     useEffect(() => {
@@ -54,17 +74,11 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
         }
     }, [conversations, loadingConvs, activeConversationId, isPanelOpen, setActiveConversationId]);
 
-    // Scroll to bottom on new messages
-    useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [history, streamingMessage?.content]);
-
     if (!isPanelOpen) return null;
 
     const handleNewConversation = async () => {
         try {
             const conv = await createConversation.mutateAsync({ pdf_id: pdfId });
-            // Immediately add to cache so the message area appears without waiting for the refetch
             queryClient.setQueryData<Conversation[]>(
                 ['chat-conversations', pdfId, undefined],
                 (old = []) => [conv, ...old],
@@ -75,50 +89,6 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
         } catch {
             toast.error('Failed to create conversation');
         }
-    };
-
-    const handleSend = async (overrideMessage?: string) => {
-        const message = (overrideMessage ?? input).trim();
-        if (!message || isSending || !activeConversationId) return;
-
-        setInput('');
-        setIndexError(null);
-        setLastMessage(message);
-        setIsSending(true);
-        const tempId = `temp-${Date.now()}`;
-        startStreaming(tempId);
-
-        try {
-            await streamChat({
-                conversationId: activeConversationId,
-                message,
-                onToken: (token) => appendToken(token),
-                onDone: (messageId, chunks) => {
-                    finalizeStreaming(messageId, chunks);
-                },
-                onError: (err) => {
-                    clearStreaming();
-                    if (err.message.includes('quota')) {
-                        toast.error('Chat quota exhausted. Add an API key in Settings.');
-                    } else if (err.message.toLowerCase().includes('index')) {
-                        setIndexError(err.message);
-                    } else {
-                        toast.error(err.message);
-                    }
-                },
-            });
-            // Stream is fully done — refetch history first, then clear the streaming
-            // message so it's never removed before the new history data arrives.
-            await queryClient.invalidateQueries({ queryKey: ['chat-history', activeConversationId] });
-            queryClient.invalidateQueries({ queryKey: ['chat-conversations', pdfId, undefined] });
-            clearStreaming();
-        } finally {
-            setIsSending(false);
-        }
-    };
-
-    const handleRetry = () => {
-        if (lastMessage) handleSend(lastMessage);
     };
 
     const handleDeleteConversation = async () => {
@@ -142,21 +112,14 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
         }
     };
 
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
-    };
-
     // Combined message list: persisted history + in-flight streaming message
-    const displayMessages: Array<ChatMessage | { id: string; role: 'user' | 'assistant'; content: string; context_chunks: ContextChunk[] | null; isStreaming?: boolean }> = [
+    const displayMessages = [
         ...history,
         ...(streamingMessage ? [{
             id: streamingMessage.id,
             role: 'assistant' as const,
             content: streamingMessage.content,
-            context_chunks: streamingMessage.isStreaming ? null : streamingMessage.contextChunks,
+            context_chunks: streamingMessage.isStreaming ? null : streamingMessage.context_chunks,
             isStreaming: streamingMessage.isStreaming,
         }] : []),
     ];
@@ -250,22 +213,12 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
             {/* Message list */}
             {!noConversation && (
                 <ScrollArea className="flex-1 px-3 py-2">
-                    {displayMessages.length === 0 && !isSending && (
-                        <p className="text-xs text-muted-foreground text-center mt-8">
-                            Ask a question about this paper.
-                        </p>
-                    )}
-
-                    <div className="flex flex-col gap-3">
-                        {displayMessages.map((msg) => (
-                            <MessageBubble
-                                key={msg.id}
-                                message={msg}
-                                onChunkClick={setCurrentPage}
-                            />
-                        ))}
-
-                    </div>
+                    <ChatMessageList
+                        messages={displayMessages}
+                        isSending={isSending}
+                        emptyMessage="Ask a question about this paper."
+                        onChunkClick={(chunk) => setCurrentPage(chunk.page_number)}
+                    />
                     <div ref={bottomRef} />
                 </ScrollArea>
             )}
@@ -297,62 +250,6 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
                     >
                         {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                     </Button>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-interface MessageBubbleProps {
-    message: {
-        id: string;
-        role: 'user' | 'assistant';
-        content: string;
-        context_chunks: ContextChunk[] | null;
-        isStreaming?: boolean;
-    };
-    onChunkClick: (page: number) => void;
-}
-
-const MessageBubble = ({ message, onChunkClick }: MessageBubbleProps) => {
-    const isUser = message.role === 'user';
-
-    return (
-        <div className={`flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
-            <div
-                className={`rounded-lg px-3 py-2 text-sm max-w-[90%] break-words ${
-                    isUser
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-foreground'
-                }`}
-            >
-                {!message.content && message.isStreaming
-                    ? <Loader2 className="h-3 w-3 animate-spin" />
-                    : isUser
-                        ? <span className="whitespace-pre-wrap">{message.content}</span>
-                        : <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0"><Markdown>{message.content}</Markdown></div>
-                }
-                {message.isStreaming && message.content && (
-                    <span className="inline-block w-1 h-3 bg-current ml-0.5 animate-pulse" />
-                )}
-            </div>
-
-            {/* Context chunk badges */}
-            {!isUser && message.context_chunks && message.context_chunks.length > 0 && (
-                <div className="flex flex-wrap gap-1 max-w-[90%]">
-                    {message.context_chunks.map((chunk) => (
-                        <Badge
-                            key={chunk.chunk_id}
-                            variant="outline"
-                            className="text-xs cursor-pointer hover:bg-primary/10 transition-colors"
-                            onClick={() => onChunkClick(chunk.page_number)}
-                            title={chunk.snippet}
-                        >
-                            p.{chunk.page_number}
-                        </Badge>
-                    ))}
                 </div>
             )}
         </div>
