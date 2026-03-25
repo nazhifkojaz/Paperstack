@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, Any, Literal
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 class CitationBase(BaseModel):
     doi: Optional[str] = None
@@ -30,9 +30,7 @@ class CitationResponse(CitationBase):
     user_id: UUID
     created_at: datetime
     updated_at: datetime
-    
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class BulkExportRequest(BaseModel):
     pdf_ids: list[UUID]

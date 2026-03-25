@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, ConfigDict
 
 class PdfBase(BaseModel):
     title: str
@@ -34,9 +34,7 @@ class PdfResponse(PdfBase):
     page_count: Optional[int] = None
     uploaded_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PdfListParams(BaseModel):
     collection_id: Optional[uuid.UUID] = None

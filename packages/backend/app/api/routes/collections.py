@@ -27,7 +27,6 @@ async def create_collection(
             raise HTTPException(status_code=400, detail="Invalid parent collection")
 
     collection = Collection(
-        id=uuid.uuid4(),  # Generate ID in Python for SQLite compatibility
         user_id=current_user.id,
         name=collection_in.name,
         parent_id=collection_in.parent_id,

@@ -1,5 +1,5 @@
 import uuid
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
 class Token(BaseModel):
@@ -20,6 +20,4 @@ class UserResponse(BaseModel):
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
     repo_created: bool
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

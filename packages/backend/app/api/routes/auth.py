@@ -50,7 +50,6 @@ async def github_callback(request: Request, code: str, db: AsyncSession = Depend
         user.access_token = encrypted_token
     else:
         user = User(
-            id=uuid.uuid4(),  # Generate ID in Python for SQLite compatibility
             github_id=github_user_data["id"],
             github_login=github_user_data["login"],
             display_name=github_user_data.get("name"),

@@ -56,7 +56,6 @@ async def upload_pdf(
 
     # Save to database
     pdf = Pdf(
-        id=uuid.uuid4(),
         user_id=current_user.id,
         title=title,
         filename=filename,

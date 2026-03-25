@@ -22,7 +22,6 @@ async def create_tag(
 ) -> Any:
     """Create a new tag."""
     tag = Tag(
-        id=uuid.uuid4(),  # Generate ID in Python for SQLite compatibility
         user_id=current_user.id,
         name=tag_in.name,
         color=tag_in.color
