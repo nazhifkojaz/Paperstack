@@ -1,14 +1,6 @@
 import { useUpdateAnnotation, type Annotation } from '@/api/annotations';
 import { Check, StickyNote } from 'lucide-react';
-
-const COLOR_PRESETS = [
-    { color: '#EF4444', label: 'Red' },
-    { color: '#3B82F6', label: 'Blue' },
-    { color: '#22C55E', label: 'Green' },
-    { color: '#FFFF00', label: 'Yellow' },
-    { color: '#F97316', label: 'Orange' },
-    { color: '#A855F7', label: 'Purple' },
-];
+import { ANNOTATION_COLORS } from './constants';
 
 interface AnnotationToolbarProps {
     annotation: Annotation;
@@ -53,7 +45,7 @@ export const AnnotationToolbar = ({ annotation, containerRef, onEditNote }: Anno
         >
             <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-2 py-1.5 flex items-center gap-1">
                 {/* Color swatches */}
-                {COLOR_PRESETS.map(({ color, label }) => (
+                {ANNOTATION_COLORS.map(({ color, label }) => (
                     <button
                         key={color}
                         data-color={color}

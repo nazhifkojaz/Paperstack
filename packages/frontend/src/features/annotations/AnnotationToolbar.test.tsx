@@ -44,11 +44,11 @@ describe('AnnotationToolbar', () => {
             />
         )
 
-        // Should render 6 color swatch buttons
+        // Should render 8 color swatch buttons (ANNOTATION_COLORS has 8 colors)
         const swatches = screen.getAllByRole('button').filter(
             btn => btn.getAttribute('data-color')
         )
-        expect(swatches.length).toBe(6)
+        expect(swatches.length).toBe(8)
     })
 
     it('renders note button for highlight and rect annotations', () => {

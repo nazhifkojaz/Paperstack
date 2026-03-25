@@ -3,17 +3,7 @@ import { createPortal } from 'react-dom'
 import { useUpdateAnnotation, useDeleteAnnotation } from '@/api/annotations'
 import { useAnnotationStore } from '@/stores/annotationStore'
 import type { Annotation } from '@/api/annotations'
-
-const COLORS = [
-  '#FFFF00', // yellow
-  '#00FF00', // green
-  '#FF0000', // red
-  '#0000FF', // blue
-  '#FF00FF', // magenta
-  '#00FFFF', // cyan
-  '#FFA500', // orange
-  '#800080', // purple
-]
+import { ANNOTATION_COLORS } from './constants'
 
 interface Position {
   x: number
@@ -171,7 +161,7 @@ export const AnnotationContextMenu = ({
       <div className="px-4 py-2">
         <div className="text-xs text-gray-500 mb-1">Color</div>
         <div className="flex gap-1 flex-wrap">
-          {COLORS.map((color) => (
+          {ANNOTATION_COLORS.map(({ color }) => (
             <button
               key={color}
               className="w-5 h-5 rounded border border-gray-300 hover:scale-110 transition-transform"
