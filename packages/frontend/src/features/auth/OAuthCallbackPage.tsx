@@ -10,9 +10,24 @@ export function OAuthCallbackPage() {
     const setAuth = useAuthStore((s) => s.setAuth)
 
     useEffect(() => {
-        const params = new URLSearchParams(window.location.search)
-        const accessToken = params.get('access_token')
-        const refreshToken = params.get('refresh_token')
+        // Parse tokens from URL fragment (hash) instead of query params
+        // Fragments are not sent to server and don't appear in logs/history
+        const parseHashParams = (hash: string): Record<string, string> => {
+            const params: Record<string, string> = {}
+            // Remove the leading # and split by &
+            const pairs = hash.substring(1).split('&')
+            for (const pair of pairs) {
+                const [key, value] = pair.split('=')
+                if (key && value) {
+                    params[key] = value
+                }
+            }
+            return params
+        }
+
+        const params = parseHashParams(window.location.hash)
+        const accessToken = params['access_token']
+        const refreshToken = params['refresh_token']
 
         if (!accessToken || !refreshToken) {
             navigate('/login', { replace: true })
