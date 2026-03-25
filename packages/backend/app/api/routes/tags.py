@@ -117,11 +117,19 @@ async def remove_tag_from_pdf(
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
     """Remove a tag from a PDF."""
-    # Using the combination of IDs ensures they own both indirectly (if records exist)
+    # Verify ownership of both the PDF and the tag
+    tag = await db.get(Tag, tag_id)
+    if not tag or tag.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+    pdf = await db.get(Pdf, pdf_id)
+    if not pdf or pdf.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
     pdf_tag = await db.get(PdfTag, (pdf_id, tag_id))
     if not pdf_tag:
         raise HTTPException(status_code=404, detail="Tag is not assigned to this PDF")
-        
+
     await db.delete(pdf_tag)
     await db.commit()
     return {"message": "Tag removed from PDF"}
