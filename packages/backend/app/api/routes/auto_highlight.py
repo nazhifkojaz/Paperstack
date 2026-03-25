@@ -1,93 +1,36 @@
 """Auto-highlight routes: LLM-powered paper analysis."""
 import logging
-import tempfile
 import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import case, select, delete, func
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api.deps import get_db, get_current_user
 from app.core.config import settings
-from app.core.security import decrypt_token
 from app.db.models import (
     User, Pdf, Annotation, AnnotationSet, AutoHighlightCache,
-    UserApiKey, UserUsageQuota,
 )
 from app.middleware.rate_limit import limiter
 from app.schemas.auto_highlight import (
     AutoHighlightRequest, AutoHighlightResponse,
     AutoHighlightCacheResponse, QuotaResponse,
 )
+from app.services.api_key_service import QuotaType, api_key_service
+from app.services.exceptions import (
+    ApiKeyNotFoundError,
+    LLMRateLimitError,
+    LLMProviderError,
+    QuotaExhaustedError,
+)
 from app.services.llm_service import llm_service, CATEGORY_COLORS
-from app.services.exceptions import LLMRateLimitError, LLMProviderError
+from app.services.pdf_download_service import PdfSource
 from app.services.text_extractor import extract_text_with_pages, is_text_pdf
-from app.services.github_repo import download_pdf_to_tempfile
 
 router = APIRouter()
-
-
-async def _resolve_api_key(
-    user: User, db: AsyncSession
-) -> tuple[str, str]:
-    """Resolve which API key and provider to use.
-
-    Returns (provider, api_key). Raises HTTPException if none available.
-    Priority: user's Gemini key > user's GLM key > in-house key (if quota).
-    """
-    # Check user's stored keys (prefer GLM)
-    result = await db.execute(
-        select(UserApiKey).where(UserApiKey.user_id == user.id).order_by(
-            # GLM first
-            case(
-                (UserApiKey.provider == "glm", 0),
-                else_=1,
-            )
-        )
-    )
-    user_keys = result.scalars().all()
-
-    for key_row in user_keys:
-        decrypted = decrypt_token(key_row.encrypted_key)
-        logger.info(
-            "Using user-provided %s key (ending ...%s) for user %s",
-            key_row.provider, decrypted[-4:], user.id,
-        )
-        return key_row.provider, decrypted
-
-    logger.info("No user API keys found for user %s, checking in-house quota", user.id)
-    # Check in-house quota
-    quota = await db.execute(
-        select(UserUsageQuota).where(UserUsageQuota.user_id == user.id)
-    )
-    quota_row = quota.scalar_one_or_none()
-
-    if quota_row is None:
-        # Create default quota
-        quota_row = UserUsageQuota(user_id=user.id, free_uses_remaining=5)
-        db.add(quota_row)
-        await db.flush()
-
-    if quota_row.free_uses_remaining <= 0:
-        raise HTTPException(
-            status_code=402,
-            detail="No API key configured and free quota exhausted. Please add an API key.",
-        )
-
-    # Use in-house key (prefer GLM)
-    if settings.GLM_API_KEY:
-        return "glm", settings.GLM_API_KEY
-    if settings.GEMINI_API_KEY:
-        return "gemini", settings.GEMINI_API_KEY
-
-    raise HTTPException(
-        status_code=503,
-        detail="No LLM provider available. Please add your own API key.",
-    )
 
 
 def _build_set_name(categories: list[str]) -> str:
@@ -139,9 +82,14 @@ async def analyze_paper(
                 highlights_count=count,
             )
 
-    # 2. Resolve API key
-    provider, api_key = await _resolve_api_key(current_user, db)
-    is_in_house = api_key in (settings.GLM_API_KEY, settings.GEMINI_API_KEY)
+    # 2. Resolve API key using service
+    try:
+        resolution = await api_key_service.resolve_for_auto_highlight(current_user, db)
+    except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
+        raise HTTPException(status_code=402, detail=str(e))
+    provider = resolution.provider
+    api_key = resolution.api_key
+    is_in_house = resolution.is_in_house
     logger.info(
         "Resolved provider=%s, is_in_house=%s for user %s",
         provider, is_in_house, current_user.id,
@@ -164,7 +112,7 @@ async def analyze_paper(
 
     tmp_path: Path | None = None
     try:
-        # 4. Fetch PDF from GitHub
+        # 4. Fetch PDF from GitHub or URL using download service
         pdf_result = await db.execute(
             select(Pdf).where(Pdf.id == data.pdf_id, Pdf.user_id == current_user.id)
         )
@@ -172,29 +120,22 @@ async def analyze_paper(
         if not pdf_row:
             raise HTTPException(status_code=404, detail="PDF not found")
 
+        # Download PDF using the unified download service
+        from app.services.pdf_download_service import pdf_download_service
+
         if pdf_row.source_url and not pdf_row.github_sha:
-            # Linked PDF — download directly from source URL
-            import httpx
-            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-                response = await client.get(pdf_row.source_url)
-                if response.status_code != 200:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"Failed to download linked PDF: HTTP {response.status_code}",
-                    )
-                tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-                try:
-                    tmp.write(response.content)
-                    tmp.close()
-                    tmp_path = Path(tmp.name)
-                except Exception:
-                    tmp.close()
-                    Path(tmp.name).unlink(missing_ok=True)
-                    raise
-        else:
-            tmp_path = await download_pdf_to_tempfile(
-                current_user.access_token, current_user.github_login, pdf_row.filename
+            download_result = await pdf_download_service.download_to_tempfile(
+                source=PdfSource.EXTERNAL_URL,
+                external_url=pdf_row.source_url,
             )
+        else:
+            download_result = await pdf_download_service.download_to_tempfile(
+                source=PdfSource.GITHUB,
+                github_access_token=current_user.access_token,
+                github_login=current_user.github_login,
+                github_filename=pdf_row.filename,
+            )
+        tmp_path = download_result.file_path
 
         # 5. Extract text
         with open(tmp_path, "rb") as f:
@@ -243,12 +184,9 @@ async def analyze_paper(
 
         # 10. Decrement quota if in-house
         if is_in_house:
-            quota_result = await db.execute(
-                select(UserUsageQuota).where(UserUsageQuota.user_id == current_user.id)
+            await api_key_service.decrement_quota(
+                str(current_user.id), QuotaType.FREE, db
             )
-            quota_row = quota_result.scalar_one_or_none()
-            if quota_row:
-                quota_row.free_uses_remaining = max(0, quota_row.free_uses_remaining - 1)
 
         await db.commit()
 

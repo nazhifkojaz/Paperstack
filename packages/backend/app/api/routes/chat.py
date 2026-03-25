@@ -1,19 +1,16 @@
 """Chat routes: conversations, SSE streaming, and semantic search."""
 import json
 import logging
-import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import case, delete, select, text as sql_text
+from sqlalchemy import select, text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
-from app.core.security import decrypt_token
 from app.db.models import (
     Annotation,
     AnnotationSet,
@@ -23,12 +20,21 @@ from app.db.models import (
     PdfChunk,
     PdfIndexStatus,
     User,
-    UserApiKey,
-    UserUsageQuota,
 )
 from app.middleware.rate_limit import limiter
-from app.services.chat_service import COLLECTION_SYSTEM_PROMPT
+from app.services.api_key_service import QuotaType, api_key_service
+from app.services.chat_service import COLLECTION_SYSTEM_PROMPT, chat_service
+from app.services.embedding_service import embedding_service
+from app.services.exceptions import (
+    ApiKeyNotFoundError,
+    EmbeddingError,
+    IndexInProgressError,
+    IndexingError,
+    QuotaExhaustedError,
+)
+from app.services.indexing_service import STALE_INDEXING_MINUTES, get_indexing_service
 from app.services.llm_service import llm_service
+from app.services.pdf_download_service import pdf_download_service
 from app.schemas.chat import (
     ConversationCreate,
     ConversationResponse,
@@ -39,188 +45,54 @@ from app.schemas.chat import (
     SemanticSearchRequest,
     SemanticSearchResult,
 )
-from app.services.chat_service import chat_service
-from app.services.chunking_service import chunk_text_with_pages
-from app.services.embedding_service import embedding_service
-from app.services.exceptions import EmbeddingError, IndexingError
-from app.services.github_repo import download_pdf_to_tempfile
-from app.services.text_extractor import extract_text_with_pages
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Initialize indexing service with download service
+indexing_service = get_indexing_service(pdf_download_service)
+
+
 # ---------------------------------------------------------------------------
-# Helpers
+# Vector Search Helpers
 # ---------------------------------------------------------------------------
 
-STALE_INDEXING_MINUTES = 10
-
-
-async def _resolve_chat_api_key(
-    user: User, db: AsyncSession
-) -> tuple[str, str, bool]:
-    """Return (provider, api_key, is_in_house).
-
-    Priority: user's stored key (openai > anthropic > gemini > glm) →
-              in-house fallback (gemini or glm) subject to chat quota.
-    """
-    result = await db.execute(
-        select(UserApiKey)
-        .where(UserApiKey.user_id == user.id)
-        .order_by(
-            case(
-                (UserApiKey.provider == "openai", 0),
-                (UserApiKey.provider == "anthropic", 1),
-                (UserApiKey.provider == "gemini", 2),
-                (UserApiKey.provider == "glm", 3),
-                else_=4,
-            )
-        )
-    )
-    user_keys = result.scalars().all()
-    for key_row in user_keys:
-        decrypted = decrypt_token(key_row.encrypted_key)
-        logger.info(
-            "Using user-provided %s key (ending ...%s) for user %s",
-            key_row.provider, decrypted[-4:], user.id,
-        )
-        return key_row.provider, decrypted, False
-
-    # In-house fallback — check chat quota
-    quota_result = await db.execute(
-        select(UserUsageQuota).where(UserUsageQuota.user_id == user.id)
-    )
-    quota_row = quota_result.scalar_one_or_none()
-    if quota_row is None:
-        quota_row = UserUsageQuota(user_id=user.id)
-        db.add(quota_row)
-        await db.flush()
-
-    if quota_row.chat_uses_remaining <= 0:
-        raise HTTPException(
-            status_code=402,
-            detail="Chat quota exhausted. Please add an API key.",
-        )
-
-    if settings.GEMINI_API_KEY:
-        return "gemini", settings.GEMINI_API_KEY, True
-    if settings.GLM_API_KEY:
-        return "glm", settings.GLM_API_KEY, True
-
-    raise HTTPException(status_code=503, detail="No LLM provider available.")
-
-
-async def _get_or_create_index_status(
-    pdf_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession
-) -> PdfIndexStatus:
-    """Return the PdfIndexStatus row, creating it with 'not_indexed' if absent."""
-    result = await db.execute(
-        select(PdfIndexStatus).where(
-            PdfIndexStatus.pdf_id == pdf_id,
-            PdfIndexStatus.user_id == user_id,
-        )
-    )
-    row = result.scalar_one_or_none()
-    if row is None:
-        row = PdfIndexStatus(pdf_id=pdf_id, user_id=user_id, status="not_indexed")
-        db.add(row)
-        await db.flush()
-    return row
-
-
-async def _lazy_index_pdf(
-    pdf_row: Pdf,
-    user: User,
-    index_status: PdfIndexStatus,
+async def _vector_search(
+    query_vector: list[float],
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    top_k: int,
     db: AsyncSession,
-) -> None:
-    """Download, chunk, embed, and store chunks for a PDF.
-
-    Sets index_status.status to 'indexed' on success, 'failed' on error.
-    Caller must commit the session.
-    """
-    index_status.status = "indexing"
-    index_status.updated_at = datetime.now(timezone.utc)
-    await db.flush()
-
-    tmp_path: Path | None = None
-    try:
-        # Download PDF
-        if pdf_row.source_url and not pdf_row.github_sha:
-            import httpx
-            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-                resp = await client.get(pdf_row.source_url)
-                if resp.status_code != 200:
-                    raise IndexingError(f"Failed to download linked PDF: HTTP {resp.status_code}")
-                tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-                try:
-                    tmp.write(resp.content)
-                    tmp.close()
-                    tmp_path = Path(tmp.name)
-                except Exception:
-                    tmp.close()
-                    Path(tmp.name).unlink(missing_ok=True)
-                    raise
-        else:
-            tmp_path = await download_pdf_to_tempfile(
-                user.access_token, user.github_login, pdf_row.filename
-            )
-
-        # Extract text
-        with open(tmp_path, "rb") as f:
-            text_with_pages, _total_pages, _pages_analyzed = extract_text_with_pages(f)
-
-        if not text_with_pages.strip():
-            raise IndexingError("PDF has no extractable text (may be image-only).")
-
-        # Chunk
-        chunks = chunk_text_with_pages(text_with_pages)
-        if not chunks:
-            raise IndexingError("No chunks produced from PDF text.")
-
-        # Embed (batch)
-        texts = [c.content for c in chunks]
-        embeddings = await embedding_service.embed_texts(texts)
-
-        # Delete stale chunks (retry scenario) and insert fresh ones
-        await db.execute(
-            delete(PdfChunk).where(
-                PdfChunk.pdf_id == pdf_row.id,
-                PdfChunk.user_id == user.id,
-            )
-        )
-
-        for chunk, embedding in zip(chunks, embeddings):
-            db.add(PdfChunk(
-                pdf_id=pdf_row.id,
-                user_id=user.id,
-                chunk_index=chunk.chunk_index,
-                page_number=chunk.page_number,
-                content=chunk.content.replace('\x00', ''),
-                embedding=embedding,
-            ))
-
-        now = datetime.now(timezone.utc)
-        index_status.status = "indexed"
-        index_status.chunk_count = len(chunks)
-        index_status.indexed_at = now
-        index_status.updated_at = now
-        index_status.error_message = None
-
-    except (EmbeddingError, IndexingError) as exc:
-        index_status.status = "failed"
-        index_status.error_message = str(exc)
-        index_status.updated_at = datetime.now(timezone.utc)
-        raise
-    except Exception as exc:
-        index_status.status = "failed"
-        index_status.error_message = f"Unexpected error: {exc}"
-        index_status.updated_at = datetime.now(timezone.utc)
-        raise IndexingError(str(exc)) from exc
-    finally:
-        if tmp_path:
-            tmp_path.unlink(missing_ok=True)
+) -> list[dict]:
+    """Return top-k chunks for a single PDF."""
+    vec_str = f"[{','.join(str(x) for x in query_vector)}]"
+    rows = await db.execute(
+        sql_text("""
+            SELECT pc.id, pc.page_number, pc.content,
+                   1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
+            FROM pdf_chunks pc
+            WHERE pc.user_id = :user_id
+              AND pc.pdf_id = :pdf_id
+            ORDER BY pc.embedding <=> CAST(:vec AS vector)
+            LIMIT :k
+        """),
+        {
+            "vec": vec_str,
+            "user_id": str(user_id),
+            "pdf_id": str(pdf_id),
+            "k": top_k,
+        },
+    )
+    return [
+        {
+            "chunk_id": str(r.id),
+            "page_number": r.page_number,
+            "content": r.content,
+            "score": float(r.score),
+        }
+        for r in rows
+    ]
 
 
 async def _vector_search_collection(
@@ -465,16 +337,32 @@ async def stream_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    # 2. Resolve API key
-    provider, api_key, is_in_house = await _resolve_chat_api_key(current_user, db)
+    # 2. Resolve API key using service
+    try:
+        resolution = await api_key_service.resolve_for_chat(current_user, db)
+    except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
+        raise HTTPException(status_code=402, detail=str(e))
+    provider = resolution.provider
+    api_key = resolution.api_key
+    is_in_house = resolution.is_in_house
 
-    # 3. Embed query
+    # 3. Decrement quota BEFORE streaming (optimistic decrement)
+    # This fixes the bug where quota decrement in a generator can be lost
+    if is_in_house:
+        background_tasks.add_task(
+            api_key_service.decrement_quota,
+            str(current_user.id),
+            QuotaType.CHAT,
+            db,
+        )
+
+    # 4. Embed query
     try:
         query_vector = await embedding_service.embed_query(data.content)
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
-    # 4. PDF path: verify ownership, lazy-index if needed, single-PDF search
+    # 5. PDF path: verify ownership, lazy-index if needed, single-PDF search
     #    Collection path: multi-PDF search across indexed collection chunks
     if conv.pdf_id is not None:
         pdf_result = await db.execute(
@@ -484,16 +372,18 @@ async def stream_message(
         if not pdf_row:
             raise HTTPException(status_code=404, detail="PDF not found.")
 
-        index_status = await _get_or_create_index_status(conv.pdf_id, current_user.id, db)
+        # Get or create index status
+        index_status = await indexing_service.get_or_create_index_status(
+            str(conv.pdf_id), str(current_user.id), db
+        )
 
-        if index_status.status == "indexing":
-            stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_INDEXING_MINUTES)
-            if index_status.updated_at and index_status.updated_at < stale_cutoff:
-                index_status.status = "not_indexed"
-                await db.flush()
-            else:
-                raise HTTPException(status_code=409, detail="PDF indexing is in progress. Please try again shortly.")
+        # Handle stale/active indexing
+        try:
+            was_reset = await indexing_service.reset_if_stale(index_status, db)
+        except IndexInProgressError as e:
+            raise HTTPException(status_code=409, detail=str(e))
 
+        # Handle failed indexing
         if index_status.status == "failed":
             logger.info(
                 "Resetting failed index status for pdf %s (user %s) to allow re-index retry",
@@ -503,9 +393,10 @@ async def stream_message(
             index_status.error_message = None
             await db.flush()
 
+        # Lazy index if needed
         if index_status.status == "not_indexed":
             try:
-                await _lazy_index_pdf(pdf_row, current_user, index_status, db)
+                await indexing_service.index_pdf(pdf_row, current_user, index_status, db)
                 await db.commit()
             except (EmbeddingError, IndexingError) as exc:
                 await db.commit()
@@ -545,7 +436,7 @@ async def stream_message(
         base_prompt=COLLECTION_SYSTEM_PROMPT if conv.collection_id else None,
     )
 
-    # 8. Save user message (and auto-title the conversation on first message)
+    # 6. Save user message (and auto-title the conversation on first message)
     user_msg = ChatMessage(
         conversation_id=conversation_id,
         role="user",
@@ -557,7 +448,7 @@ async def stream_message(
         conv.title = truncated[:60] + ("…" if len(truncated) > 60 else "")
     await db.commit()
 
-    # 9. Build context_chunks payload for SSE done event
+    # 7. Build context_chunks payload for SSE done event
     context_chunks_payload = [
         {
             "chunk_id": c["chunk_id"],
@@ -583,18 +474,6 @@ async def stream_message(
                 "".join(full_reply),
                 top_chunks,
             )
-
-            # Decrement chat quota if using in-house key
-            if is_in_house:
-                from app.db.engine import SessionLocal
-                async with SessionLocal() as quota_db:
-                    quota_result = await quota_db.execute(
-                        select(UserUsageQuota).where(UserUsageQuota.user_id == current_user.id)
-                    )
-                    quota_row = quota_result.scalar_one_or_none()
-                    if quota_row:
-                        quota_row.chat_uses_remaining = max(0, quota_row.chat_uses_remaining - 1)
-                        await quota_db.commit()
 
             yield f"data: {json.dumps({'done': True, 'message_id': assistant_message_id, 'context_chunks': context_chunks_payload})}\n\n"
 
@@ -702,54 +581,9 @@ EXPLAIN_SYSTEM_PROMPT = (
 )
 
 
-async def _resolve_explain_api_key(
-    user: User, db: AsyncSession
-) -> tuple[str, str, bool]:
-    """Return (provider, api_key, is_in_house) for explain calls.
-
-    Same key priority as chat but checks explain_uses_remaining for in-house fallback.
-    """
-    result = await db.execute(
-        select(UserApiKey)
-        .where(UserApiKey.user_id == user.id)
-        .order_by(
-            case(
-                (UserApiKey.provider == "openai", 0),
-                (UserApiKey.provider == "anthropic", 1),
-                (UserApiKey.provider == "gemini", 2),
-                (UserApiKey.provider == "glm", 3),
-                else_=4,
-            )
-        )
-    )
-    user_keys = result.scalars().all()
-    for key_row in user_keys:
-        decrypted = decrypt_token(key_row.encrypted_key)
-        return key_row.provider, decrypted, False
-
-    # In-house fallback — check explain quota
-    quota_result = await db.execute(
-        select(UserUsageQuota).where(UserUsageQuota.user_id == user.id)
-    )
-    quota_row = quota_result.scalar_one_or_none()
-    if quota_row is None:
-        quota_row = UserUsageQuota(user_id=user.id)
-        db.add(quota_row)
-        await db.flush()
-
-    if quota_row.explain_uses_remaining <= 0:
-        raise HTTPException(
-            status_code=402,
-            detail="Explain quota exhausted. Please add an API key in Settings.",
-        )
-
-    if settings.GEMINI_API_KEY:
-        return "gemini", settings.GEMINI_API_KEY, True
-    if settings.GLM_API_KEY:
-        return "glm", settings.GLM_API_KEY, True
-
-    raise HTTPException(status_code=503, detail="No LLM provider available.")
-
+# ---------------------------------------------------------------------------
+# Explain endpoint
+# ---------------------------------------------------------------------------
 
 @router.post("/explain", response_model=ExplainResponse)
 @limiter.limit(settings.RATE_LIMIT_CHAT_EXPLAIN)
@@ -783,32 +617,40 @@ async def explain_annotation(
     if not pdf_row:
         raise HTTPException(status_code=404, detail="PDF not found.")
 
-    # 3. Resolve LLM key (checks explain quota for in-house fallback)
-    provider, api_key, is_in_house = await _resolve_explain_api_key(current_user, db)
+    # 3. Resolve LLM key using service
+    try:
+        resolution = await api_key_service.resolve_for_explain(current_user, db)
+    except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
+        raise HTTPException(status_code=402, detail=str(e))
+    provider = resolution.provider
+    api_key = resolution.api_key
+    is_in_house = resolution.is_in_house
 
     # 4. Lazy-index PDF if needed
-    index_status = await _get_or_create_index_status(data.pdf_id, current_user.id, db)
+    index_status = await indexing_service.get_or_create_index_status(
+        str(data.pdf_id), str(current_user.id), db
+    )
 
-    if index_status.status == "indexing":
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_INDEXING_MINUTES)
-        if index_status.updated_at and index_status.updated_at < stale_cutoff:
-            index_status.status = "not_indexed"
-            await db.flush()
-        else:
-            raise HTTPException(
-                status_code=409,
-                detail="Indexing paper first, might take some time. Please try again shortly.",
-            )
+    # Handle stale/active indexing
+    try:
+        was_reset = await indexing_service.reset_if_stale(index_status, db)
+    except IndexInProgressError as e:
+        raise HTTPException(
+            status_code=409,
+            detail="Indexing paper first, might take some time. Please try again shortly.",
+        )
 
+    # Handle failed indexing
     if index_status.status == "failed":
         index_status.status = "not_indexed"
         index_status.error_message = None
         await db.flush()
 
+    # Lazy index if needed
     if index_status.status == "not_indexed":
         logger.info("explain: indexing pdf %s for user %s", data.pdf_id, current_user.id)
         try:
-            await _lazy_index_pdf(pdf_row, current_user, index_status, db)
+            await indexing_service.index_pdf(pdf_row, current_user, index_status, db)
             await db.commit()
             await db.refresh(annotation)  # re-attach after commit expiry
             logger.info("explain: indexing complete for pdf %s", data.pdf_id)
@@ -855,13 +697,9 @@ async def explain_annotation(
     # 9. Decrement explain quota if using in-house key
     remaining = -1  # -1 signals unlimited (own API key)
     if is_in_house:
-        quota_result = await db.execute(
-            select(UserUsageQuota).where(UserUsageQuota.user_id == current_user.id)
+        remaining = await api_key_service.decrement_quota(
+            str(current_user.id), QuotaType.EXPLAIN, db
         )
-        quota_row = quota_result.scalar_one_or_none()
-        if quota_row:
-            quota_row.explain_uses_remaining = max(0, quota_row.explain_uses_remaining - 1)
-            remaining = quota_row.explain_uses_remaining
 
     await db.commit()
 
