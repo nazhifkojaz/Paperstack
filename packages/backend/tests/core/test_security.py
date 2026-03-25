@@ -5,7 +5,8 @@ from jose import jwt
 from app.core.security import (
     create_access_token,
     create_refresh_token,
-    verify_token,
+    verify_access_token,
+    verify_refresh_token,
     encrypt_token,
     decrypt_token,
     SECRET_KEY,
@@ -77,28 +78,37 @@ class TestCreateRefreshToken:
         assert refresh_decoded["exp"] > access_decoded["exp"]
 
 
-class TestVerifyToken:
-    """Tests for verify_token function."""
+class TestVerifyAccessToken:
+    """Tests for verify_access_token function."""
 
-    def test_verify_valid_token(self) -> None:
-        """Test verifying a valid token."""
+    def test_verify_valid_access_token(self) -> None:
+        """Test verifying a valid access token."""
         user_id = "test-user-id"
         token = create_access_token(user_id)
 
-        result = verify_token(token)
+        result = verify_access_token(token)
 
         assert result == user_id
 
-    def test_verify_invalid_token(self) -> None:
+    def test_verify_access_token_rejects_refresh_token(self) -> None:
+        """Test that verify_access_token rejects refresh tokens."""
+        user_id = "test-user-id"
+        refresh_token = create_refresh_token(user_id)
+
+        result = verify_access_token(refresh_token)
+
+        assert result is None  # Should reject refresh token
+
+    def test_verify_access_token_invalid_token(self) -> None:
         """Test verifying an invalid token."""
         invalid_token = "not.a.valid.token"
 
-        result = verify_token(invalid_token)
+        result = verify_access_token(invalid_token)
 
         assert result is None
 
-    def test_verify_expired_token(self) -> None:
-        """Test verifying an expired token."""
+    def test_verify_access_token_expired(self) -> None:
+        """Test verifying an expired access token."""
         user_id = "test-user-id"
 
         # Create token that expired 1 hour ago
@@ -106,16 +116,68 @@ class TestVerifyToken:
         to_encode = {"exp": expire, "sub": user_id, "type": "access"}
         expired_token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-        result = verify_token(expired_token)
+        result = verify_access_token(expired_token)
 
         assert result is None
 
-    def test_verify_token_without_subject(self) -> None:
+    def test_verify_access_token_without_subject(self) -> None:
         """Test verifying token without subject claim."""
-        to_encode = {"exp": datetime.now(timezone.utc) + timedelta(minutes=30)}
+        to_encode = {"exp": datetime.now(timezone.utc) + timedelta(minutes=30), "type": "access"}
         token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-        result = verify_token(token)
+        result = verify_access_token(token)
+
+        assert result is None
+
+
+class TestVerifyRefreshToken:
+    """Tests for verify_refresh_token function."""
+
+    def test_verify_valid_refresh_token(self) -> None:
+        """Test verifying a valid refresh token."""
+        user_id = "test-user-id"
+        token = create_refresh_token(user_id)
+
+        result = verify_refresh_token(token)
+
+        assert result == user_id
+
+    def test_verify_refresh_token_rejects_access_token(self) -> None:
+        """Test that verify_refresh_token rejects access tokens."""
+        user_id = "test-user-id"
+        access_token = create_access_token(user_id)
+
+        result = verify_refresh_token(access_token)
+
+        assert result is None  # Should reject access token
+
+    def test_verify_refresh_token_invalid_token(self) -> None:
+        """Test verifying an invalid token."""
+        invalid_token = "not.a.valid.token"
+
+        result = verify_refresh_token(invalid_token)
+
+        assert result is None
+
+    def test_verify_refresh_token_expired(self) -> None:
+        """Test verifying an expired refresh token."""
+        user_id = "test-user-id"
+
+        # Create token that expired 1 hour ago
+        expire = datetime.now(timezone.utc) - timedelta(hours=1)
+        to_encode = {"exp": expire, "sub": user_id, "type": "refresh"}
+        expired_token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+        result = verify_refresh_token(expired_token)
+
+        assert result is None
+
+    def test_verify_refresh_token_without_subject(self) -> None:
+        """Test verifying token without subject claim."""
+        to_encode = {"exp": datetime.now(timezone.utc) + timedelta(minutes=30), "type": "refresh"}
+        token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+        result = verify_refresh_token(token)
 
         assert result is None
 

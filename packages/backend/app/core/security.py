@@ -43,10 +43,30 @@ def create_refresh_token(
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-def verify_token(token: str) -> Optional[str]:
+def verify_access_token(token: str) -> Optional[str]:
+    """Verify an access token and return the user ID if valid.
+
+    Access tokens are short-lived (30 minutes) and used for API authentication.
+    """
     try:
         decoded_token = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return decoded_token["sub"] if "sub" in decoded_token else None
+        if decoded_token.get("type") != "access":
+            return None
+        return decoded_token.get("sub") if "sub" in decoded_token else None
+    except jwt.JWTError:
+        return None
+
+
+def verify_refresh_token(token: str) -> Optional[str]:
+    """Verify a refresh token and return the user ID if valid.
+
+    Refresh tokens are long-lived (30 days) and used to obtain new access tokens.
+    """
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if decoded_token.get("type") != "refresh":
+            return None
+        return decoded_token.get("sub") if "sub" in decoded_token else None
     except jwt.JWTError:
         return None
 

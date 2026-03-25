@@ -66,10 +66,11 @@ async def github_callback(request: Request, code: str, db: AsyncSession = Depend
     access_token = security.create_access_token(user.id)
     refresh_token = security.create_refresh_token(user.id)
 
-    # Redirect back to frontend
+    # Redirect back to frontend using URL fragments (hash) to prevent token leakage
+    # Fragments are not sent to the server and don't appear in referrer headers
     redirect_url = (
         f"{settings.FRONTEND_URL}/Paperstack/auth/callback"
-        f"?access_token={access_token}"
+        f"#access_token={access_token}"
         f"&refresh_token={refresh_token}"
     )
     return RedirectResponse(redirect_url)
@@ -78,7 +79,7 @@ async def github_callback(request: Request, code: str, db: AsyncSession = Depend
 @limiter.limit(settings.RATE_LIMIT_AUTH_REFRESH)
 async def refresh_token(request: Request, req: RefreshTokenRequest):
     """Refresh JWT using refresh token."""
-    user_id = security.verify_token(req.refresh_token)
+    user_id = security.verify_refresh_token(req.refresh_token)
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     
