@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Pdf, PdfChunk, PdfIndexStatus, User
 from app.services.chunking_service import chunk_text_with_pages
-from app.services.embedding_service import embedding_service
+from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
     ChunkingError,
     EmbeddingError,
@@ -59,13 +59,19 @@ class IndexResult:
 class IndexingService:
     """Service for PDF indexing operations."""
 
-    def __init__(self, download_service: PdfDownloadService):
+    def __init__(
+        self,
+        download_service: PdfDownloadService,
+        embedding_service: Optional[EmbeddingService] = None,
+    ):
         """Initialize the indexing service.
 
         Args:
             download_service: Service for downloading PDFs
+            embedding_service: Optional EmbeddingService for embeddings
         """
         self.download_service = download_service
+        self._embedding_service = embedding_service or EmbeddingService()
 
     async def get_or_create_status(
         self,
@@ -213,7 +219,7 @@ class IndexingService:
 
             # 4. Generate embeddings
             texts = [c.content for c in chunks]
-            embeddings = await embedding_service.embed_texts(texts)
+            embeddings = await self._embedding_service.embed_texts(texts)
 
             # 5. Delete stale chunks and insert new ones
             await db.execute(
