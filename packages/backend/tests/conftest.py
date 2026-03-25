@@ -12,6 +12,7 @@ import respx
 from httpx import AsyncClient, ASGITransport, Response
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
 from testcontainers.postgres import PostgresContainer
 
 from app.main import app
@@ -21,11 +22,14 @@ from app.core.security import create_access_token, create_refresh_token
 
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
-    """Start a PostgreSQL container for the test session.
+    """Start a PostgreSQL container with pgvector for the test session.
 
     This container is reused across all tests for speed.
     """
-    with PostgresContainer("postgres:16-alpine") as postgres:
+    # Use pgvector-enabled image and enable the extension
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
+        # Wait for the container to be ready
+        postgres.get_connection_url()
         yield postgres
 
 
@@ -61,6 +65,8 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
     Creates all tables before the test and drops them after.
     """
     async with test_engine.begin() as conn:
+        # Create pgvector extension first (required for Vector columns)
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
 
     async_session = sessionmaker(

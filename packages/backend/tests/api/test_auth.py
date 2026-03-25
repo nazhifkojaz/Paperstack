@@ -102,8 +102,10 @@ class TestGitHubCallback:
         )
 
         location = response.headers.get("location", "")
-        parsed = urlparse(location)
-        params = parse_qs(parsed.query)
+        # Tokens are now in URL fragment (#) for security, not query params
+        assert "#" in location
+        fragment = location.split("#")[1]
+        params = parse_qs(fragment)
 
         assert "access_token" in params
         assert "refresh_token" in params

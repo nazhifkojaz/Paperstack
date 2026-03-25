@@ -20,7 +20,7 @@ async def test_create_api_key(admin_client: AsyncClient, auth_headers):
 async def test_create_api_key_invalid_provider(admin_client: AsyncClient, auth_headers):
     resp = await admin_client.post(
         "/v1/settings/api-keys",
-        json={"provider": "openai", "api_key": "test"},
+        json={"provider": "invalid_provider", "api_key": "test"},
         headers=auth_headers,
     )
     assert resp.status_code == 422  # Validation error
