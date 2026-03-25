@@ -112,4 +112,4 @@ async def test_llm_service_analyze_paper_gemini():
 async def test_llm_service_unknown_provider():
     service = LLMService()
     with pytest.raises(ValueError, match="Unknown provider"):
-        await service.analyze_paper("text", ["findings"], "openai", "key")
+        await service.analyze_paper("text", ["findings"], "unknown_provider", "key")
