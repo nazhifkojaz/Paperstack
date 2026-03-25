@@ -1,6 +1,5 @@
 import { useAuthStore } from '@/stores/authStore'
-
-const API_URL = import.meta.env?.VITE_API_URL ?? '/v1'
+import { API_URL, BASE_URL } from '@/lib/config'
 
 class ApiError extends Error {
     constructor(
@@ -13,9 +12,32 @@ class ApiError extends Error {
     }
 }
 
-async function refreshAccessToken(): Promise<string | null> {
+/**
+ * Parses an error response body into a structured error.
+ * Returns default values if the response is not JSON or parsing fails.
+ */
+async function parseErrorBody(res: Response): Promise<{ detail: string; code: string }> {
+    try {
+        const err = await res.json()
+        return {
+            detail: err.detail ?? 'Request failed',
+            code: err.code ?? 'unknown',
+        }
+    } catch {
+        return { detail: 'Request failed', code: 'unknown' }
+    }
+}
+
+/**
+ * Handles 401 unauthorized responses by attempting to refresh the access token.
+ * Returns true if refresh succeeded, false if it failed (triggers logout).
+ */
+async function handleUnauthorized(): Promise<boolean> {
     const { refreshToken, setAuth, user, logout } = useAuthStore.getState()
-    if (!refreshToken) return null
+    if (!refreshToken) {
+        logout()
+        return false
+    }
 
     try {
         const res = await fetch(`${API_URL}/auth/refresh`, {
@@ -23,27 +45,58 @@ async function refreshAccessToken(): Promise<string | null> {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ refresh_token: refreshToken }),
         })
+
         if (!res.ok) {
             logout()
-            return null
+            return false
         }
+
         const data = await res.json()
         if (user) {
             setAuth(user, data.access_token, data.refresh_token ?? refreshToken)
         }
-        return data.access_token
+        return true
     } catch {
         logout()
-        return null
+        return false
     }
+}
+
+/**
+ * Higher-order function that wraps an API call with 401 refresh logic.
+ * If the call returns 401, attempts refresh once and retries.
+ *
+ * @param fetchFn - The fetch function to execute
+ * @param retry - Whether this is a retry attempt (prevents infinite loops)
+ * @returns The parsed response or throws ApiError
+ */
+async function withAuthRefresh<T>(
+    fetchFn: () => Promise<Response>,
+    retry = true,
+): Promise<Response> {
+    const res = await fetchFn()
+
+    // Handle 401 with refresh token flow
+    if (res.status === 401 && retry) {
+        const refreshed = await handleUnauthorized()
+        if (refreshed) {
+            // Retry the request with new token
+            return withAuthRefresh<T>(fetchFn, false)
+        } else {
+            // Refresh failed - logout and redirect
+            window.location.href = `${BASE_URL}/login`
+            throw new ApiError(401, 'unauthorized', 'Session expired. Please log in again.')
+        }
+    }
+
+    return res
 }
 
 export async function apiFetch<T>(
     path: string,
     options: RequestInit & { authRequired?: boolean } = {},
-    retry = true,
 ): Promise<T> {
-    const { accessToken, logout } = useAuthStore.getState()
+    const { accessToken } = useAuthStore.getState()
     const { authRequired = true, ...fetchOptions } = options
 
     const isFormData = fetchOptions.body instanceof FormData
@@ -56,27 +109,12 @@ export async function apiFetch<T>(
         headers['Authorization'] = `Bearer ${accessToken}`
     }
 
-    const res = await fetch(`${API_URL}${path}`, { ...fetchOptions, headers })
-
-    if (authRequired && res.status === 401 && retry) {
-        const newToken = await refreshAccessToken()
-        if (newToken) {
-            return apiFetch<T>(path, options, false)
-        } else {
-            logout()
-            window.location.href = '/Paperstack/login'
-            throw new ApiError(401, 'unauthorized', 'Session expired. Please log in again.')
-        }
-    }
+    const res = await withAuthRefresh<T>(() =>
+        fetch(`${API_URL}${path}`, { ...fetchOptions, headers })
+    )
 
     if (!res.ok) {
-        let detail = 'Request failed'
-        let code = 'unknown'
-        try {
-            const err = await res.json()
-            detail = err.detail ?? detail
-            code = err.code ?? code
-        } catch { }
+        const { detail, code } = await parseErrorBody(res)
         throw new ApiError(res.status, code, detail)
     }
 
@@ -90,9 +128,8 @@ export async function apiFetch<T>(
 export async function apiFetchBlob(
     path: string,
     options: RequestInit = {},
-    retry = true,
 ): Promise<Blob> {
-    const { accessToken, logout } = useAuthStore.getState()
+    const { accessToken } = useAuthStore.getState()
 
     const headers: Record<string, string> = {
         ...(options.headers as Record<string, string>),
@@ -102,27 +139,12 @@ export async function apiFetchBlob(
         headers['Authorization'] = `Bearer ${accessToken}`
     }
 
-    const res = await fetch(`${API_URL}${path}`, { ...options, headers })
-
-    if (res.status === 401 && retry) {
-        const newToken = await refreshAccessToken()
-        if (newToken) {
-            return apiFetchBlob(path, options, false)
-        } else {
-            logout()
-            window.location.href = '/Paperstack/login'
-            throw new ApiError(401, 'unauthorized', 'Session expired. Please log in again.')
-        }
-    }
+    const res = await withAuthRefresh<Blob>(() =>
+        fetch(`${API_URL}${path}`, { ...options, headers })
+    )
 
     if (!res.ok) {
-        let detail = 'Request failed'
-        let code = 'unknown'
-        try {
-            const err = await res.json()
-            detail = err.detail ?? detail
-            code = err.code ?? code
-        } catch { }
+        const { detail, code } = await parseErrorBody(res)
         throw new ApiError(res.status, code, detail)
     }
 

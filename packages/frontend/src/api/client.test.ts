@@ -167,11 +167,14 @@ describe('apiFetch', () => {
 
   describe('error handling', () => {
     it('throws ApiError with correct status and detail', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
+      // Create a proper mock Response using the Response constructor
+      const errorBody = JSON.stringify({ detail: 'Not found', code: 'not_found' })
+      const mockResponse = new Response(errorBody, {
         status: 404,
-        json: async () => ({ detail: 'Not found', code: 'not_found' }),
-      } as Response)
+        statusText: 'Not Found',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      mockFetch.mockResolvedValueOnce(mockResponse)
 
       await expect(apiFetch('/test')).rejects.toThrow(ApiError)
 
