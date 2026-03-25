@@ -1,6 +1,7 @@
 """Auto-highlight routes: LLM-powered paper analysis."""
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ from app.api.deps import get_db, get_current_user
 from app.core.config import settings
 from app.db.models import (
     User, Pdf, Annotation, AnnotationSet, AutoHighlightCache,
+    UserUsageQuota, UserApiKey,
 )
 from app.middleware.rate_limit import limiter
 from app.schemas.auto_highlight import (
@@ -44,6 +46,57 @@ def _build_set_name(categories: list[str]) -> str:
     }
     names = [display.get(c, c.title()) for c in categories]
     return "AI: " + ", ".join(names)
+
+
+@asynccontextmanager
+async def _cleanup_pending_cache_on_error(db: AsyncSession, cache_id: uuid.UUID):
+    """Context manager that cleans up pending cache entry on error.
+
+    On any exception, this will:
+    1. Rollback the database transaction
+    2. Delete the pending cache entry
+    3. Commit the deletion
+    4. Re-raise with appropriate HTTP status code
+
+    HTTPException is re-raised as-is (preserves status code).
+    LLMRateLimitError becomes 429.
+    LLMProviderError becomes 502.
+    Other exceptions become 500.
+    """
+    try:
+        yield
+    except HTTPException:
+        # Known HTTP errors - clean up and re-raise
+        await db.rollback()
+        await db.execute(
+            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+        )
+        await db.commit()
+        raise
+    except LLMRateLimitError as e:
+        # Rate limit errors - clean up and return 429
+        await db.rollback()
+        await db.execute(
+            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+        )
+        await db.commit()
+        raise HTTPException(status_code=429, detail=str(e))
+    except LLMProviderError as e:
+        # Provider errors - clean up and return 502
+        await db.rollback()
+        await db.execute(
+            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+        )
+        await db.commit()
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        # Unexpected errors - clean up and return 500
+        await db.rollback()
+        await db.execute(
+            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+        )
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
 @router.post("/analyze", response_model=AutoHighlightResponse)
@@ -112,121 +165,91 @@ async def analyze_paper(
 
     tmp_path: Path | None = None
     try:
-        # 4. Fetch PDF from GitHub or URL using download service
-        pdf_result = await db.execute(
-            select(Pdf).where(Pdf.id == data.pdf_id, Pdf.user_id == current_user.id)
-        )
-        pdf_row = pdf_result.scalar_one_or_none()
-        if not pdf_row:
-            raise HTTPException(status_code=404, detail="PDF not found")
-
-        # Download PDF using the unified download service
-        from app.services.pdf_download_service import pdf_download_service
-
-        if pdf_row.source_url and not pdf_row.github_sha:
-            download_result = await pdf_download_service.download_to_tempfile(
-                source=PdfSource.EXTERNAL_URL,
-                external_url=pdf_row.source_url,
+        async with _cleanup_pending_cache_on_error(db, pending_cache.id):
+            # 4. Fetch PDF from GitHub or URL using download service
+            pdf_result = await db.execute(
+                select(Pdf).where(Pdf.id == data.pdf_id, Pdf.user_id == current_user.id)
             )
-        else:
-            download_result = await pdf_download_service.download_to_tempfile(
-                source=PdfSource.GITHUB,
-                github_access_token=current_user.access_token,
-                github_login=current_user.github_login,
-                github_filename=pdf_row.filename,
-            )
-        tmp_path = download_result.file_path
+            pdf_row = pdf_result.scalar_one_or_none()
+            if not pdf_row:
+                raise HTTPException(status_code=404, detail="PDF not found")
 
-        # 5. Extract text
-        with open(tmp_path, "rb") as f:
-            paper_text, total_pages, pages_analyzed = extract_text_with_pages(f)
+            # Download PDF using the unified download service
+            from app.services.pdf_download_service import pdf_download_service
 
-        if not is_text_pdf(paper_text):
-            raise HTTPException(
-                status_code=422,
-                detail="This PDF doesn't contain selectable text. Auto-highlight requires text-based PDFs.",
-            )
+            if pdf_row.source_url and not pdf_row.github_sha:
+                download_result = await pdf_download_service.download_to_tempfile(
+                    source=PdfSource.EXTERNAL_URL,
+                    external_url=pdf_row.source_url,
+                )
+            else:
+                download_result = await pdf_download_service.download_to_tempfile(
+                    source=PdfSource.GITHUB,
+                    github_access_token=current_user.access_token,
+                    github_login=current_user.github_login,
+                    github_filename=pdf_row.filename,
+                )
+            tmp_path = download_result.file_path
 
-        # 6. Call LLM
-        highlights = await llm_service.analyze_paper(
-            paper_text, sorted_categories, provider, api_key
-        )
+            # 5. Extract text
+            with open(tmp_path, "rb") as f:
+                paper_text, total_pages, pages_analyzed = extract_text_with_pages(f)
 
-        # 7. Create AnnotationSet
-        annotation_set = AnnotationSet(
-            pdf_id=data.pdf_id,
-            user_id=current_user.id,
-            name=_build_set_name(sorted_categories),
-            color="#a855f7",
-            source="auto_highlight",
-        )
-        db.add(annotation_set)
-        await db.flush()
+            if not is_text_pdf(paper_text):
+                raise HTTPException(
+                    status_code=422,
+                    detail="This PDF doesn't contain selectable text. Auto-highlight requires text-based PDFs.",
+                )
 
-        # 8. Create Annotations
-        for h in highlights:
-            ann = Annotation(
-                set_id=annotation_set.id,
-                page_number=max(1, h["page"]),
-                type="highlight",
-                rects=[],  # Resolved by frontend TextLayer matching
-                selected_text=h["text"],
-                note_content=h["reason"],
-                color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
-                metadata={"category": h["category"]},
-            )
-            db.add(ann)
-
-        # 9. Update cache
-        pending_cache.status = "complete"
-        pending_cache.llm_response = highlights
-        pending_cache.annotation_set_id = annotation_set.id
-
-        # 10. Decrement quota if in-house
-        if is_in_house:
-            await api_key_service.decrement_quota(
-                str(current_user.id), QuotaType.FREE, db
+            # 6. Call LLM
+            highlights = await llm_service.analyze_paper(
+                paper_text, sorted_categories, provider, api_key
             )
 
-        await db.commit()
+            # 7. Create AnnotationSet
+            annotation_set = AnnotationSet(
+                pdf_id=data.pdf_id,
+                user_id=current_user.id,
+                name=_build_set_name(sorted_categories),
+                color="#a855f7",
+                source="auto_highlight",
+            )
+            db.add(annotation_set)
+            await db.flush()
 
-        return AutoHighlightResponse(
-            annotation_set_id=annotation_set.id,
-            from_cache=False,
-            highlights_count=len(highlights),
-            pages_analyzed=pages_analyzed,
-        )
+            # 8. Create Annotations
+            for h in highlights:
+                ann = Annotation(
+                    set_id=annotation_set.id,
+                    page_number=max(1, h["page"]),
+                    type="highlight",
+                    rects=[],  # Resolved by frontend TextLayer matching
+                    selected_text=h["text"],
+                    note_content=h["reason"],
+                    color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
+                    metadata={"category": h["category"]},
+                )
+                db.add(ann)
 
-    except HTTPException:
-        # Clean up pending cache on known errors
-        await db.rollback()
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == pending_cache.id)
-        )
-        await db.commit()
-        raise
-    except LLMRateLimitError as e:
-        await db.rollback()
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == pending_cache.id)
-        )
-        await db.commit()
-        raise HTTPException(status_code=429, detail=str(e))
-    except LLMProviderError as e:
-        await db.rollback()
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == pending_cache.id)
-        )
-        await db.commit()
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
-        # Clean up pending cache on unexpected errors
-        await db.rollback()
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == pending_cache.id)
-        )
-        await db.commit()
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+            # 9. Update cache
+            pending_cache.status = "complete"
+            pending_cache.llm_response = highlights
+            pending_cache.annotation_set_id = annotation_set.id
+
+            # 10. Decrement quota if in-house
+            if is_in_house:
+                await api_key_service.decrement_quota(
+                    str(current_user.id), QuotaType.FREE, db
+                )
+
+            await db.commit()
+
+            return AutoHighlightResponse(
+                annotation_set_id=annotation_set.id,
+                from_cache=False,
+                highlights_count=len(highlights),
+                pages_analyzed=pages_analyzed,
+            )
     finally:
         if tmp_path:
             tmp_path.unlink(missing_ok=True)
