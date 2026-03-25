@@ -6,7 +6,7 @@ import { useAnnotationStore } from '@/stores/annotationStore'
 describe('useKeyboardShortcuts', () => {
   beforeEach(() => {
     useAnnotationStore.setState({
-      isSidebarOpen: true,
+      isAnnotationSidebarOpen: true,
       selectedAnnotationId: null,
       isDrawingRect: false,
       contextMenu: null,
@@ -15,9 +15,9 @@ describe('useKeyboardShortcuts', () => {
 
   it('toggles sidebar on Ctrl+backslash', () => {
     renderHook(() => useKeyboardShortcuts())
-    expect(useAnnotationStore.getState().isSidebarOpen).toBe(true)
+    expect(useAnnotationStore.getState().isAnnotationSidebarOpen).toBe(true)
     document.dispatchEvent(new KeyboardEvent('keydown', { key: '\\', ctrlKey: true }))
-    expect(useAnnotationStore.getState().isSidebarOpen).toBe(false)
+    expect(useAnnotationStore.getState().isAnnotationSidebarOpen).toBe(false)
   })
 
   it('clears selectedAnnotationId on Escape', () => {
@@ -52,7 +52,7 @@ describe('useKeyboardShortcuts', () => {
     Object.defineProperty(event, 'target', { value: textarea, enumerable: true })
     textarea.dispatchEvent(event)
 
-    expect(useAnnotationStore.getState().isSidebarOpen).toBe(true)
+    expect(useAnnotationStore.getState().isAnnotationSidebarOpen).toBe(true)
     document.body.removeChild(textarea)
   })
 })

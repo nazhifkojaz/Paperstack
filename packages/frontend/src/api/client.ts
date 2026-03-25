@@ -42,7 +42,7 @@ async function handleUnauthorized(): Promise<boolean> {
     try {
         const res = await fetch(`${API_URL}/auth/refresh`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            // Content-Type header auto-added by fetch for JSON.stringify() body
             body: JSON.stringify({ refresh_token: refreshToken }),
         })
 
@@ -149,48 +149,6 @@ export async function apiFetchBlob(
     }
 
     return res.blob()
-}
-
-export const api = {
-    get: <T>(path: string, options?: RequestInit) =>
-        apiFetch<T>(path, { method: 'GET', ...options }),
-
-    post: <T>(path: string, body?: unknown, options?: RequestInit) =>
-        apiFetch<T>(path, {
-            method: 'POST',
-            body: body !== undefined ? JSON.stringify(body) : undefined,
-            ...options,
-        }),
-
-    patch: <T>(path: string, body?: unknown, options?: RequestInit) =>
-        apiFetch<T>(path, {
-            method: 'PATCH',
-            body: body !== undefined ? JSON.stringify(body) : undefined,
-            ...options,
-        }),
-
-    put: <T>(path: string, body?: unknown, options?: RequestInit) =>
-        apiFetch<T>(path, {
-            method: 'PUT',
-            body: body !== undefined ? JSON.stringify(body) : undefined,
-            ...options,
-        }),
-
-    delete: <T>(path: string, options?: RequestInit) =>
-        apiFetch<T>(path, { method: 'DELETE', ...options }),
-
-    /** For multipart/form-data uploads — do not set Content-Type header */
-    upload: <T>(path: string, formData: FormData, options?: RequestInit) => {
-        const { accessToken } = useAuthStore.getState()
-        const headers: Record<string, string> = {}
-        if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-        return apiFetch<T>(path, {
-            method: 'POST',
-            body: formData,
-            headers,
-            ...options,
-        })
-    },
 }
 
 export { ApiError }

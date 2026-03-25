@@ -28,7 +28,7 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
-    const { isPanelOpen, activeConversationId, setActiveConversationId } = useChatStore();
+    const { isChatPanelOpen, activeConversationId, setActiveConversationId } = useChatStore();
     const { setCurrentPage } = usePdfViewerStore();
     const queryClient = useQueryClient();
 
@@ -68,13 +68,13 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
 
     // Auto-select first conversation or create one
     useEffect(() => {
-        if (loadingConvs || !isPanelOpen) return;
+        if (loadingConvs || !isChatPanelOpen) return;
         if (conversations.length > 0 && !activeConversationId) {
             setActiveConversationId(conversations[0].id);
         }
-    }, [conversations, loadingConvs, activeConversationId, isPanelOpen, setActiveConversationId]);
+    }, [conversations, loadingConvs, activeConversationId, isChatPanelOpen, setActiveConversationId]);
 
-    if (!isPanelOpen) return null;
+    if (!isChatPanelOpen) return null;
 
     const handleNewConversation = async () => {
         try {

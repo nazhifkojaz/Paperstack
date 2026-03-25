@@ -19,7 +19,7 @@ export const AnnotationSidebar = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
     const {
         selectedSetId, setSelectedSetId,
-        isSidebarOpen, toggleSidebar,
+        isAnnotationSidebarOpen, toggleAnnotationSidebar,
         sidebarGroupBy, setSidebarGroupBy,
         toggleSetVisibility, isSetVisible,
     } = useAnnotationStore();
@@ -96,7 +96,7 @@ export const AnnotationSidebar = () => {
         }
     }, [selectedSetId]);
 
-    if (!isSidebarOpen) return null;
+    if (!isAnnotationSidebarOpen) return null;
 
     return (
         <>
@@ -107,7 +107,7 @@ export const AnnotationSidebar = () => {
                     <Button
                         variant="ghost"
                         size="icon"
-                        onClick={toggleSidebar}
+                        onClick={toggleAnnotationSidebar}
                         title="Close sidebar"
                     >
                         <PanelLeftClose className="h-4 w-4" />

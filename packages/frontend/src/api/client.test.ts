@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { apiFetch, apiFetchBlob, api, ApiError } from './client'
+import { apiFetch, apiFetchBlob, ApiError } from './client'
 import { useAuthStore } from '@/stores/authStore'
 
 // Mock fetch
@@ -267,91 +267,5 @@ describe('apiFetchBlob', () => {
 
     const result = await apiFetchBlob('/test.pdf')
     expect(result).toBe(mockBlob)
-  })
-})
-
-describe('api convenience methods', () => {
-  beforeEach(() => {
-    useAuthStore.getState().logout()
-    mockFetch.mockClear()
-  })
-
-  it('api.get sends GET request', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ data: 'test' }),
-      status: 200,
-    } as Response)
-
-    await api.get('/test')
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        method: 'GET',
-      })
-    )
-  })
-
-  it('api.post sends POST request with JSON body', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ success: true }),
-      status: 200,
-    } as Response)
-
-    await api.post('/test', { name: 'test' })
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ name: 'test' }),
-      })
-    )
-  })
-
-  it('api.upload sends FormData without Content-Type', async () => {
-    useAuthStore.getState().setAuth(
-      { id: '1', github_id: 1, github_login: 'test', repo_created: false },
-      'test-token',
-      'refresh-token'
-    )
-
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ success: true }),
-      status: 200,
-    } as Response)
-
-    const formData = new FormData()
-    formData.append('file', new Blob(['content']))
-
-    await api.upload('/test', formData)
-
-    const callArgs = mockFetch.mock.calls[0]
-    expect(callArgs[1]).toMatchObject({
-      method: 'POST',
-      body: formData,
-    })
-    // Verify Content-Type is not set by default for FormData
-    expect(callArgs[1].headers).not.toHaveProperty('Content-Type')
-  })
-
-  it('api.delete sends DELETE request', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ success: true }),
-      status: 200,
-    } as Response)
-
-    await api.delete('/test')
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        method: 'DELETE',
-      })
-    )
   })
 })

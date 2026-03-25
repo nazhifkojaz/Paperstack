@@ -9,8 +9,8 @@ interface StreamingMessage {
 }
 
 interface ChatStore {
-    isPanelOpen: boolean;
-    togglePanel: () => void;
+    isChatPanelOpen: boolean;
+    toggleChatPanel: () => void;
 
     activeConversationId: string | null;
     setActiveConversationId: (id: string | null) => void;
@@ -23,8 +23,8 @@ interface ChatStore {
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
-    isPanelOpen: false,
-    togglePanel: () => set((s) => ({ isPanelOpen: !s.isPanelOpen })),
+    isChatPanelOpen: false,
+    toggleChatPanel: () => set((s) => ({ isChatPanelOpen: !s.isChatPanelOpen })),
 
     activeConversationId: null,
     setActiveConversationId: (id) => set({ activeConversationId: id }),

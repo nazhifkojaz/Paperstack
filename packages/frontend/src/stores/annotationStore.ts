@@ -11,7 +11,7 @@ interface AnnotationStore {
     selectedSetId: string | null;       // Which set is "active" for editing
     hiddenSetIds: Set<string>;          // Sets the user has hidden via eye toggle
     selectedAnnotationId: string | null;
-    isSidebarOpen: boolean;
+    isAnnotationSidebarOpen: boolean;
     sidebarGroupBy: 'page' | 'type';
     contextMenu: ContextMenuState | null;
 
@@ -21,8 +21,8 @@ interface AnnotationStore {
     setSelectedAnnotationId: (id: string | null) => void;
     toggleSetVisibility: (id: string) => void;
     isSetVisible: (id: string) => boolean;
-    toggleSidebar: () => void;
-    setSidebarOpen: (open: boolean) => void;
+    toggleAnnotationSidebar: () => void;
+    setAnnotationSidebarOpen: (open: boolean) => void;
     setSidebarGroupBy: (groupBy: 'page' | 'type') => void;
     setContextMenu: (menu: ContextMenuState | null) => void;
 }
@@ -32,7 +32,7 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
     selectedSetId: null,
     hiddenSetIds: new Set<string>(),
     selectedAnnotationId: null,
-    isSidebarOpen: true,
+    isAnnotationSidebarOpen: true,
     sidebarGroupBy: 'page',
     contextMenu: null,
 
@@ -52,8 +52,8 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
         return { hiddenSetIds: next };
     }),
     isSetVisible: (id) => !get().hiddenSetIds.has(id),
-    toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
-    setSidebarOpen: (open) => set({ isSidebarOpen: open }),
+    toggleAnnotationSidebar: () => set((state) => ({ isAnnotationSidebarOpen: !state.isAnnotationSidebarOpen })),
+    setAnnotationSidebarOpen: (open) => set({ isAnnotationSidebarOpen: open }),
     setSidebarGroupBy: (groupBy) => set({ sidebarGroupBy: groupBy }),
     setContextMenu: (menu) => set({ contextMenu: menu }),
 }));

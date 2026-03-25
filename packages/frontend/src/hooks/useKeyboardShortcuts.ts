@@ -16,7 +16,7 @@ function isEditableElement(element: EventTarget | null): boolean {
 }
 
 export function useKeyboardShortcuts() {
-    const { toggleSidebar, setSelectedAnnotationId, setIsDrawingRect, setContextMenu } = useAnnotationStore();
+    const { toggleAnnotationSidebar, setSelectedAnnotationId, setIsDrawingRect, setContextMenu } = useAnnotationStore();
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -26,7 +26,7 @@ export function useKeyboardShortcuts() {
             // Ctrl+backslash (or Meta+backslash on Mac) toggles sidebar
             if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
                 e.preventDefault();
-                toggleSidebar();
+                toggleAnnotationSidebar();
                 return;
             }
 
@@ -59,5 +59,5 @@ export function useKeyboardShortcuts() {
         return () => {
             document.removeEventListener('keydown', handleKeyDown);
         };
-    }, [toggleSidebar, setSelectedAnnotationId, setIsDrawingRect, setContextMenu]);
+    }, [toggleAnnotationSidebar, setSelectedAnnotationId, setIsDrawingRect, setContextMenu]);
 }

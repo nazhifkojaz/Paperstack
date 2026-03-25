@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
-import { api } from '@/api/client'
+import { apiFetch } from '@/api/client'
 import type { User } from '@/stores/authStore'
 
 
@@ -37,8 +37,7 @@ export function OAuthCallbackPage() {
         // Temporarily set token so the api client can fetch /auth/me
         useAuthStore.setState({ accessToken, refreshToken })
 
-        api
-            .get<User>('/auth/me')
+        apiFetch<User>('/auth/me')
             .then((user) => {
                 setAuth(user, accessToken, refreshToken)
                 navigate('/library', { replace: true })

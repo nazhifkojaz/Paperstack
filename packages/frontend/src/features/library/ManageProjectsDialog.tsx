@@ -63,8 +63,7 @@ export const ManageProjectsDialog = ({ pdf, open, onOpenChange }: ManageProjects
                     removeFromCollection.mutateAsync({ pdfId: pdf.id, collectionId })
                 ),
             ]);
-            // Invalidate membership cache so next open is fresh
-            queryClient.invalidateQueries({ queryKey: ['pdfs', pdf.id, 'collections'] });
+            // Note: mutations already handle cache invalidation in their onSuccess callbacks
             toast.success('Projects updated');
             onOpenChange(false);
         } catch {

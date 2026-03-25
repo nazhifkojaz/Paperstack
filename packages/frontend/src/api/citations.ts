@@ -56,7 +56,7 @@ export const useUpdateCitation = (pdfId: string) => {
         mutationFn: (data) =>
             apiFetch(`/pdfs/${pdfId}/citation`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify(data),
             }),
         onSuccess: () => {
@@ -82,7 +82,7 @@ export const useValidateCitations = () => {
         mutationFn: async (pdfIds) => {
             return apiFetch<ValidateResponse>('/citations/validate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify({ pdf_ids: pdfIds }),
             });
         },

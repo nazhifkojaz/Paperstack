@@ -45,7 +45,7 @@ describe('citations API hooks', () => {
 
       expect(apiFetch).toHaveBeenCalledWith('/citations/validate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Content-Type header is auto-added by apiFetch for non-FormData bodies
         body: JSON.stringify({ pdf_ids: ['pdf1', 'pdf2', 'pdf3'] }),
       })
     })

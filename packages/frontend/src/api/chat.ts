@@ -148,7 +148,7 @@ export async function streamChat(params: {
         {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
+                // Content-Type header auto-added by fetch for JSON.stringify() body
                 ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
             body: JSON.stringify({ content: params.message }),

@@ -74,7 +74,7 @@ export const useCreateShare = (setId: string) => {
         mutationFn: (data) =>
             apiFetch(`/annotation-sets/${setId}/share`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify(data),
             }),
         onSuccess: () => qc.invalidateQueries({ queryKey: ['shares', setId] }),
