@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, apiFetchBlob } from './client';
+import { downloadBlob } from '@/lib/download-utils';
 
 export interface Citation {
     id: string;
@@ -98,15 +99,8 @@ export const useBulkExportCitations = () => {
             });
         },
         onSuccess: (blob) => {
-            // Trigger browser download
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `citations-${new Date().toISOString().split('T')[0]}.bib`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
+            // Trigger browser download using utility
+            downloadBlob(blob, `citations-${new Date().toISOString().split('T')[0]}.bib`);
         },
     });
 };

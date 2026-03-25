@@ -13,6 +13,8 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { useParams } from 'react-router-dom';
 import { apiFetchBlob } from '@/api/client';
+import { downloadBlob } from '@/lib/download-utils';
+import { toast } from 'sonner';
 
 export const ViewerToolbar = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
@@ -37,17 +39,10 @@ export const ViewerToolbar = () => {
         try {
             setIsExporting(true);
             const blob = await apiFetchBlob(`/pdfs/${pdfId}/export-annotated`);
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `annotated_${pdfId}.pdf`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
+            downloadBlob(blob, `annotated_${pdfId}.pdf`);
         } catch (error) {
             console.error('Failed to export annotated PDF:', error);
-            alert('Failed to export annotated PDF.');
+            toast.error('Failed to export annotated PDF.');
         } finally {
             setIsExporting(false);
         }

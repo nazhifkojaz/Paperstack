@@ -5,6 +5,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { useLibraryStore } from '@/stores/libraryStore';
+import { getHostname } from '@/lib/url-utils';
 
 interface PdfCardProps {
     pdf: Pdf;
@@ -114,7 +115,7 @@ export const PdfCard = ({ pdf, onDelete, onEdit, onManageProjects }: PdfCardProp
                 </h3>
                 <p className="text-xs text-muted-foreground mb-3 truncate" title={pdf.source_url || pdf.filename}>
                     {pdf.source_url
-                        ? (() => { try { return new URL(pdf.source_url).hostname; } catch { return pdf.source_url; } })()
+                        ? getHostname(pdf.source_url)
                         : pdf.filename.split('/').pop() ?? pdf.filename
                     }
                 </p>

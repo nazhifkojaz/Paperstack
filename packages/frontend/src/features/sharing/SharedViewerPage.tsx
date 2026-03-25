@@ -4,8 +4,7 @@ import { pdfjsLib } from '@/lib/pdfjs';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { useSharedAnnotations } from '@/api/sharing';
 import { Loader2, AlertCircle, Share2 } from 'lucide-react';
-
-const API_URL = import.meta.env.VITE_API_URL ?? '/v1';
+import { API_URL } from '@/lib/config';
 
 export function SharedViewerPage() {
     const { token } = useParams<{ token: string }>();
