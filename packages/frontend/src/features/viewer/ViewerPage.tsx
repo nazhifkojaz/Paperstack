@@ -5,6 +5,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { usePdfViewerStore } from '@/stores/pdfViewerStore';
 import { usePdf } from '@/api/pdfs';
 import { usePdfSource } from './usePdfSource';
+import { usePdfPageDimensions } from './usePdfPageDimensions';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { ViewerToolbar } from './ViewerToolbar';
 import { VirtualPdfPage } from './VirtualPdfPage';
@@ -81,6 +82,9 @@ export function ViewerPage() {
     const pages = useMemo(() => {
         return Array.from({ length: totalPages }, (_, i) => i + 1);
     }, [totalPages]);
+
+    // Preload page dimensions when PDF document loads
+    usePdfPageDimensions({ pdfDocument, enabled: !!pdfDocument });
 
     // Scroll listener for toolbar navigation
     useEffect(() => {
