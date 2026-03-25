@@ -95,12 +95,49 @@ async def revoke_share(
 
 
 # ────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────
+# Permission helpers
+# ────────────────────────────────────────────────────────────
+
+def _filter_annotations_by_permission(annotations: List[Annotation], permission: str) -> List[AnnotationData]:
+    """Filter annotations based on share permission level.
+
+    Args:
+        annotations: List of Annotation models from the database
+        permission: Either 'view' or 'comment'
+
+    Returns:
+        Filtered list of AnnotationData. For 'view' permission, note_content is excluded.
+    """
+    filtered = []
+    for a in annotations:
+        annotation_data = AnnotationData(
+            id=str(a.id),
+            set_id=str(a.set_id),
+            page_number=a.page_number,
+            type=a.type,
+            rects=a.rects,
+            selected_text=a.selected_text,
+            # note_content is only included for 'comment' permission
+            note_content=a.note_content if permission == "comment" else None,
+            color=a.color,
+        )
+        filtered.append(annotation_data)
+    return filtered
+
+
+# ────────────────────────────────────────────────────────────
 # Public route — no auth required
 # ────────────────────────────────────────────────────────────
 
 @public_router.get("/shared/annotations/{token}", response_model=SharedAnnotationsResponse)
 async def get_shared_annotations(token: str, db: AsyncSession = Depends(get_db)):
-    """Public endpoint: returns the annotation set and PDF data for a given share token."""
+    """Public endpoint: returns the annotation set and PDF data for a given share token.
+
+    Permission enforcement:
+    - 'view': Annotations are returned without note_content
+    - 'comment': Full annotations including note_content are returned
+    """
     stmt = select(Share).where(Share.share_token == token)
     share = (await db.execute(stmt)).scalar_one_or_none()
     if not share:
@@ -124,6 +161,9 @@ async def get_shared_annotations(token: str, db: AsyncSession = Depends(get_db))
     stmt_user = select(User).where(User.id == share.shared_by)
     sharer = (await db.execute(stmt_user)).scalar_one_or_none()
 
+    # Filter annotations based on share permission
+    filtered_annotations = _filter_annotations_by_permission(annotations, share.permission)
+
     return SharedAnnotationsResponse(
         shared_by_login=sharer.github_login if sharer else "unknown",
         shared_by_avatar=sharer.avatar_url if sharer else None,
@@ -133,19 +173,7 @@ async def get_shared_annotations(token: str, db: AsyncSession = Depends(get_db))
             pdf_id=str(ann_set.pdf_id),
             name=ann_set.name,
             color=ann_set.color or "#FFFF00",
-            annotations=[
-                AnnotationData(
-                    id=str(a.id),
-                    set_id=str(a.set_id),
-                    page_number=a.page_number,
-                    type=a.type,
-                    rects=a.rects,
-                    selected_text=a.selected_text,
-                    note_content=a.note_content,
-                    color=a.color,
-                )
-                for a in annotations
-            ],
+            annotations=filtered_annotations,
         ),
         pdf_id=str(ann_set.pdf_id),
         pdf_title=pdf.title if pdf else "Unknown PDF",
