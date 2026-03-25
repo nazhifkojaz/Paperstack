@@ -1,4 +1,4 @@
-import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 
 export interface AnnotationSet {
@@ -53,9 +53,12 @@ export const useMultiSetAnnotations = (setIds: string[]) => {
         })),
     });
 
-    const allAnnotations = queries
-        .filter(q => q.isSuccess && q.data)
-        .flatMap(q => q.data!);
+    // Memoize to prevent re-computation on every render
+    const allAnnotations = useMemo(() => {
+        return queries
+            .filter(q => q.isSuccess && q.data)
+            .flatMap(q => q.data!);
+    }, [queries]);
 
     const isLoading = queries.some(q => q.isLoading);
 
