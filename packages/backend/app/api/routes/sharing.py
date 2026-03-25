@@ -138,28 +138,46 @@ async def get_shared_annotations(token: str, db: AsyncSession = Depends(get_db))
     - 'view': Annotations are returned without note_content
     - 'comment': Full annotations including note_content are returned
     """
-    stmt = select(Share).where(Share.share_token == token)
-    share = (await db.execute(stmt)).scalar_one_or_none()
-    if not share:
+    # Query 1: Fetch share with annotation set in single query
+    stmt = (
+        select(Share, AnnotationSet)
+        .join(AnnotationSet, AnnotationSet.id == Share.annotation_set_id)
+        .where(Share.share_token == token)
+    )
+    result = await db.execute(stmt)
+    row = result.first()
+    if not row:
         raise HTTPException(status_code=404, detail="Share not found or revoked")
 
-    # Load the annotation set
-    stmt_set = select(AnnotationSet).where(AnnotationSet.id == share.annotation_set_id)
-    ann_set = (await db.execute(stmt_set)).scalar_one_or_none()
-    if not ann_set:
-        raise HTTPException(status_code=404, detail="Annotation set no longer exists")
+    share, ann_set = row
 
-    # Load all annotations for this set
-    stmt_ann = select(Annotation).where(Annotation.set_id == ann_set.id)
-    annotations = (await db.execute(stmt_ann)).scalars().all()
+    # Query 2: Fetch annotations, pdf, and sharer with JOINs
+    stmt_related = (
+        select(Annotation, Pdf, User)
+        .select_from(Annotation)
+        .join(Pdf, Pdf.id == ann_set.pdf_id)
+        .join(User, User.id == share.shared_by)
+        .where(Annotation.set_id == ann_set.id)
+    )
+    result_related = await db.execute(stmt_related)
+    related_rows = result_related.all()
 
-    # Load related PDF
-    stmt_pdf = select(Pdf).where(Pdf.id == ann_set.pdf_id)
-    pdf = (await db.execute(stmt_pdf)).scalar_one_or_none()
-
-    # Load the sharer's profile
-    stmt_user = select(User).where(User.id == share.shared_by)
-    sharer = (await db.execute(stmt_user)).scalar_one_or_none()
+    # Extract data from joined results
+    if related_rows:
+        annotations = [row[0] for row in related_rows]
+        pdf = related_rows[0][1]
+        sharer = related_rows[0][2]
+    else:
+        # Edge case: no annotations, still need pdf and sharer
+        annotations = []
+        stmt_minimal = (
+            select(Pdf, User)
+            .join(User, User.id == share.shared_by)
+            .where(Pdf.id == ann_set.pdf_id)
+        )
+        result_minimal = await db.execute(stmt_minimal)
+        row_minimal = result_minimal.first()
+        pdf, sharer = row_minimal if row_minimal else (None, None)
 
     # Filter annotations based on share permission
     filtered_annotations = _filter_annotations_by_permission(annotations, share.permission)

@@ -74,10 +74,17 @@ async def upload_pdf(
             parsed_ids = [uuid.UUID(pid.strip()) for pid in project_ids.split(",") if pid.strip()]
         except ValueError:
             raise HTTPException(status_code=422, detail="Invalid project_id format")
-        for pid in parsed_ids:
-            collection = await db.get(Collection, pid)
-            if collection and collection.user_id == current_user.id:
-                db.add(PdfCollection(pdf_id=pdf.id, collection_id=pid))
+        # Batch fetch collections with ownership check (single query)
+        if parsed_ids:
+            stmt = select(Collection).where(
+                Collection.id.in_(parsed_ids),
+                Collection.user_id == current_user.id
+            )
+            result = await db.execute(stmt)
+            valid_collections = result.scalars().all()
+            # Create junction records only for valid collections
+            for collection in valid_collections:
+                db.add(PdfCollection(pdf_id=pdf.id, collection_id=collection.id))
 
     await db.commit()
     await db.refresh(pdf)
@@ -113,10 +120,16 @@ async def link_pdf(
 
     # Add to projects if specified
     if data.project_ids:
-        for pid in data.project_ids:
-            collection = await db.get(Collection, pid)
-            if collection and collection.user_id == current_user.id:
-                db.add(PdfCollection(pdf_id=pdf_id, collection_id=pid))
+        # Batch fetch collections with ownership check (single query)
+        stmt = select(Collection).where(
+            Collection.id.in_(data.project_ids),
+            Collection.user_id == current_user.id
+        )
+        result = await db.execute(stmt)
+        valid_collections = result.scalars().all()
+        # Create junction records only for valid collections
+        for collection in valid_collections:
+            db.add(PdfCollection(pdf_id=pdf_id, collection_id=collection.id))
 
     await db.commit()
     await db.refresh(pdf)
