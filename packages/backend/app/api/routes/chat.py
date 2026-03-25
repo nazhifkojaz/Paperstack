@@ -64,25 +64,44 @@ async def _save_assistant_message(
     content: str,
     context_chunks: list[dict],
 ) -> None:
-    """Persist the completed assistant message (called as a background task)."""
+    """Persist the completed assistant message (called as a background task).
+
+    This function runs in a FastAPI BackgroundTask, so errors must be logged
+    explicitly (exceptions are swallowed by the background task runner).
+    """
     from app.db.engine import SessionLocal
+    from app.utils.db_utils import background_task_transaction
+
     async with SessionLocal() as bg_db:
-        msg = ChatMessage(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=content,
-            context_chunks=[
-                {
-                    "chunk_id": c["chunk_id"],
-                    "page_number": c["page_number"],
-                    "snippet": c["content"][:200],
-                    **({"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]} if c.get("pdf_id") else {}),
-                }
-                for c in context_chunks
-            ],
-        )
-        bg_db.add(msg)
-        await bg_db.commit()
+        async with background_task_transaction(
+            bg_db, "save_assistant_message", logger, str(conversation_id)
+        ):
+            msg = ChatMessage(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=content,
+                context_chunks=[
+                    {
+                        "chunk_id": c["chunk_id"],
+                        "page_number": c["page_number"],
+                        "snippet": c["content"][:200],
+                        **(
+                            {"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]}
+                            if c.get("pdf_id")
+                            else {}
+                        ),
+                    }
+                    for c in context_chunks
+                ],
+            )
+            bg_db.add(msg)
+            await bg_db.commit()
+            logger.info(
+                "Saved assistant message for conversation %s (%d chars, %d chunks)",
+                conversation_id,
+                len(content),
+                len(context_chunks),
+            )
 
 
 # ---------------------------------------------------------------------------

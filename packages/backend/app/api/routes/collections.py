@@ -1,14 +1,18 @@
+import logging
 import uuid
 from typing import Any, List
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.db.models import User, Collection, PdfCollection, Pdf
-from app.schemas.collection import CollectionCreate, CollectionUpdate, CollectionResponse
+from app.db.models import Collection, Pdf, PdfCollection, User
+from app.schemas.collection import CollectionCreate, CollectionResponse, CollectionUpdate
+from app.utils.db_utils import handle_unique_violation
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.post("", response_model=CollectionResponse)
 async def create_collection(
@@ -103,13 +107,19 @@ async def add_pdf_to_collection(
         
     pdf_collection = PdfCollection(pdf_id=pdf_id, collection_id=collection_id)
     db.add(pdf_collection)
-    
-    try:
+
+    async with handle_unique_violation(
+        db,
+        "PDF is already in this collection",
+        logger,
+        {
+            "user_id": str(current_user.id),
+            "pdf_id": str(pdf_id),
+            "collection_id": str(collection_id),
+        },
+    ):
         await db.commit()
-    except Exception:
-        await db.rollback()
-        raise HTTPException(status_code=400, detail="PDF is already in this collection")
-        
+
     return {"message": "PDF added to collection"}
 
 @router.delete("/{collection_id}/pdfs/{pdf_id}")
