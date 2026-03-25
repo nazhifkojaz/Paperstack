@@ -2,11 +2,11 @@
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, text as sql_text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
@@ -17,7 +17,6 @@ from app.db.models import (
     ChatConversation,
     ChatMessage,
     Pdf,
-    PdfChunk,
     PdfIndexStatus,
     User,
 )
@@ -32,9 +31,11 @@ from app.services.exceptions import (
     IndexingError,
     QuotaExhaustedError,
 )
-from app.services.indexing_service import STALE_INDEXING_MINUTES, get_indexing_service
+from app.services.explain_service import explain_service
+from app.services.indexing_service import get_indexing_service
 from app.services.llm_service import llm_service
 from app.services.pdf_download_service import pdf_download_service
+from app.services.vector_search_service import vector_search_service
 from app.schemas.chat import (
     ConversationCreate,
     ConversationResponse,
@@ -55,117 +56,8 @@ indexing_service = get_indexing_service(pdf_download_service)
 
 
 # ---------------------------------------------------------------------------
-# Vector Search Helpers
+# Helper: Save assistant message (background task)
 # ---------------------------------------------------------------------------
-
-async def _vector_search(
-    query_vector: list[float],
-    pdf_id: uuid.UUID,
-    user_id: uuid.UUID,
-    top_k: int,
-    db: AsyncSession,
-) -> list[dict]:
-    """Return top-k chunks for a single PDF."""
-    vec_str = f"[{','.join(str(x) for x in query_vector)}]"
-    rows = await db.execute(
-        sql_text("""
-            SELECT pc.id, pc.page_number, pc.content,
-                   1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
-            FROM pdf_chunks pc
-            WHERE pc.user_id = :user_id
-              AND pc.pdf_id = :pdf_id
-            ORDER BY pc.embedding <=> CAST(:vec AS vector)
-            LIMIT :k
-        """),
-        {
-            "vec": vec_str,
-            "user_id": str(user_id),
-            "pdf_id": str(pdf_id),
-            "k": top_k,
-        },
-    )
-    return [
-        {
-            "chunk_id": str(r.id),
-            "page_number": r.page_number,
-            "content": r.content,
-            "score": float(r.score),
-        }
-        for r in rows
-    ]
-
-
-async def _vector_search_collection(
-    query_vector: list[float],
-    collection_id: uuid.UUID,
-    user_id: uuid.UUID,
-    top_k: int,
-    db: AsyncSession,
-) -> list[dict]:
-    """Return top-k chunks across all indexed PDFs in a collection."""
-    vec_str = f"[{','.join(str(x) for x in query_vector)}]"
-    rows = await db.execute(
-        sql_text("""
-            SELECT pc.id, pc.pdf_id, pc.page_number, pc.content, p.title AS pdf_title,
-                   1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
-            FROM pdf_chunks pc
-            JOIN pdfs p ON p.id = pc.pdf_id
-            JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id
-            WHERE pc.user_id = :user_id
-              AND pcol.collection_id = :collection_id
-            ORDER BY pc.embedding <=> CAST(:vec AS vector)
-            LIMIT :k
-        """),
-        {
-            "vec": vec_str,
-            "collection_id": str(collection_id),
-            "user_id": str(user_id),
-            "k": top_k,
-        },
-    )
-    return [
-        {
-            "chunk_id": str(r.id),
-            "pdf_id": str(r.pdf_id),
-            "pdf_title": r.pdf_title,
-            "page_number": r.page_number,
-            "content": r.content,
-            "score": r.score,
-        }
-        for r in rows
-    ]
-
-
-async def _vector_search(
-    query_vector: list[float],
-    pdf_id: uuid.UUID,
-    user_id: uuid.UUID,
-    top_k: int,
-    db: AsyncSession,
-) -> list[dict]:
-    """Return top-k chunks for a single PDF ordered by cosine similarity."""
-    vec_str = f"[{','.join(str(x) for x in query_vector)}]"
-    rows = await db.execute(
-        sql_text("""
-            SELECT id, page_number, content,
-                   1 - (embedding <=> CAST(:vec AS vector)) AS score
-            FROM pdf_chunks
-            WHERE pdf_id = :pdf_id AND user_id = :user_id
-            ORDER BY embedding <=> CAST(:vec AS vector)
-            LIMIT :k
-        """),
-        {
-            "vec": vec_str,
-            "pdf_id": str(pdf_id),
-            "user_id": str(user_id),
-            "k": top_k,
-        },
-    )
-    return [
-        {"chunk_id": str(r.id), "page_number": r.page_number, "content": r.content, "score": r.score}
-        for r in rows
-    ]
-
 
 async def _save_assistant_message(
     conversation_id: uuid.UUID,
@@ -373,7 +265,7 @@ async def stream_message(
             raise HTTPException(status_code=404, detail="PDF not found.")
 
         # Get or create index status
-        index_status = await indexing_service.get_or_create_index_status(
+        index_status = await indexing_service.get_or_create_status(
             str(conv.pdf_id), str(current_user.id), db
         )
 
@@ -402,17 +294,27 @@ async def stream_message(
                 await db.commit()
                 raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
 
-        top_chunks = await _vector_search(query_vector, conv.pdf_id, current_user.id, top_k=6, db=db)
+        top_chunks = await vector_search_service.search_pdf(
+            query_vector=query_vector,
+            pdf_id=conv.pdf_id,
+            user_id=current_user.id,
+            top_k=6,
+            db=db,
+        )
         context = chat_service.build_context(
-            [{"page_number": c["page_number"], "content": c["content"]} for c in top_chunks]
+            [{"page_number": c.page_number, "content": c.content} for c in top_chunks]
         )
     else:
         # Collection chat: search across all indexed PDFs in the collection
         if conv.collection_id is None:
             raise HTTPException(status_code=422, detail="Conversation has neither pdf_id nor collection_id.")
 
-        top_chunks = await _vector_search_collection(
-            query_vector, conv.collection_id, current_user.id, top_k=8, db=db
+        top_chunks = await vector_search_service.search_collection(
+            query_vector=query_vector,
+            collection_id=conv.collection_id,
+            user_id=current_user.id,
+            top_k=8,
+            db=db,
         )
         if not top_chunks:
             raise HTTPException(
@@ -420,7 +322,7 @@ async def stream_message(
                 detail="No indexed PDFs found in this collection. Open each PDF in the viewer and send a message to index it first.",
             )
         context_parts = [
-            f"[{c['pdf_title']}, Page {c['page_number']}]\n{c['content']}"
+            f"[{c.pdf_title}, Page {c.page_number}]\n{c.content}"
             for c in top_chunks
         ]
         context = "\n\n---\n\n".join(context_parts)
@@ -451,10 +353,10 @@ async def stream_message(
     # 7. Build context_chunks payload for SSE done event
     context_chunks_payload = [
         {
-            "chunk_id": c["chunk_id"],
-            "page_number": c["page_number"],
-            "snippet": c["content"][:200],
-            **({"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]} if c.get("pdf_id") else {}),
+            "chunk_id": c.chunk_id,
+            "page_number": c.page_number,
+            "snippet": c.content[:200],
+            **({"pdf_id": c.pdf_id, "pdf_title": c.pdf_title} if c.pdf_id else {}),
         }
         for c in top_chunks
     ]
@@ -509,76 +411,33 @@ async def semantic_search(
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
-    vec_str = f"[{','.join(str(x) for x in query_vector)}]"
-
     if data.collection_id is not None:
-        rows = await db.execute(
-            sql_text("""
-                SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
-                       1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
-                FROM pdf_chunks pc
-                JOIN pdfs p ON p.id = pc.pdf_id
-                JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id
-                WHERE pc.user_id = :user_id
-                  AND pcol.collection_id = :collection_id
-                ORDER BY pc.embedding <=> CAST(:vec AS vector)
-                LIMIT :limit
-            """),
-            {
-                "vec": vec_str,
-                "user_id": str(current_user.id),
-                "collection_id": str(data.collection_id),
-                "limit": data.limit * 3,  # over-fetch to allow dedup by pdf_id
-            },
+        results = await vector_search_service.search_collection(
+            query_vector=query_vector,
+            collection_id=data.collection_id,
+            user_id=current_user.id,
+            top_k=data.limit * 3,  # over-fetch for dedup
+            db=db,
         )
     else:
-        rows = await db.execute(
-            sql_text("""
-                SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
-                       1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
-                FROM pdf_chunks pc
-                JOIN pdfs p ON p.id = pc.pdf_id
-                WHERE pc.user_id = :user_id
-                ORDER BY pc.embedding <=> CAST(:vec AS vector)
-                LIMIT :limit
-            """),
-            {
-                "vec": vec_str,
-                "user_id": str(current_user.id),
-                "limit": data.limit * 3,
-            },
+        results = await vector_search_service.search_all(
+            query_vector=query_vector,
+            user_id=current_user.id,
+            limit=data.limit,
+            db=db,
         )
 
-    # Deduplicate: keep best-scoring chunk per PDF
-    seen: dict[str, SemanticSearchResult] = {}
-    for r in rows:
-        pdf_id_str = str(r.pdf_id)
-        if pdf_id_str not in seen:
-            seen[pdf_id_str] = SemanticSearchResult(
-                pdf_id=r.pdf_id,
-                pdf_title=r.pdf_title,
-                page_number=r.page_number,
-                snippet=r.content[:300],
-                score=r.score,
-            )
-        if len(seen) >= data.limit:
-            break
-
-    return list(seen.values())
-
-
-# ---------------------------------------------------------------------------
-# Explain annotation
-# ---------------------------------------------------------------------------
-
-EXPLAIN_SYSTEM_PROMPT = (
-    "You are a research assistant. Explain the following highlighted passage "
-    "from an academic paper in clear, concise language. "
-    "Use the context excerpts provided to enrich your explanation — include why "
-    "the passage matters and how it connects to the paper's broader argument. "
-    "Keep the explanation under 200 words. Use plain language. "
-    "You may use **bold** for key terms. Cite page numbers as [p.N] when relevant."
-)
+    # Convert SearchResult to SemanticSearchResult
+    return [
+        SemanticSearchResult(
+            pdf_id=uuid.UUID(r.pdf_id) if r.pdf_id else None,
+            pdf_title=r.pdf_title or "",
+            page_number=r.page_number,
+            snippet=r.content[:300] if r.content else "",
+            score=r.score,
+        )
+        for r in results
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -626,75 +485,29 @@ async def explain_annotation(
     api_key = resolution.api_key
     is_in_house = resolution.is_in_house
 
-    # 4. Lazy-index PDF if needed
-    index_status = await indexing_service.get_or_create_index_status(
-        str(data.pdf_id), str(current_user.id), db
-    )
-
-    # Handle stale/active indexing
+    # 4-6. Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
     try:
-        was_reset = await indexing_service.reset_if_stale(index_status, db)
-    except IndexInProgressError as e:
-        raise HTTPException(
-            status_code=409,
-            detail="Indexing paper first, might take some time. Please try again shortly.",
+        result = await explain_service.explain_with_provider(
+            selected_text=data.selected_text,
+            page_number=data.page_number,
+            pdf_row=pdf_row,
+            user=current_user,
+            provider=provider,
+            api_key=api_key,
+            db=db,
         )
+    except (EmbeddingError, IndexingError) as exc:
+        raise HTTPException(status_code=502, detail=f"Explanation failed: {exc}")
 
-    # Handle failed indexing
-    if index_status.status == "failed":
-        index_status.status = "not_indexed"
-        index_status.error_message = None
-        await db.flush()
-
-    # Lazy index if needed
-    if index_status.status == "not_indexed":
-        logger.info("explain: indexing pdf %s for user %s", data.pdf_id, current_user.id)
-        try:
-            await indexing_service.index_pdf(pdf_row, current_user, index_status, db)
-            await db.commit()
-            await db.refresh(annotation)  # re-attach after commit expiry
-            logger.info("explain: indexing complete for pdf %s", data.pdf_id)
-        except (EmbeddingError, IndexingError) as exc:
-            logger.exception("explain: indexing failed for pdf %s: %s", data.pdf_id, exc)
-            await db.commit()
-            raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
-
-    # 5. Embed selected text as query vector
-    try:
-        query_vector = await embedding_service.embed_query(data.selected_text)
-    except EmbeddingError as exc:
-        raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
-
-    # 6. Vector search for context (top 4 — tighter query than chat's 6)
-    top_chunks = await _vector_search(query_vector, data.pdf_id, current_user.id, top_k=4, db=db)
-    context = chat_service.build_context(
-        [{"page_number": c["page_number"], "content": c["content"]} for c in top_chunks]
-    )
-
-    # 7. Build prompt and call LLM (non-streaming)
-    system_prompt = EXPLAIN_SYSTEM_PROMPT + "\n\n## Context from the paper:\n\n" + context
-    user_message = (
-        f'Explain this passage from page {data.page_number}:\n\n'
-        f'"{data.selected_text}"'
-    )
-
-    try:
-        call_method = getattr(llm_service, f"call_{provider}")
-        explanation = await call_method(system_prompt, user_message, api_key)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"LLM call failed: {str(exc)}")
-
-    # 8. Append explanation to annotation note_content
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    new_block = f"[AI Explanation — {timestamp}]\n{explanation}"
+    # 7. Append explanation to annotation note_content
     final_note = (
-        f"{existing_note_content}\n\n{new_block}"
+        f"{existing_note_content}\n\n{result.note_content}"
         if existing_note_content
-        else new_block
+        else result.note_content
     )
     annotation.note_content = final_note
 
-    # 9. Decrement explain quota if using in-house key
+    # 8. Decrement explain quota if using in-house key
     remaining = -1  # -1 signals unlimited (own API key)
     if is_in_house:
         remaining = await api_key_service.decrement_quota(
@@ -704,7 +517,7 @@ async def explain_annotation(
     await db.commit()
 
     return ExplainResponse(
-        explanation=explanation,
+        explanation=result.explanation,
         note_content=final_note,
         explain_uses_remaining=remaining,
     )
