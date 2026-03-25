@@ -4,13 +4,15 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_current_user, get_llm_http_client
 from app.core.config import settings
 from app.db.models import (
     User, Pdf, Annotation, AnnotationSet, AutoHighlightCache,
@@ -28,7 +30,7 @@ from app.services.exceptions import (
     LLMProviderError,
     QuotaExhaustedError,
 )
-from app.services.llm_service import llm_service, CATEGORY_COLORS
+from app.services.llm_service import LLMService, CATEGORY_COLORS
 from app.services.pdf_download_service import PdfSource
 from app.services.text_extractor import extract_text_with_pages, is_text_pdf
 
@@ -106,6 +108,7 @@ async def analyze_paper(
     data: AutoHighlightRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    llm_client: httpx.AsyncClient = Depends(get_llm_http_client),
 ):
     """Analyze a paper with LLM and create auto-highlight annotations."""
     sorted_categories = sorted(data.categories)
@@ -202,7 +205,8 @@ async def analyze_paper(
                 )
 
             # 6. Call LLM
-            highlights = await llm_service.analyze_paper(
+            llm_svc = LLMService(http_client=llm_client)
+            highlights = await llm_svc.analyze_paper(
                 paper_text, sorted_categories, provider, api_key
             )
 

@@ -4,12 +4,13 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_llm_http_client, get_embedding_http_client
 from app.core.config import settings
 from app.db.models import (
     Annotation,
@@ -22,8 +23,8 @@ from app.db.models import (
 )
 from app.middleware.rate_limit import limiter
 from app.services.api_key_service import QuotaType, api_key_service
-from app.services.chat_service import COLLECTION_SYSTEM_PROMPT, chat_service
-from app.services.embedding_service import embedding_service
+from app.services.chat_service import ChatService, COLLECTION_SYSTEM_PROMPT
+from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
     ApiKeyNotFoundError,
     EmbeddingError,
@@ -31,9 +32,9 @@ from app.services.exceptions import (
     IndexingError,
     QuotaExhaustedError,
 )
-from app.services.explain_service import explain_service
-from app.services.indexing_service import get_indexing_service
-from app.services.llm_service import llm_service
+from app.services.explain_service import ExplainService
+from app.services.indexing_service import IndexingService
+from app.services.llm_service import LLMService
 from app.services.pdf_download_service import pdf_download_service
 from app.services.vector_search_service import vector_search_service
 from app.schemas.chat import (
@@ -50,9 +51,6 @@ from app.schemas.chat import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Initialize indexing service with download service
-indexing_service = get_indexing_service(pdf_download_service)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +233,8 @@ async def stream_message(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    llm_client: httpx.AsyncClient = Depends(get_llm_http_client),
+    embedding_client: httpx.AsyncClient = Depends(get_embedding_http_client),
 ):
     """Send a chat message and stream the assistant reply via SSE."""
     # 1. Verify conversation ownership
@@ -267,13 +267,22 @@ async def stream_message(
             db,
         )
 
-    # 4. Embed query
+    # 4. Create services with injected HTTP clients
+    embedding_svc = EmbeddingService(http_client=embedding_client)
+    llm_svc = LLMService(http_client=llm_client)
+    local_chat_service = ChatService(llm_service=llm_svc)
+    local_indexing_service = IndexingService(
+        download_service=pdf_download_service,
+        embedding_service=embedding_svc,
+    )
+
+    # 5. Embed query
     try:
-        query_vector = await embedding_service.embed_query(data.content)
+        query_vector = await embedding_svc.embed_query(data.content)
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
-    # 5. PDF path: verify ownership, lazy-index if needed, single-PDF search
+    # 6. PDF path: verify ownership, lazy-index if needed, single-PDF search
     #    Collection path: multi-PDF search across indexed collection chunks
     if conv.pdf_id is not None:
         pdf_result = await db.execute(
@@ -284,13 +293,13 @@ async def stream_message(
             raise HTTPException(status_code=404, detail="PDF not found.")
 
         # Get or create index status
-        index_status = await indexing_service.get_or_create_status(
+        index_status = await local_indexing_service.get_or_create_status(
             str(conv.pdf_id), str(current_user.id), db
         )
 
         # Handle stale/active indexing
         try:
-            was_reset = await indexing_service.reset_if_stale(index_status, db)
+            was_reset = await local_indexing_service.reset_if_stale(index_status, db)
         except IndexInProgressError as e:
             raise HTTPException(status_code=409, detail=str(e))
 
@@ -307,7 +316,7 @@ async def stream_message(
         # Lazy index if needed
         if index_status.status == "not_indexed":
             try:
-                await indexing_service.index_pdf(pdf_row, current_user, index_status, db)
+                await local_indexing_service.index_pdf(pdf_row, current_user, index_status, db)
                 await db.commit()
             except (EmbeddingError, IndexingError) as exc:
                 await db.commit()
@@ -320,7 +329,7 @@ async def stream_message(
             top_k=6,
             db=db,
         )
-        context = chat_service.build_context(
+        context = local_chat_service.build_context(
             [{"page_number": c.page_number, "content": c.content} for c in top_chunks]
         )
     else:
@@ -352,7 +361,7 @@ async def stream_message(
         .order_by(ChatMessage.created_at.asc())
     )
     history = [{"role": m.role, "content": m.content} for m in history_result.scalars().all()]
-    system_prompt, messages = chat_service.build_messages(
+    system_prompt, messages = local_chat_service.build_messages(
         context, history, data.content,
         base_prompt=COLLECTION_SYSTEM_PROMPT if conv.collection_id else None,
     )
@@ -384,7 +393,7 @@ async def stream_message(
         full_reply = []
         assistant_message_id = str(uuid.uuid4())
         try:
-            async for token in chat_service.stream_reply(system_prompt, messages, provider, api_key):
+            async for token in local_chat_service.stream_reply(system_prompt, messages, provider, api_key):
                 full_reply.append(token)
                 yield f"data: {json.dumps({'token': token})}\n\n"
 
@@ -423,10 +432,12 @@ async def semantic_search(
     data: SemanticSearchRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    embedding_client: httpx.AsyncClient = Depends(get_embedding_http_client),
 ):
     """Search across indexed PDFs using semantic similarity."""
     try:
-        query_vector = await embedding_service.embed_query(data.query)
+        embedding_svc = EmbeddingService(http_client=embedding_client)
+        query_vector = await embedding_svc.embed_query(data.query)
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
@@ -470,6 +481,8 @@ async def explain_annotation(
     data: ExplainRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    llm_client: httpx.AsyncClient = Depends(get_llm_http_client),
+    embedding_client: httpx.AsyncClient = Depends(get_embedding_http_client),
 ):
     """Explain a highlighted passage using RAG and save the explanation as an annotation note."""
     # 1. Verify annotation ownership (join through annotation_sets for user_id check)
@@ -505,8 +518,16 @@ async def explain_annotation(
     is_in_house = resolution.is_in_house
 
     # 4-6. Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
+    # Create local explain service with injected HTTP clients
+    embedding_svc = EmbeddingService(http_client=embedding_client)
+    llm_svc = LLMService(http_client=llm_client)
+    local_explain_service = ExplainService(
+        embedding_service=embedding_svc,
+        llm_service=llm_svc,
+    )
+
     try:
-        result = await explain_service.explain_with_provider(
+        result = await local_explain_service.explain_with_provider(
             selected_text=data.selected_text,
             page_number=data.page_number,
             pdf_row=pdf_row,
