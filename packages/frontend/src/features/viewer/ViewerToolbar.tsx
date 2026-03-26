@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import {
     ZoomIn, ZoomOut, RotateCw,
     ChevronLeft, ChevronRight,
-    Maximize, Layout, Download, BookOpen, Square, PanelLeft, PanelLeftOpen, MessageSquare
+    Download, BookOpen, Square, PanelLeft, PanelLeftOpen, MessageSquare
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
@@ -125,12 +125,14 @@ export const ViewerToolbar = () => {
                 >
                     <RotateCw className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="icon" title="Fit Page" disabled>
+                {/* TODO: Re-implement Fit Page functionality when ready */}
+                {/* <Button variant="ghost" size="icon" title="Fit Page" disabled>
                     <Maximize className="h-4 w-4" />
-                </Button>
-                <Button variant="ghost" size="icon" title="Fit Width" disabled>
+                </Button> */}
+                {/* TODO: Re-implement Fit Width functionality when ready */}
+                {/* <Button variant="ghost" size="icon" title="Fit Width" disabled>
                     <Layout className="h-4 w-4" />
-                </Button>
+                </Button> */}
                 <Button
                     variant={isDrawingRect ? 'default' : 'ghost'}
                     size="icon"

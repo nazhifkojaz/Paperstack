@@ -141,7 +141,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                 }
             }}
         >
-            {/* Change 6: SVG pointer-events none */}
             <svg className="w-full h-full" style={{ pointerEvents: 'none' }}>
                 {pageAnnotations.map((ann) => {
                     const isSelected = selectedAnnotationId === ann.id;
@@ -156,20 +155,17 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                     return (
                         <g
                             key={ann.id}
-                            // Change 7: g elements get pointerEvents="all" and onContextMenu
                             pointerEvents="all"
                             onContextMenu={(e) => {
                                 e.preventDefault();
                                 setContextMenu({ x: e.clientX, y: e.clientY, annotationId: ann.id });
                                 setSelectedAnnotationId(ann.id);
                             }}
-                            // Change 8: Remove activeTool === 'select' guards - always clickable
                             onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedAnnotationId(ann.id);
                             }}
                             onMouseDown={(e) => {
-                                // Change 8: Remove activeTool guard - annotations always movable when selected
                                 if (selectedAnnotationId === ann.id && ann.type !== 'highlight') {
                                     e.stopPropagation();
                                     startMove(e, ann.rects);
@@ -228,7 +224,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                 })}
 
                 {/* Resize handles for selected rect annotations */}
-                {/* Change 12: Render toolbar whenever selectedAnnotationId is set (remove activeTool check) */}
                 {selectedAnnotationId && (() => {
                     const selectedAnn = pageAnnotations.find(a => a.id === selectedAnnotationId);
                     if (!selectedAnn || selectedAnn.type !== 'rect' || !selectedAnn.rects[0]) return null;
@@ -259,7 +254,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                             stroke="#3b82f6"
                             strokeWidth={1.5}
                             vectorEffect="non-scaling-stroke"
-                            // Change 11: Use pointerEvents="all" instead of className
                             pointerEvents="all"
                             style={{ cursor: handle.cursor }}
                             onMouseDown={(e) => {
@@ -334,7 +328,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
             }
 
             {/* Annotation Toolbar */}
-            {/* Change 12: Render whenever selectedAnnotationId is set (no activeTool check) */}
             {/* Hide toolbar when context menu is open to avoid duplicate color pickers */}
             {selectedAnnotationId && !contextMenu && (() => {
                 const selectedAnn = pageAnnotations.find(a => a.id === selectedAnnotationId);
