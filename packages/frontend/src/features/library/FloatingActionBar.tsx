@@ -1,13 +1,14 @@
-import { Download, X } from 'lucide-react';
+import { Download, Trash, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface FloatingActionBarProps {
     selectedCount: number;
     onExport: () => void;
+    onDelete?: () => void;
     onCancel: () => void;
 }
 
-export const FloatingActionBar = ({ selectedCount, onExport, onCancel }: FloatingActionBarProps) => {
+export const FloatingActionBar = ({ selectedCount, onExport, onDelete, onCancel }: FloatingActionBarProps) => {
     if (selectedCount === 0) {
         return null;
     }
@@ -28,6 +29,17 @@ export const FloatingActionBar = ({ selectedCount, onExport, onCancel }: Floatin
                     <X className="h-4 w-4 mr-1" />
                     Cancel
                 </Button>
+                {onDelete && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={onDelete}
+                        className="text-red-400 hover:text-red-300 hover:bg-gray-800 h-8 px-3"
+                    >
+                        <Trash className="h-4 w-4 mr-1" />
+                        Delete
+                    </Button>
+                )}
                 <Button
                     size="sm"
                     onClick={onExport}

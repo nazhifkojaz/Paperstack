@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from 'react';
-import { usePdfs, useDeletePdf, type Pdf } from '@/api/pdfs';
+import { usePdfs, useDeletePdf, useBulkDeletePdfs, type Pdf } from '@/api/pdfs';
 import { useLibraryStore } from '@/stores/libraryStore';
 import { useSemanticSearch, type SemanticSearchResult } from '@/api/chat';
 import { useValidateCitations, useBulkExportCitations } from '@/api/citations';
@@ -12,6 +12,7 @@ import { PdfList } from './PdfList';
 import { FloatingActionBar } from './FloatingActionBar';
 import { ExportDialog } from './ExportDialog';
 import { DeepSearchResults } from './DeepSearchResults';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui/button';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
@@ -51,6 +52,7 @@ export function LibraryPage() {
     });
 
     const deletePdf = useDeletePdf();
+    const bulkDeletePdfs = useBulkDeletePdfs();
     const validateCitations = useValidateCitations();
     const bulkExportCitations = useBulkExportCitations();
 
@@ -64,6 +66,10 @@ export function LibraryPage() {
     const [addPdfOpen, setAddPdfOpen] = useState(false);
     const [editPdf, setEditPdf] = useState<Pdf | null>(null);
     const [manageProjectsPdf, setManageProjectsPdf] = useState<Pdf | null>(null);
+
+    // Delete confirmation state
+    const [deleteConfirmPdf, setDeleteConfirmPdf] = useState<Pdf | null>(null);
+    const [deleteBulkConfirm, setDeleteBulkConfirm] = useState(false);
 
     // Citation export state
     const [showExportDialog, setShowExportDialog] = useState(false);
@@ -84,16 +90,48 @@ export function LibraryPage() {
         prevFilters.current = filters;
     }, [selectedProjectId, searchQuery, sortOption, isSelectionMode, clearSelection]);
 
-    const handleDelete = async (id: string) => {
-        if (!window.confirm('Delete this PDF? This cannot be undone.')) return;
+    // Delete handlers
+    const handleDeleteClick = (id: string) => {
+        const pdf = pdfs.find((p) => p.id === id);
+        if (pdf) setDeleteConfirmPdf(pdf);
+    };
+
+    const handleDeleteConfirm = async () => {
+        if (!deleteConfirmPdf) return;
+
         try {
-            await toast.promise(deletePdf.mutateAsync(id), {
+            await toast.promise(deletePdf.mutateAsync(deleteConfirmPdf.id), {
                 loading: 'Deleting PDF...',
                 success: 'PDF deleted',
                 error: 'Failed to delete PDF',
             });
         } catch {
             // error shown by toast
+        } finally {
+            setDeleteConfirmPdf(null);
+        }
+    };
+
+    const handleBulkDeleteClick = () => {
+        setDeleteBulkConfirm(true);
+    };
+
+    const handleBulkDeleteConfirm = async () => {
+        const ids = Array.from(selectedPdfIds);
+        if (ids.length === 0) return;
+
+        try {
+            await toast.promise(bulkDeletePdfs.mutateAsync(ids), {
+                loading: `Deleting ${ids.length} PDF${ids.length > 1 ? 's' : ''}...`,
+                success: `${ids.length} PDF${ids.length > 1 ? 's' : ''} deleted`,
+                error: 'Failed to delete PDFs',
+            });
+            clearSelection();
+            setSelectionMode(false);
+        } catch {
+            // error shown by toast
+        } finally {
+            setDeleteBulkConfirm(false);
         }
     };
 
@@ -207,6 +245,7 @@ export function LibraryPage() {
                 <FloatingActionBar
                     selectedCount={selectedPdfIds.size}
                     onExport={handleExportClick}
+                    onDelete={handleBulkDeleteClick}
                     onCancel={() => setSelectionMode(false)}
                 />
             )}
@@ -223,6 +262,39 @@ export function LibraryPage() {
                     }}
                 />
             )}
+
+            {/* Delete confirmation dialogs */}
+            <ConfirmDialog
+                open={!!deleteConfirmPdf}
+                title="Delete PDF?"
+                description={
+                    <span>
+                        <strong>&ldquo;{deleteConfirmPdf?.title}&rdquo;</strong> will be permanently deleted.
+                        This action cannot be undone.
+                    </span>
+                }
+                confirmLabel="Delete"
+                variant="destructive"
+                isLoading={deletePdf.isPending}
+                onConfirm={handleDeleteConfirm}
+                onCancel={() => setDeleteConfirmPdf(null)}
+            />
+
+            <ConfirmDialog
+                open={deleteBulkConfirm}
+                title={`Delete ${selectedPdfIds.size} PDF${selectedPdfIds.size > 1 ? 's' : ''}?`}
+                description={
+                    <span>
+                        {selectedPdfIds.size} PDF{selectedPdfIds.size > 1 ? 's' : ''} will be permanently deleted.
+                        This action cannot be undone.
+                    </span>
+                }
+                confirmLabel="Delete All"
+                variant="destructive"
+                isLoading={bulkDeletePdfs.isPending}
+                onConfirm={handleBulkDeleteConfirm}
+                onCancel={() => setDeleteBulkConfirm(false)}
+            />
         </div>
     );
 }

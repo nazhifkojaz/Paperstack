@@ -148,3 +148,26 @@ export const useDeletePdf = () => {
         },
     });
 };
+
+/**
+ * Bulk delete PDFs by calling the single delete endpoint multiple times.
+ * This is a client-side convenience for batch operations.
+ */
+export const useBulkDeletePdfs = () => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (ids: string[]): Promise<void> => {
+            await Promise.all(
+                ids.map((id) =>
+                    apiFetch(`/pdfs/${id}`, {
+                        method: 'DELETE',
+                    })
+                )
+            );
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['pdfs'] });
+        },
+    });
+};
