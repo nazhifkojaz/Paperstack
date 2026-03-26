@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useAnalyzePaper } from '@/api/autoHighlight';
 import { toast } from 'sonner';
+import { ApiError } from '@/api/client';
 
 const CATEGORIES = [
     { id: 'findings', label: 'Key Findings & Results', color: '#22c55e', default: true },
@@ -54,8 +55,12 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId }: Props) =>
                     : `Found ${result.highlights_count} highlights`
             );
             onOpenChange(false);
-        } catch (error: any) {
-            const detail = error?.detail || 'Analysis failed. Please try again.';
+        } catch (error) {
+            const detail = error instanceof ApiError
+                ? error.message
+                : error instanceof Error
+                ? error.message
+                : 'Analysis failed. Please try again.';
             toast.error(detail);
         }
     };

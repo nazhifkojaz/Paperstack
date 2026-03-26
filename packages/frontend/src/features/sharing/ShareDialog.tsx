@@ -17,6 +17,7 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { Copy, Check, Trash2, Link, UserPlus, Loader2 } from 'lucide-react';
+import { buildUrl } from '@/lib/config';
 
 interface ShareDialogProps {
     open: boolean;
@@ -25,8 +26,6 @@ interface ShareDialogProps {
     setName: string;
     existingShares: Share[];
 }
-
-const BASE_URL = typeof window !== 'undefined' ? window.location.origin : '';
 
 export const ShareDialog = ({
     open,
@@ -55,7 +54,7 @@ export const ShareDialog = ({
     };
 
     const handleCopy = (token: string) => {
-        const url = `${BASE_URL}/Paperstack/shared/${token}`;
+        const url = `${window.location.origin}${buildUrl(`/shared/${token}`)}`;
         navigator.clipboard.writeText(url);
         setCopiedToken(token);
         setTimeout(() => setCopiedToken(null), 2000);
@@ -144,7 +143,7 @@ export const ShareDialog = ({
                                         <div className="flex-1 min-w-0">
                                             <p className="text-xs text-muted-foreground truncate">
                                                 {share.shared_with
-                                                    ? `User: ${share.annotation_set_id}`
+                                                    ? `User: ${share.shared_with_github_login || 'Unknown'}`
                                                     : 'Public link'}
                                             </p>
                                             <p className="text-xs capitalize text-primary">{share.permission}</p>

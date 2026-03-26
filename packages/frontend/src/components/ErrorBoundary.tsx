@@ -2,7 +2,7 @@ import { AlertCircle, RefreshCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface ErrorBoundaryFallbackProps {
-    error: any;
+    error: Error;
     resetErrorBoundary: () => void;
 }
 

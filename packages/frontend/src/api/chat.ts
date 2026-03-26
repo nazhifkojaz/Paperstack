@@ -161,7 +161,12 @@ export async function streamChat(params: {
         return;
     }
 
-    const reader = res.body!.getReader();
+    if (!res.body) {
+        params.onError(new Error('No response body received from server'));
+        return;
+    }
+
+    const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
 

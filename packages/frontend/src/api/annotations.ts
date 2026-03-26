@@ -1,5 +1,6 @@
 import { useMemo, useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
+import type { Rect } from '@/features/annotations/useRectCreate';
 
 export interface AnnotationSet {
     id: string;
@@ -17,11 +18,11 @@ export interface Annotation {
     set_id: string;
     page_number: number;
     type: 'highlight' | 'rect' | 'note';
-    rects: Array<{ x: number, y: number, w: number, h: number }>;
+    rects: Rect[];
     selected_text?: string | null;
     note_content?: string | null;
     color?: string | null;
-    metadata?: Record<string, any> | null;
+    metadata?: Record<string, unknown> | null;
     created_at: string;
     updated_at: string;
 }
@@ -103,7 +104,7 @@ export const useDeleteAnnotationSet = () => {
 export const useCreateAnnotation = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: (data: Partial<Annotation> & { set_id: string, page_number: number, type: string, rects: any }): Promise<Annotation> =>
+        mutationFn: (data: Partial<Annotation> & { set_id: string, page_number: number, type: string, rects: Rect[] }): Promise<Annotation> =>
             apiFetch('/annotations/items', { method: 'POST', body: JSON.stringify(data) }),
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['annotations', variables.set_id] });

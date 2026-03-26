@@ -4,7 +4,7 @@ import { useAnnotationStore } from '@/stores/annotationStore';
 import { useAnnotationSets, useMultiSetAnnotations, useCreateAnnotation, useUpdateAnnotation } from '@/api/annotations';
 import type { TextLayerHandle } from '@/features/viewer/TextLayer';
 import { useTextMatcher } from './useTextMatcher';
-import { useRectCreate } from './useRectCreate';
+import { useRectCreate, type Rect } from './useRectCreate';
 import { useAnnotationExplain } from './useAnnotationExplain';
 import { NotePopover } from './NotePopover';
 import { AnnotationToolbar } from './AnnotationToolbar';
@@ -176,7 +176,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                                 }
                             }}
                         >
-                            {ann.type === 'highlight' && effectiveRects.map((rect: any, idx: number) => (
+                            {ann.type === 'highlight' && effectiveRects.map((rect: Rect, idx: number) => (
                                 <rect
                                     key={idx}
                                     x={`${rect.x * 100}%`}
@@ -191,7 +191,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                                 />
                             ))}
 
-                            {ann.type === 'rect' && effectiveRects.map((rect: any, idx: number) => (
+                            {ann.type === 'rect' && effectiveRects.map((rect: Rect, idx: number) => (
                                 <rect
                                     key={idx}
                                     x={`${rect.x * 100}%`}
