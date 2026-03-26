@@ -1,4 +1,5 @@
 import httpx
+import json
 import tempfile
 from pathlib import Path
 from typing import Dict, Any
@@ -112,8 +113,6 @@ async def delete_pdf_from_github(
     commit_message: str = "Delete PDF"
 ) -> bool:
     """Deletes a PDF file from the users paperstack-library repo."""
-    import json
-
     async with await get_github_client(access_token) as client:
         resp = await client.request(
             "DELETE",

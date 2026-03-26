@@ -67,6 +67,7 @@ async def _save_assistant_message(
     This function runs in a FastAPI BackgroundTask, so errors must be logged
     explicitly (exceptions are swallowed by the background task runner).
     """
+    # Lazy import: background task needs its own independent DB session
     from app.db.engine import SessionLocal
     from app.utils.db_utils import background_task_transaction
 

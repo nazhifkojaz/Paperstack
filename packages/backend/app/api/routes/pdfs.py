@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, asc
 
 from app.api import deps
-from app.db.models import User, Pdf, PdfCollection, PdfTag, Collection
+from app.db.models import User, Pdf, PdfCollection, PdfTag, Collection, Annotation, AnnotationSet
 from app.schemas.pdf import PdfResponse, PdfUpdate, PdfListParams, PdfLinkCreate
 from app.services import github_repo, pdf_metadata
 
@@ -317,7 +317,6 @@ async def export_annotated_pdf(
         raise HTTPException(status_code=400, detail="Cannot export annotated PDF for URL-linked documents")
 
     # Get annotations
-    from app.db.models import Annotation, AnnotationSet
     # Fetch all annotations for this PDF that belong to the current user
     result = await db.execute(
         select(Annotation.page_number, Annotation.type, Annotation.rects, Annotation.color, AnnotationSet.color.label('set_color'))

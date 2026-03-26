@@ -40,11 +40,6 @@ class IndexingError(Exception):
         super().__init__(message)
 
 
-class ChatQuotaExhaustedError(Exception):
-    """Raised when the user's chat quota is depleted."""
-    pass
-
-
 # ============================================================================
 # API Key Service Exceptions
 # ============================================================================
