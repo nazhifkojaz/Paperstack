@@ -65,7 +65,61 @@ async def create_share(
     db.add(share)
     await db.commit()
     await db.refresh(share)
-    return share
+
+    # Construct response with github_login if shared with a user
+    response_data = {
+        "id": share.id,
+        "annotation_set_id": share.annotation_set_id,
+        "shared_by": share.shared_by,
+        "shared_with": share.shared_with,
+        "shared_with_github_login": target_user.github_login if share_in.shared_with_github_login else None,
+        "share_token": share.share_token,
+        "permission": share.permission,
+        "created_at": share.created_at,
+    }
+    return ShareResponse(**response_data)
+
+
+@router.get("/annotation-sets/{set_id}/shares", response_model=List[ShareResponse])
+async def get_shares_for_set(
+    set_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all shares for a given annotation set. Only the owner can view shares."""
+    # Verify ownership
+    stmt = select(AnnotationSet).where(
+        AnnotationSet.id == set_id,
+        AnnotationSet.user_id == current_user.id,
+    )
+    annotation_set = (await db.execute(stmt)).scalar_one_or_none()
+    if not annotation_set:
+        raise HTTPException(status_code=404, detail="Annotation set not found")
+
+    # Get all shares for this set with shared_with user info
+    stmt = (
+        select(Share, User)
+        .outerjoin(User, User.id == Share.shared_with)
+        .where(Share.annotation_set_id == set_id)
+        .order_by(Share.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # Construct responses with github_login
+    shares = []
+    for share, shared_with_user in rows:
+        shares.append(ShareResponse(
+            id=share.id,
+            annotation_set_id=share.annotation_set_id,
+            shared_by=share.shared_by,
+            shared_with=share.shared_with,
+            shared_with_github_login=shared_with_user.github_login if shared_with_user else None,
+            share_token=share.share_token,
+            permission=share.permission,
+            created_at=share.created_at,
+        ))
+    return shares
 
 
 @router.get("/shared/with-me", response_model=List[ShareResponse])

@@ -1,13 +1,14 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
-import { apiFetch } from '@/api/client'
+import { API_URL } from '@/lib/config'
 import type { User } from '@/stores/authStore'
 
 
 export function OAuthCallbackPage() {
     const navigate = useNavigate()
     const setAuth = useAuthStore((s) => s.setAuth)
+    const logout = useAuthStore((s) => s.logout)
 
     useEffect(() => {
         // Parse tokens from URL fragment (hash) instead of query params
@@ -34,18 +35,31 @@ export function OAuthCallbackPage() {
             return
         }
 
-        // Temporarily set token so the api client can fetch /auth/me
-        useAuthStore.setState({ accessToken, refreshToken })
-
-        apiFetch<User>('/auth/me')
+        // Verify tokens with /auth/me BEFORE persisting to store
+        // This prevents polluting the store with invalid tokens
+        fetch(`${API_URL}/auth/me`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+        })
+            .then((res) => {
+                if (!res.ok) {
+                    throw new Error('Authentication failed')
+                }
+                return res.json() as Promise<User>
+            })
             .then((user) => {
+                // Only persist to store after successful verification
                 setAuth(user, accessToken, refreshToken)
                 navigate('/library', { replace: true })
             })
             .catch(() => {
+                // Clear any potentially invalid state and redirect to login
+                logout()
                 navigate('/login', { replace: true })
             })
-    }, [navigate, setAuth])
+    }, [navigate, setAuth, logout])
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-background">

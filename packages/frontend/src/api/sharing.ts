@@ -6,6 +6,7 @@ export interface Share {
     annotation_set_id: string;
     shared_by: string;
     shared_with: string | null;
+    shared_with_github_login?: string | null;
     share_token: string;
     permission: 'view' | 'comment';
     created_at: string;

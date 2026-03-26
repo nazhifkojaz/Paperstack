@@ -14,6 +14,7 @@ class ShareResponse(BaseModel):
     annotation_set_id: UUID
     shared_by: UUID
     shared_with: Optional[UUID] = None
+    shared_with_github_login: Optional[str] = None
     share_token: str
     permission: str
     created_at: datetime
