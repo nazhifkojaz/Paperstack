@@ -42,7 +42,7 @@ async function handleUnauthorized(): Promise<boolean> {
     try {
         const res = await fetch(`${API_URL}/auth/refresh`, {
             method: 'POST',
-            // Content-Type header auto-added by fetch for JSON.stringify() body
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ refresh_token: refreshToken }),
         })
 

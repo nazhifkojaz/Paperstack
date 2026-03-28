@@ -35,6 +35,8 @@ export function OAuthCallbackPage() {
             return
         }
 
+        const controller = new AbortController()
+
         // Verify tokens with /auth/me BEFORE persisting to store
         // This prevents polluting the store with invalid tokens
         fetch(`${API_URL}/auth/me`, {
@@ -42,6 +44,7 @@ export function OAuthCallbackPage() {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',
             },
+            signal: controller.signal,
         })
             .then((res) => {
                 if (!res.ok) {
@@ -54,11 +57,15 @@ export function OAuthCallbackPage() {
                 setAuth(user, accessToken, refreshToken)
                 navigate('/library', { replace: true })
             })
-            .catch(() => {
+            .catch((err) => {
+                // Ignore aborts caused by unmount (React Strict Mode double-invoke)
+                if (err instanceof Error && err.name === 'AbortError') return
                 // Clear any potentially invalid state and redirect to login
                 logout()
                 navigate('/login', { replace: true })
             })
+
+        return () => controller.abort()
     }, [navigate, setAuth, logout])
 
     return (
