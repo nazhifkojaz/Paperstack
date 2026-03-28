@@ -15,11 +15,9 @@ import {
     useCreateConversation,
     useDeleteConversation,
     useChatHistory,
-    streamChat,
     type Conversation,
-    type ContextChunk,
 } from '@/api/chat';
-import { useChatStream, type StreamingMessage } from '@/hooks/useChatStream';
+import { useChatStream } from '@/hooks/useChatStream';
 import { ChatMessageList } from '@/components/chat/ChatMessageList';
 import { DeleteConversationDialog } from './DeleteConversationDialog';
 
@@ -59,7 +57,7 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
             ['chat-conversations', pdfId, undefined],
         ],
         onMessageStart: () => setIndexError(null),
-        onError: (error, isQuotaError, isIndexError) => {
+        onError: (error, _isQuotaError, isIndexError) => {
             if (isIndexError) {
                 setIndexError(error);
             }
@@ -112,9 +110,11 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
         }
     };
 
-    // Combined message list: persisted history + in-flight streaming message
+    // Combined message list: persisted history + in-flight streaming message.
+    // Filter the streaming message's ID from history to prevent a duplicate when the
+    // optimistic cache write and the still-live streamingMessage both exist briefly.
     const displayMessages = [
-        ...history,
+        ...history.filter(m => !streamingMessage || m.id !== streamingMessage.id),
         ...(streamingMessage ? [{
             id: streamingMessage.id,
             role: 'assistant' as const,

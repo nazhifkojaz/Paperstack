@@ -10,7 +10,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { streamChat, type ChatMessage, type ContextChunk } from '@/api/chat';
+import { streamChat, type ContextChunk, type ChatMessage } from '@/api/chat';
 import { useChatStore } from '@/stores/chatStore';
 
 export interface StreamingMessage {
@@ -54,7 +54,7 @@ export interface UseChatStreamReturn {
     clearStreaming: () => void;
 
     // Display
-    bottomRef: React.RefObject<HTMLDivElement>;
+    bottomRef: React.RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -77,11 +77,17 @@ export function useChatStream({
     } = useChatStore();
 
     const bottomRef = useRef<HTMLDivElement>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     const [input, setInput] = useState('');
     const [isSending, setIsSending] = useState(false);
     const [indexError, setIndexError] = useState<string | null>(null);
     const [lastMessage, setLastMessage] = useState('');
+
+    // Abort any in-flight stream when the component unmounts
+    useEffect(() => {
+        return () => { abortControllerRef.current?.abort(); };
+    }, []);
 
     const clearStreaming = () => {
         setIndexError(null);
@@ -101,13 +107,35 @@ export function useChatStream({
         const tempId = `temp-${Date.now()}`;
         startStreaming(tempId);
 
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+
+        let accumulatedContent = '';
+
         try {
             await streamChat({
                 conversationId,
                 message,
-                onToken: (token) => appendToken(token),
+                signal: abortController.signal,
+                onToken: (token) => { appendToken(token); accumulatedContent += token; },
                 onDone: (messageId, chunks) => {
                     finalizeStreaming(messageId, chunks);
+                    // Optimistically add the assistant reply to the history cache immediately.
+                    // This prevents it from disappearing when startStreaming() replaces
+                    // streamingMessage on the next send before the invalidation refetch completes.
+                    queryClient.setQueryData<ChatMessage[]>(
+                        ['chat-history', conversationId],
+                        (old = []) => [
+                            ...old.filter(m => m.id !== messageId),
+                            {
+                                id: messageId,
+                                role: 'assistant' as const,
+                                content: accumulatedContent,
+                                context_chunks: chunks,
+                                created_at: new Date().toISOString(),
+                            },
+                        ]
+                    );
                 },
                 onError: (err) => {
                     clearStreaming();
@@ -133,6 +161,8 @@ export function useChatStream({
             }
         } catch (err) {
             clearStreaming();
+            // Ignore aborts caused by component unmount or navigation
+            if (err instanceof Error && err.name === 'AbortError') return;
             const errorMsg = err instanceof Error ? err.message : 'Failed to send message';
             setIndexError(errorMsg);
             toast.error(errorMsg);

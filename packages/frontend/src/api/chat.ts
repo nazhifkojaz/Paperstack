@@ -141,6 +141,7 @@ export async function streamChat(params: {
     onToken: (token: string) => void;
     onDone: (messageId: string, chunks: ContextChunk[]) => void;
     onError: (err: Error) => void;
+    signal?: AbortSignal;
 }): Promise<void> {
     const token = useAuthStore.getState().accessToken;
     const res = await fetch(
@@ -148,10 +149,11 @@ export async function streamChat(params: {
         {
             method: 'POST',
             headers: {
-                // Content-Type header auto-added by fetch for JSON.stringify() body
+                'Content-Type': 'application/json',
                 ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
             body: JSON.stringify({ content: params.message }),
+            signal: params.signal,
         },
     );
 

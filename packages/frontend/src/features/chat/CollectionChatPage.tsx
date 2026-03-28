@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import Markdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, Plus, Send, Loader2, Trash2, ArrowLeft } from 'lucide-react';
@@ -8,7 +7,6 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 
 import {
@@ -16,9 +14,8 @@ import {
     useCreateConversation,
     useChatHistory,
     useDeleteConversation,
-    type Conversation,
 } from '@/api/chat';
-import { useChatStream, type StreamingMessage } from '@/hooks/useChatStream';
+import { useChatStream } from '@/hooks/useChatStream';
 import { ChatMessageList } from '@/components/chat/ChatMessageList';
 import { DeleteConversationDialog } from './DeleteConversationDialog';
 import { BASE_URL } from '@/lib/config';
@@ -92,9 +89,11 @@ export function CollectionChatPage() {
         }
     };
 
-    // Combined message list: persisted history + in-flight streaming message
+    // Combined message list: persisted history + in-flight streaming message.
+    // Filter the streaming message's ID from history to prevent a duplicate when the
+    // optimistic cache write and the still-live streamingMessage both exist briefly.
     const displayMessages = [
-        ...history,
+        ...history.filter(m => !streamingMessage || m.id !== streamingMessage.id),
         ...(streamingMessage ? [{
             id: streamingMessage.id,
             role: 'assistant' as const,

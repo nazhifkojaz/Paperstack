@@ -3,9 +3,10 @@ import type { ContextChunk } from '@/api/chat';
 
 interface StreamingMessage {
     id: string;
+    role: 'assistant';
     content: string;
     isStreaming: boolean;
-    contextChunks: ContextChunk[];
+    context_chunks: ContextChunk[] | null;
 }
 
 interface ChatStore {
@@ -31,7 +32,7 @@ export const useChatStore = create<ChatStore>((set) => ({
 
     streamingMessage: null,
     startStreaming: (tempId) =>
-        set({ streamingMessage: { id: tempId, content: '', isStreaming: true, contextChunks: [] } }),
+        set({ streamingMessage: { id: tempId, role: 'assistant', content: '', isStreaming: true, context_chunks: null } }),
     appendToken: (token) =>
         set((s) => ({
             streamingMessage: s.streamingMessage
@@ -41,7 +42,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     finalizeStreaming: (messageId, chunks) =>
         set((s) => ({
             streamingMessage: s.streamingMessage
-                ? { ...s.streamingMessage, id: messageId, isStreaming: false, contextChunks: chunks }
+                ? { ...s.streamingMessage, id: messageId, isStreaming: false, context_chunks: chunks }
                 : null,
         })),
     clearStreaming: () => set({ streamingMessage: null }),
