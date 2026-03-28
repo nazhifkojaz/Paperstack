@@ -108,29 +108,6 @@ class IndexingService:
 
         return row
 
-    async def is_stale(
-        self,
-        index_status: PdfIndexStatus,
-        stale_minutes: int = STALE_INDEXING_MINUTES,
-    ) -> bool:
-        """Check if indexing has been stale (stuck in 'indexing' too long).
-
-        Args:
-            index_status: The PdfIndexStatus row to check
-            stale_minutes: Minutes before considering indexing "stale"
-
-        Returns:
-            True if stale, False otherwise
-        """
-        if index_status.status != "indexing":
-            return False
-
-        if not index_status.updated_at:
-            return True
-
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
-        return index_status.updated_at < stale_cutoff
-
     async def reset_if_stale(
         self,
         index_status: PdfIndexStatus,

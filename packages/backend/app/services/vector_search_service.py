@@ -25,14 +25,14 @@ class SearchResult:
     """Result from a vector search query.
 
     Attributes:
-        chunk_id: Unique identifier for the chunk
+        chunk_id: Unique identifier for the chunk (None for multi-PDF search)
         pdf_id: PDF ID (None for single-PDF search)
         pdf_title: PDF title (None for single-PDF search)
         page_number: Page number where chunk appears
         content: The chunk text content
         score: Cosine similarity score (0-1, higher is better)
     """
-    chunk_id: str
+    chunk_id: str | None
     pdf_id: str | None
     pdf_title: str | None
     page_number: int

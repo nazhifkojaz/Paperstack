@@ -35,6 +35,8 @@ class HTTPClientState:
         timeout = httpx.Timeout(
             connect=settings.HTTP_TIMEOUT_CONNECT,
             read=settings.HTTP_TIMEOUT_READ,
+            write=settings.HTTP_TIMEOUT_CONNECT,
+            pool=settings.HTTP_TIMEOUT_CONNECT,
         )
 
         # LLM client - used for chat, auto-highlight, and explain features

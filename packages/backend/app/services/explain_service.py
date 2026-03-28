@@ -127,9 +127,14 @@ class ExplainService:
         # Lazy index if needed
         if index_status.status == "not_indexed":
             logger.info("explain: indexing pdf %s for user %s", pdf_row.id, user.id)
-            await self._indexing_service.index_pdf(pdf_row, user, index_status, db)
-            await db.commit()
-            logger.info("explain: indexing complete for pdf %s", pdf_row.id)
+            try:
+                await self._indexing_service.index_pdf(pdf_row, user, index_status, db)
+                await db.commit()
+                logger.info("explain: indexing complete for pdf %s", pdf_row.id)
+            except Exception:
+                # Persist the failed status set by index_pdf before re-raising
+                await db.commit()
+                raise
 
         # 2. Embed selected text as query vector
         query_vector = await self._embedding_service.embed_query(selected_text)

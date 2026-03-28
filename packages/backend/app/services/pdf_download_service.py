@@ -164,9 +164,10 @@ class PdfDownloadService:
 
             async with client.stream("GET", url) as response:
                 if response.status_code != 200:
+                    error_body = (await response.aread()).decode("utf-8", errors="replace")
                     raise GithubApiError(
                         status_code=response.status_code,
-                        detail=f"Failed to download from GitHub: {response.text}",
+                        detail=f"Failed to download from GitHub: {error_body}",
                     )
 
                 tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)

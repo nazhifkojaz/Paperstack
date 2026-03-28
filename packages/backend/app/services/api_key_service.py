@@ -206,9 +206,9 @@ class ApiKeyService:
         if current_quota <= 0:
             raise QuotaExhaustedError(quota_field, remaining=current_quota)
 
-        # 3. Use in-house key by priority
-        for provider in self.IN_HOUSE_PRIORITY:
-            if provider not in provider_priority:
+        # 3. Use in-house key by priority (respects feature-specific ordering)
+        for provider in provider_priority:
+            if provider not in self.IN_HOUSE_PRIORITY:
                 continue
             api_key = getattr(settings, f"{provider.upper()}_API_KEY")
             if api_key:
@@ -250,15 +250,12 @@ class ApiKeyService:
         quota_row = result.scalar_one_or_none()
 
         if quota_row is None:
-            # Set defaults based on quota field
-            defaults = {
-                QuotaType.FREE.value: 5,
-                QuotaType.CHAT.value: 20,
-                QuotaType.EXPLAIN.value: 20,
-            }
+            # Always initialise all three fields so no column is left NULL
             quota_row = UserUsageQuota(
                 user_id=user_id,
-                **{quota_field: defaults[quota_field]}
+                free_uses_remaining=5,
+                chat_uses_remaining=20,
+                explain_uses_remaining=20,
             )
             db.add(quota_row)
             await db.flush()

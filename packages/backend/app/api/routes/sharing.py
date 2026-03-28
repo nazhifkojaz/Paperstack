@@ -1,5 +1,5 @@
 import secrets
-from uuid import UUID, uuid4
+from uuid import UUID
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.api.deps import get_db, get_current_user
 from app.db.models import User, Share, AnnotationSet, Annotation, Pdf
 from app.services import github_repo
+from app.services.pdf_download_service import pdf_download_service, PdfSource
 from app.schemas.sharing import (
     ShareCreate, ShareResponse, SharedAnnotationsResponse,
     AnnotationSetData, AnnotationData,
@@ -55,7 +56,6 @@ async def create_share(
 
     token = secrets.token_urlsafe(32)
     share = Share(
-        id=uuid4(),  # Generate ID in Python for SQLite compatibility
         annotation_set_id=set_id,
         shared_by=current_user.id,
         shared_with=shared_with_id,
@@ -267,6 +267,11 @@ async def get_shared_pdf_content(
     if not share:
         raise HTTPException(status_code=404, detail="Share link invalid or revoked")
 
+    # Both 'view' and 'comment' permissions allow reading the PDF content.
+    # 'view' hides note_content (enforced in the annotations endpoint).
+    if share.permission not in ("view", "comment"):
+        raise HTTPException(status_code=403, detail="Insufficient permission")
+
     # Get the PDF info via the annotation set
     stmt_pdf = (
         select(Pdf, User)
@@ -281,22 +286,33 @@ async def get_shared_pdf_content(
     
     pdf, owner = row
 
-    # ETag Implementation
-    etag = f'"{pdf.github_sha}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304)
+    # ETag only applies to GitHub-backed PDFs (source_url PDFs have no stable sha)
+    if pdf.github_sha:
+        etag = f'"{pdf.github_sha}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304)
+        etag_header = {"ETag": etag}
+    else:
+        etag_header = {}
 
-    pdf_bytes = await github_repo.download_pdf_from_github(
-        owner.access_token,
-        owner.github_login,
-        pdf.filename
-    )
+    if pdf.source_url and not pdf.github_sha:
+        pdf_bytes = await pdf_download_service.download_to_bytes(
+            source=PdfSource.EXTERNAL_URL,
+            external_url=pdf.source_url,
+        )
+    else:
+        pdf_bytes = await pdf_download_service.download_to_bytes(
+            source=PdfSource.GITHUB,
+            github_access_token=owner.access_token,
+            github_login=owner.github_login,
+            github_filename=pdf.filename,
+        )
 
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "ETag": etag,
-            "Cache-Control": "private, max-age=3600" # Cache for 1 hour
+            **etag_header,
+            "Cache-Control": "private, max-age=3600",
         }
     )
