@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db, get_llm_http_client, get_embedding_http_client
@@ -52,55 +52,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
-# ---------------------------------------------------------------------------
-# Helper: Save assistant message (background task)
-# ---------------------------------------------------------------------------
-
-async def _save_assistant_message(
-    conversation_id: uuid.UUID,
-    content: str,
-    context_chunks: list[dict],
-) -> None:
-    """Persist the completed assistant message (called as a background task).
-
-    This function runs in a FastAPI BackgroundTask, so errors must be logged
-    explicitly (exceptions are swallowed by the background task runner).
-    """
-    # Lazy import: background task needs its own independent DB session
-    from app.db.engine import SessionLocal
-    from app.utils.db_utils import background_task_transaction
-
-    async with SessionLocal() as bg_db:
-        async with background_task_transaction(
-            bg_db, "save_assistant_message", logger, str(conversation_id)
-        ):
-            msg = ChatMessage(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=content,
-                context_chunks=[
-                    {
-                        "chunk_id": c["chunk_id"],
-                        "page_number": c["page_number"],
-                        "snippet": c["content"][:200],
-                        **(
-                            {"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]}
-                            if c.get("pdf_id")
-                            else {}
-                        ),
-                    }
-                    for c in context_chunks
-                ],
-            )
-            bg_db.add(msg)
-            await bg_db.commit()
-            logger.info(
-                "Saved assistant message for conversation %s (%d chars, %d chunks)",
-                conversation_id,
-                len(content),
-                len(context_chunks),
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -259,14 +210,17 @@ async def stream_message(
     is_in_house = resolution.is_in_house
 
     # 3. Decrement quota BEFORE streaming (optimistic decrement)
-    # This fixes the bug where quota decrement in a generator can be lost
+    # This fixes the bug where quota decrement in a generator can be lost.
+    # Uses a fresh DB session inside the background task — the request-scoped
+    # `db` session is closed before background tasks run.
     if is_in_house:
-        background_tasks.add_task(
-            api_key_service.decrement_quota,
-            str(current_user.id),
-            QuotaType.CHAT,
-            db,
-        )
+        async def _decrement_chat_quota(user_id: str) -> None:
+            from app.db.engine import SessionLocal  # noqa: PLC0415
+            async with SessionLocal() as bg_db:
+                await api_key_service.decrement_quota(user_id, QuotaType.CHAT, bg_db)
+                await bg_db.commit()
+
+        background_tasks.add_task(_decrement_chat_quota, str(current_user.id))
 
     # 4. Create services with injected HTTP clients
     embedding_svc = EmbeddingService(http_client=embedding_client)
@@ -398,12 +352,37 @@ async def stream_message(
                 full_reply.append(token)
                 yield f"data: {json.dumps({'token': token})}\n\n"
 
-            # Persist assistant message via background task
-            background_tasks.add_task(
-                _save_assistant_message,
+            # Persist assistant message synchronously before sending `done`.
+            # Saving as a background task (after the response is sent) created a race
+            # condition: if the user sent a second message before the task ran, the
+            # backend fetched history without the assistant reply and passed an invalid
+            # conversation thread to the LLM.
+            msg = ChatMessage(
+                id=uuid.UUID(assistant_message_id),
+                conversation_id=conversation_id,
+                role="assistant",
+                content="".join(full_reply),
+                context_chunks=[
+                    {
+                        "chunk_id": c["chunk_id"],
+                        "page_number": c["page_number"],
+                        "snippet": c["snippet"],
+                        **(
+                            {"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]}
+                            if c.get("pdf_id")
+                            else {}
+                        ),
+                    }
+                    for c in context_chunks_payload
+                ],
+            )
+            db.add(msg)
+            await db.commit()
+            logger.info(
+                "Saved assistant message for conversation %s (%d chars, %d chunks)",
                 conversation_id,
-                "".join(full_reply),
-                top_chunks,
+                len("".join(full_reply)),
+                len(context_chunks_payload),
             )
 
             yield f"data: {json.dumps({'done': True, 'message_id': assistant_message_id, 'context_chunks': context_chunks_payload})}\n\n"
@@ -537,6 +516,8 @@ async def explain_annotation(
             api_key=api_key,
             db=db,
         )
+    except IndexInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except (EmbeddingError, IndexingError) as exc:
         raise HTTPException(status_code=502, detail=f"Explanation failed: {exc}")
 
