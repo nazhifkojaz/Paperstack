@@ -9,7 +9,7 @@ describe('annotationStore', () => {
       selectedSetId: null,
       hiddenSetIds: new Set<string>(),
       selectedAnnotationId: null,
-      isSidebarOpen: true,
+      isAnnotationSidebarOpen: true,
       sidebarGroupBy: 'page',
       contextMenu: null,
     })

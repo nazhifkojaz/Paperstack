@@ -43,9 +43,9 @@ export function DeepSearchResults({ results, isLoading, query }: DeepSearchResul
             <p className="text-xs text-muted-foreground">
                 {results.length} result{results.length !== 1 ? 's' : ''} for "{query}"
             </p>
-            {results.map((r) => (
+            {results.map((r, index) => (
                 <button
-                    key={`${r.pdf_id}-${r.page_number}`}
+                    key={`${r.pdf_id}-${r.page_number}-${index}`}
                     onClick={() => navigate(`/viewer/${r.pdf_id}`)}
                     className="w-full text-left rounded-lg border bg-card p-4 hover:bg-muted/50 transition-colors"
                 >

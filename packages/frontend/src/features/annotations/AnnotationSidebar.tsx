@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-    Plus, Share2, PanelLeftClose, Eye, EyeOff, ChevronRight, ChevronDown, Trash2
+    Plus, Share2, Eye, EyeOff, ChevronRight, ChevronDown, Trash2
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { ShareDialog } from '../sharing/ShareDialog';
@@ -19,7 +19,7 @@ export const AnnotationSidebar = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
     const {
         selectedSetId, setSelectedSetId,
-        isAnnotationSidebarOpen, toggleAnnotationSidebar,
+        isAnnotationSidebarOpen,
         sidebarGroupBy, setSidebarGroupBy,
         toggleSetVisibility, isSetVisible,
     } = useAnnotationStore();
@@ -102,16 +102,8 @@ export const AnnotationSidebar = () => {
         <>
             <div className="w-80 h-full border-r bg-background flex flex-col shrink-0">
                 {/* Header */}
-                <div className="p-4 border-b flex items-center justify-between">
+                <div className="p-4 border-b flex items-center">
                     <h2 className="font-semibold">Annotations</h2>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={toggleAnnotationSidebar}
-                        title="Close sidebar"
-                    >
-                        <PanelLeftClose className="h-4 w-4" />
-                    </Button>
                 </div>
 
                 {/* Group Toggle */}

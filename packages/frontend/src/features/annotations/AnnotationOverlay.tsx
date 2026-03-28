@@ -117,6 +117,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         if (!ann) return;
 
         setSelectedAnnotationId(annotationId);
+        setEditingNoteId(annotationId);
         annotationExplain.explain(ann, pdfId);
     };
 

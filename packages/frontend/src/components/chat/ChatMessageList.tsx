@@ -103,7 +103,7 @@ function MessageBubble({ message, onChunkClick, onChunkClickUrl }: MessageBubble
                         // Determine label and click behavior based on available data
                         const hasPdfInfo = !!chunk.pdf_id && !!chunk.pdf_title;
                         const label = hasPdfInfo
-                            ? `${chunk.pdf_title.length > 18 ? chunk.pdf_title.slice(0, 18) + '…' : chunk.pdf_title} · p.${chunk.page_number}`
+                            ? `${chunk.pdf_title!.length > 18 ? chunk.pdf_title!.slice(0, 18) + '…' : chunk.pdf_title} · p.${chunk.page_number}`
                             : `p.${chunk.page_number}`;
 
                         const handleClick = () => {

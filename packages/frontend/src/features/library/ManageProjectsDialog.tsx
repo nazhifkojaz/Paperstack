@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { type Pdf, usePdfCollections } from '@/api/pdfs';
 import { useCollections, useAddPdfToCollection, useRemovePdfFromCollection } from '@/api/collections';
-import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
     Dialog,
@@ -25,7 +24,7 @@ export const ManageProjectsDialog = ({ pdf, open, onOpenChange }: ManageProjects
     const { data: membership, isLoading: isLoadingMembership } = usePdfCollections(pdf?.id ?? '');
     const addToCollection = useAddPdfToCollection();
     const removeFromCollection = useRemovePdfFromCollection();
-    const queryClient = useQueryClient();
+    // Mutations handle cache invalidation in their own onSuccess callbacks
 
     // Local checked state, initialised from server membership
     const [checked, setChecked] = useState<Set<string>>(new Set());

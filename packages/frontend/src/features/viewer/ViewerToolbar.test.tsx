@@ -104,8 +104,6 @@ describe('ViewerToolbar', () => {
       renderWithRouter(<ViewerToolbar />)
 
       const input = screen.getByRole('spinbutton')
-      const initialPage = usePdfViewerStore.getState().currentPage
-
       fireEvent.change(input, { target: { value: '999' } })
 
       // Should not update due to max validation

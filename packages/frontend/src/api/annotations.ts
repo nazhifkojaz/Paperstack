@@ -1,4 +1,5 @@
-import { useMemo, useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 import type { Rect } from '@/features/annotations/useRectCreate';
 
@@ -126,7 +127,7 @@ export const useUpdateAnnotation = () => {
 export const useDeleteAnnotation = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: ({ id, setId }: { id: string, setId: string }): Promise<void> =>
+        mutationFn: ({ id }: { id: string, setId: string }): Promise<void> =>
             apiFetch(`/annotations/items/${id}`, { method: 'DELETE' }),
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['annotations', variables.setId] });

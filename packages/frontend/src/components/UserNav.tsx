@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuthStore } from '@/stores/authStore';
-import { LogOut, User, Settings } from 'lucide-react';
+import { LogOut } from 'lucide-react';
 
 export function UserNav() {
     const { user, logout } = useAuthStore();

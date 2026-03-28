@@ -6,17 +6,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@/test/test-utils'
 import { PdfCard } from './PdfCard'
 import { useLibraryStore } from '@/stores/libraryStore'
-import { BASE_URL } from '@/lib/config'
 
 const mockPdf = {
   id: 'pdf-1',
+  user_id: 'user-1',
   title: 'Test Research Paper',
   filename: 'test-paper.pdf',
   file_size: 12345,
   page_count: 15,
   uploaded_at: '2026-03-01T10:00:00Z',
-  doi: null,
-  isbn: null,
+  updated_at: '2026-03-01T10:00:00Z',
 }
 
 describe('PdfCard', () => {
@@ -26,7 +25,7 @@ describe('PdfCard', () => {
     useLibraryStore.getState().clearSelection()
   })
 
-  const renderWithRouter = (component: React.ReactNode) => {
+  const renderWithRouter = (component: React.ReactElement) => {
     return render(component, { router: true })
   }
 
@@ -125,7 +124,7 @@ describe('PdfCard', () => {
   })
 
   it('handles PDF with unknown page count', () => {
-    const pdfWithoutPages = { ...mockPdf, page_count: null }
+    const pdfWithoutPages = { ...mockPdf, page_count: undefined }
 
     renderWithRouter(<PdfCard pdf={pdfWithoutPages} />)
 

@@ -67,7 +67,7 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
                     // Optimistically update cache so NotePopover sees the new note_content immediately
                     queryClient.setQueryData(
                         ['annotations', annotation.set_id],
-                        (old: any[] | undefined) => {
+                        (old: Annotation[] | undefined) => {
                             if (!old) return old;
                             return old.map(a =>
                                 a.id === annotation.id

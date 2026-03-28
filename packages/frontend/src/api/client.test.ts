@@ -2,7 +2,7 @@
  * Tests for API client.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { apiFetch, apiFetchBlob, ApiError } from './client'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -37,7 +37,7 @@ describe('apiFetch', () => {
         ok: true,
         json: async () => ({ data: 'test' }),
         status: 200,
-      } as Response)
+      } as unknown as Response)
 
       await apiFetch('/test', { method: 'GET' })
 
@@ -62,7 +62,7 @@ describe('apiFetch', () => {
         ok: true,
         json: async () => ({ data: 'test' }),
         status: 200,
-      } as Response)
+      } as unknown as Response)
 
       await apiFetch('/test', { authRequired: false })
 
@@ -92,17 +92,17 @@ describe('apiFetch', () => {
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Unauthorized' }),
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'new-token', refresh_token: 'new-refresh' }),
           status: 200,
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ data: 'success' }),
           status: 200,
-        } as Response)
+        } as unknown as Response)
 
       const result = await apiFetch('/test')
 
@@ -124,17 +124,17 @@ describe('apiFetch', () => {
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Unauthorized' }),
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'new-token' }),
           status: 200,
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Unauthorized' }),
-        } as Response)
+        } as unknown as Response)
 
       await expect(apiFetch('/test')).rejects.toThrow(ApiError)
       expect(mockFetch).toHaveBeenCalledTimes(3) // Should not retry again
@@ -152,12 +152,12 @@ describe('apiFetch', () => {
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Unauthorized' }),
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Invalid refresh token' }),
-        } as Response)
+        } as unknown as Response)
 
       await expect(apiFetch('/test')).rejects.toThrow(ApiError)
       expect(useAuthStore.getState().accessToken).toBeNull()
@@ -199,7 +199,7 @@ describe('apiFetch', () => {
         json: async () => {
           throw new Error('Invalid JSON')
         },
-      } as Response)
+      } as unknown as Response)
 
       await expect(apiFetch('/test')).rejects.toThrow(ApiError)
     })
@@ -208,7 +208,7 @@ describe('apiFetch', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 204,
-      } as Response)
+      } as unknown as Response)
 
       const result = await apiFetch('/test')
       expect(result).toBeUndefined()
@@ -235,7 +235,7 @@ describe('apiFetchBlob', () => {
       ok: true,
       status: 200,
       blob: async () => mockBlob,
-    } as Response)
+    } as unknown as Response)
 
     const result = await apiFetchBlob('/test.pdf')
     expect(result).toBe(mockBlob)
@@ -253,17 +253,17 @@ describe('apiFetchBlob', () => {
       .mockResolvedValueOnce({
         ok: false,
         status: 401,
-      } as Response)
+      } as unknown as Response)
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ access_token: 'new-token' }),
         status: 200,
-      } as Response)
+      } as unknown as Response)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
         blob: async () => mockBlob,
-      } as Response)
+      } as unknown as Response)
 
     const result = await apiFetchBlob('/test.pdf')
     expect(result).toBe(mockBlob)

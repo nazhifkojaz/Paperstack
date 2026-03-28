@@ -12,7 +12,7 @@ import { vi } from 'vitest'
 // =============================================================================
 
 class MockPDFPageProxy {
-  constructor(private pageNum: number) {}
+  constructor(_pageNum: number) {}
 
   async getViewport(params: { scale: number; rotation?: number }) {
     return {
@@ -88,14 +88,6 @@ class MockPDFDocumentProxy {
 }
 
 // =============================================================================
-// Mock Worker Transport
-// =============================================================================
-
-class MockPDFWorkerTransport {
-  destroy() {}
-}
-
-// =============================================================================
 // Mock getDocument Function
 // =============================================================================
 
@@ -146,7 +138,7 @@ export default {
   getDocument,
   TextLayer,
   GlobalWorkerOptions,
-  PDFDocumentProxy,
+  PDFDocumentProxy: MockPDFDocumentProxy,
   PDFPageProxy: MockPDFPageProxy,
 }
 

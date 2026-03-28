@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { usePdfs, useDeletePdf, useBulkDeletePdfs, type Pdf } from '@/api/pdfs';
 import { useLibraryStore } from '@/stores/libraryStore';
-import { useSemanticSearch, type SemanticSearchResult } from '@/api/chat';
+import { useSemanticSearch } from '@/api/chat';
 import { useValidateCitations, useBulkExportCitations } from '@/api/citations';
 import { AddPdfModal } from './AddPdfModal';
 import { EditPdfDialog } from './EditPdfDialog';
@@ -142,18 +142,22 @@ export function LibraryPage() {
         const pdfIds = Array.from(selectedPdfIds);
         if (pdfIds.length === 0) return;
 
-        const result = await validateCitations.mutateAsync(pdfIds);
-        const missingPdfs = pdfs.filter(pdf => result.missing.includes(pdf.id));
-        const hasCitationCount = result.has_citation.length;
+        try {
+            const result = await validateCitations.mutateAsync(pdfIds);
+            const missingPdfs = pdfs.filter(pdf => result.missing.includes(pdf.id));
+            const hasCitationCount = result.has_citation.length;
 
-        if (missingPdfs.length === 0) {
-            await bulkExportCitations.mutateAsync({ pdf_ids: pdfIds, format: 'bibtex' });
-            setSelectionMode(false);
-            return;
+            if (missingPdfs.length === 0) {
+                await bulkExportCitations.mutateAsync({ pdf_ids: pdfIds, format: 'bibtex' });
+                setSelectionMode(false);
+                return;
+            }
+
+            setValidationResult({ hasCitationCount, missingPdfs });
+            setShowExportDialog(true);
+        } catch {
+            toast.error('Export failed. Please try again.');
         }
-
-        setValidationResult({ hasCitationCount, missingPdfs });
-        setShowExportDialog(true);
     };
 
     const handleExportConfirm = async () => {
@@ -162,12 +166,16 @@ export function LibraryPage() {
             .filter(pdf => !validationResult.missingPdfs.some(m => m.id === pdf.id))
             .map(pdf => pdf.id);
 
-        if (pdfsWithCitations.length > 0) {
-            await bulkExportCitations.mutateAsync({ pdf_ids: pdfsWithCitations, format: 'bibtex' });
+        try {
+            if (pdfsWithCitations.length > 0) {
+                await bulkExportCitations.mutateAsync({ pdf_ids: pdfsWithCitations, format: 'bibtex' });
+            }
+            setShowExportDialog(false);
+            setValidationResult(null);
+            setSelectionMode(false);
+        } catch {
+            toast.error('Export failed. Please try again.');
         }
-        setShowExportDialog(false);
-        setValidationResult(null);
-        setSelectionMode(false);
     };
 
     return (
@@ -208,7 +216,7 @@ export function LibraryPage() {
                                     isLoading={isLoading}
                                     searchQuery={searchQuery}
                                     onEdit={setEditPdf}
-                                    onDelete={handleDelete}
+                                    onDelete={handleDeleteClick}
                                     onManageProjects={setManageProjectsPdf}
                                 />
                             ) : (
@@ -217,7 +225,7 @@ export function LibraryPage() {
                                     isLoading={isLoading}
                                     searchQuery={searchQuery}
                                     onEdit={setEditPdf}
-                                    onDelete={handleDelete}
+                                    onDelete={handleDeleteClick}
                                     onManageProjects={setManageProjectsPdf}
                                 />
                             )}

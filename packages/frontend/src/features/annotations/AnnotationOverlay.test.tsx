@@ -362,9 +362,7 @@ describe('AnnotationOverlay', () => {
       useAnnotationStore.getState().setSelectedAnnotationId('ann-2')
 
       // Render overlay for page 1
-      const { container } = render(
-        <AnnotationOverlay pageNumber={1} pdfId="pdf-1" />
-      )
+      render(<AnnotationOverlay pageNumber={1} pdfId="pdf-1" />)
 
       // Toolbar should NOT render because selected annotation is on a different page
       // The implementation uses pageAnnotations.find() which would return undefined
