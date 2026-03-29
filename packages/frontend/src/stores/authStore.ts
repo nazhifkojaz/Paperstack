@@ -3,11 +3,10 @@ import { persist } from 'zustand/middleware'
 
 export interface User {
     id: string
-    github_id: number
-    github_login: string
+    email?: string
     display_name?: string
     avatar_url?: string
-    repo_created: boolean
+    storage_provider: 'github' | 'google'
 }
 
 interface AuthState {

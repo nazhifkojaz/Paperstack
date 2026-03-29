@@ -141,10 +141,10 @@ export function createMockCitation(overrides = {}) {
 export function createMockUser(overrides = {}) {
   return {
     id: 'user-1',
-    github_id: 123456,
-    github_login: 'testuser',
+    email: 'test@example.com',
     display_name: 'Test User',
     avatar_url: 'https://example.com/avatar.png',
+    storage_provider: 'github' as const,
     ...overrides,
   }
 }

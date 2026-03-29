@@ -28,7 +28,7 @@ describe('apiFetch', () => {
   describe('authorization header injection', () => {
     it('includes authorization header when token exists', async () => {
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'test-token',
         'refresh-token'
       )
@@ -53,7 +53,7 @@ describe('apiFetch', () => {
 
     it('does not include authorization header when authRequired is false', async () => {
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'test-token',
         'refresh-token'
       )
@@ -81,7 +81,7 @@ describe('apiFetch', () => {
     it('retries with new token on 401', async () => {
       // Set up initial auth state
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'expired-token',
         'valid-refresh-token'
       )
@@ -113,7 +113,7 @@ describe('apiFetch', () => {
 
     it('only retries once to prevent infinite loops', async () => {
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'expired-token',
         'valid-refresh-token'
       )
@@ -142,7 +142,7 @@ describe('apiFetch', () => {
 
     it('logs out and redirects on failed refresh', async () => {
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'expired-token',
         'invalid-refresh-token'
       )
@@ -225,7 +225,7 @@ describe('apiFetchBlob', () => {
 
   it('returns blob data', async () => {
     useAuthStore.getState().setAuth(
-      { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+      { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
       'test-token',
       'refresh-token'
     )
@@ -243,7 +243,7 @@ describe('apiFetchBlob', () => {
 
   it('handles 401 with token refresh', async () => {
     useAuthStore.getState().setAuth(
-      { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+      { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
       'expired-token',
       'valid-refresh-token'
     )
