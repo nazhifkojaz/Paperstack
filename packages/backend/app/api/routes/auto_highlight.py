@@ -180,19 +180,17 @@ async def analyze_paper(
             # Download PDF using the unified download service
             from app.services.pdf_download_service import pdf_download_service
 
-            if pdf_row.source_url and not pdf_row.github_sha:
+            if pdf_row.source_url and not pdf_row.github_sha and not pdf_row.drive_file_id:
                 download_result = await pdf_download_service.download_to_tempfile(
                     source=PdfSource.EXTERNAL_URL,
                     external_url=pdf_row.source_url,
                 )
+                tmp_path = download_result.file_path
             else:
-                download_result = await pdf_download_service.download_to_tempfile(
-                    source=PdfSource.GITHUB,
-                    github_access_token=current_user.access_token,
-                    github_login=current_user.github_login,
-                    github_filename=pdf_row.filename,
-                )
-            tmp_path = download_result.file_path
+                from app.services.storage.factory import get_storage_backend
+                backend = await get_storage_backend(current_user, db)
+                file_id = pdf_row.drive_file_id or pdf_row.github_sha
+                tmp_path = await backend.download_to_tempfile(file_id, pdf_row.filename)
 
             # 5. Extract text
             with open(tmp_path, "rb") as f:

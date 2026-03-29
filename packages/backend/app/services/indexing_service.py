@@ -30,6 +30,7 @@ from app.services.exceptions import (
     TextExtractionError,
 )
 from app.services.pdf_download_service import PdfDownloadService, PdfSource
+from app.services.storage.factory import get_storage_backend
 from app.services.text_extractor import extract_text_with_pages
 
 
@@ -180,7 +181,7 @@ class IndexingService:
         tmp_path: Path | None = None
         try:
             # 1. Download PDF
-            tmp_path = await self._download_pdf(pdf_row, user)
+            tmp_path = await self._download_pdf(pdf_row, user, db)
 
             # 2. Extract text
             with open(tmp_path, "rb") as f:
@@ -268,12 +269,14 @@ class IndexingService:
         self,
         pdf_row: Pdf,
         user: User,
+        db: AsyncSession,
     ) -> Path:
         """Download PDF from appropriate source.
 
         Args:
             pdf_row: The Pdf row
             user: The user who owns the PDF
+            db: Database session (used to resolve storage backend credentials)
 
         Returns:
             Path to downloaded temp file
@@ -282,22 +285,18 @@ class IndexingService:
             IndexingError: If download fails
         """
         try:
-            # Case 1: URL-linked PDF (no GitHub storage)
-            if pdf_row.source_url and not pdf_row.github_sha:
+            # Case 1: URL-linked PDF (no stored content)
+            if pdf_row.source_url and not pdf_row.github_sha and not pdf_row.drive_file_id:
                 result = await self.download_service.download_to_tempfile(
                     source=PdfSource.EXTERNAL_URL,
                     external_url=pdf_row.source_url,
                 )
                 return result.file_path
 
-            # Case 2: GitHub-stored PDF
-            result = await self.download_service.download_to_tempfile(
-                source=PdfSource.GITHUB,
-                github_access_token=user.access_token,
-                github_login=user.github_login,
-                github_filename=pdf_row.filename,
-            )
-            return result.file_path
+            # Case 2: Stored PDF — delegate to the user's active storage backend
+            file_id = pdf_row.drive_file_id or pdf_row.github_sha
+            backend = await get_storage_backend(user, db)
+            return await backend.download_to_tempfile(file_id, pdf_row.filename)
 
         except Exception as e:
             raise IndexingError(f"Failed to download PDF: {e}") from e

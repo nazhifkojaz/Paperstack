@@ -7,9 +7,25 @@ from sqlalchemy import select, desc, asc
 from app.api import deps
 from app.db.models import User, Pdf, PdfCollection, PdfTag, Collection, Annotation, AnnotationSet
 from app.schemas.pdf import PdfResponse, PdfUpdate, PdfListParams, PdfLinkCreate
-from app.services import github_repo, pdf_metadata
+from app.services import pdf_metadata
+from app.services.storage.factory import get_storage_backend
 
 router = APIRouter()
+
+
+def _has_stored_content(pdf: Pdf) -> bool:
+    """Return True if the PDF has content stored in a backend (GitHub or Drive)."""
+    return bool(pdf.github_sha or pdf.drive_file_id)
+
+
+def _storage_file_id(pdf: Pdf) -> Optional[str]:
+    """Return the opaque file identifier for the PDF's storage backend."""
+    return pdf.drive_file_id or pdf.github_sha
+
+
+def _etag(pdf: Pdf) -> str:
+    return f'"{_storage_file_id(pdf)}"'
+
 
 @router.post("/upload", response_model=PdfResponse)
 async def upload_pdf(
@@ -21,75 +37,51 @@ async def upload_pdf(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Upload a new PDF.
-    """
+    """Upload a new PDF to the user's active storage backend."""
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
     file_bytes = await file.read()
-
-    # Check if we have the github repo created
-    if not current_user.repo_created:
-        await github_repo.ensure_user_repo(current_user.access_token, current_user.github_login)
-        current_user.repo_created = True
-        db.add(current_user)
-        # We will commit this down below
-
-    # Check for existing filename in DB to avoid Github conflicts
     filename = f"pdfs/{uuid.uuid4()}_{file.filename}"
 
-    # Extract metadata
     file_size = pdf_metadata.get_pdf_file_size(file_bytes)
     page_count = pdf_metadata.extract_page_count(file_bytes)
 
-    # Upload to GitHub
-    gh_resp = await github_repo.upload_pdf_to_github(
-        current_user.access_token,
-        current_user.github_login,
-        filename,
-        file_bytes,
-        f"Add {title}"
-    )
+    backend = await get_storage_backend(current_user, db)
+    await backend.ensure_container()
+    result = await backend.upload(filename, file_bytes, title)
 
-    github_sha = gh_resp.get("content", {}).get("sha")
-
-    # Save to database
     pdf = Pdf(
         user_id=current_user.id,
         title=title,
         filename=filename,
-        github_sha=github_sha,
+        github_sha=result.file_id if result.provider == "github" else None,
+        drive_file_id=result.file_id if result.provider == "google" else None,
         file_size=file_size,
         page_count=page_count,
         doi=doi,
-        isbn=isbn
+        isbn=isbn,
     )
-
     db.add(pdf)
 
-    # Add to projects if specified
     if project_ids:
         try:
             parsed_ids = [uuid.UUID(pid.strip()) for pid in project_ids.split(",") if pid.strip()]
         except ValueError:
             raise HTTPException(status_code=422, detail="Invalid project_id format")
-        # Batch fetch collections with ownership check (single query)
         if parsed_ids:
             stmt = select(Collection).where(
                 Collection.id.in_(parsed_ids),
-                Collection.user_id == current_user.id
+                Collection.user_id == current_user.id,
             )
-            result = await db.execute(stmt)
-            valid_collections = result.scalars().all()
-            # Create junction records only for valid collections
+            valid_collections = (await db.execute(stmt)).scalars().all()
             for collection in valid_collections:
                 db.add(PdfCollection(pdf_id=pdf.id, collection_id=collection.id))
 
     await db.commit()
     await db.refresh(pdf)
-
     return pdf
+
 
 @router.post("/link", response_model=PdfResponse)
 async def link_pdf(
@@ -97,9 +89,7 @@ async def link_pdf(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Create a PDF entry from an external URL (no file upload/storage).
-    """
+    """Create a PDF entry from an external URL (no file upload/storage)."""
     pdf_id = uuid.uuid4()
     filename = f"linked/{pdf_id}"
 
@@ -110,31 +100,27 @@ async def link_pdf(
         filename=filename,
         source_url=str(data.source_url),
         github_sha=None,
+        drive_file_id=None,
         file_size=None,
         page_count=None,
         doi=data.doi,
-        isbn=data.isbn
+        isbn=data.isbn,
     )
-
     db.add(pdf)
 
-    # Add to projects if specified
     if data.project_ids:
-        # Batch fetch collections with ownership check (single query)
         stmt = select(Collection).where(
             Collection.id.in_(data.project_ids),
-            Collection.user_id == current_user.id
+            Collection.user_id == current_user.id,
         )
-        result = await db.execute(stmt)
-        valid_collections = result.scalars().all()
-        # Create junction records only for valid collections
+        valid_collections = (await db.execute(stmt)).scalars().all()
         for collection in valid_collections:
             db.add(PdfCollection(pdf_id=pdf_id, collection_id=collection.id))
 
     await db.commit()
     await db.refresh(pdf)
-
     return pdf
+
 
 @router.get("", response_model=List[PdfResponse])
 async def list_pdfs(
@@ -142,9 +128,7 @@ async def list_pdfs(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    List PDFs with filtering, sorting, and pagination.
-    """
+    """List PDFs with filtering, sorting, and pagination."""
     query = select(Pdf).where(Pdf.user_id == current_user.id)
 
     if params.collection_id:
@@ -157,24 +141,18 @@ async def list_pdfs(
         search = f"%{params.q}%"
         query = query.where(Pdf.title.ilike(search))
 
-    # Sorting
     sortable_cols = {'uploaded_at', 'updated_at', 'title', 'file_size', 'page_count'}
     col_name = params.sort.lstrip('-')
     if col_name not in sortable_cols:
         raise HTTPException(status_code=400, detail=f"Invalid sort field: {col_name}")
-    if params.sort.startswith("-"):
-        order_col = desc(getattr(Pdf, col_name))
-    else:
-        order_col = asc(getattr(Pdf, col_name))
+    order_col = desc(getattr(Pdf, col_name)) if params.sort.startswith("-") else asc(getattr(Pdf, col_name))
 
     query = query.order_by(order_col)
-
-    # Pagination
     offset = (params.page - 1) * params.per_page
     query = query.offset(offset).limit(params.per_page)
 
-    result = await db.execute(query)
-    return result.scalars().all()
+    return (await db.execute(query)).scalars().all()
+
 
 @router.get("/{pdf_id}", response_model=PdfResponse)
 async def get_pdf(
@@ -182,14 +160,12 @@ async def get_pdf(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Get a specific PDF by ID.
-    """
+    """Get a specific PDF by ID."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
-
     return pdf
+
 
 @router.patch("/{pdf_id}", response_model=PdfResponse)
 async def update_pdf(
@@ -198,15 +174,12 @@ async def update_pdf(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Update a PDF's metadata.
-    """
+    """Update a PDF's metadata."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    update_data = pdf_in.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
+    for field, value in pdf_in.model_dump(exclude_unset=True).items():
         setattr(pdf, field, value)
 
     db.add(pdf)
@@ -214,32 +187,26 @@ async def update_pdf(
     await db.refresh(pdf)
     return pdf
 
+
 @router.delete("/{pdf_id}")
 async def delete_pdf(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Delete a PDF (both from database and GitHub).
-    """
+    """Delete a PDF from both the database and its storage backend."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    if pdf.github_sha:
-        # Delete from GitHub
-        await github_repo.delete_pdf_from_github(
-            current_user.access_token,
-            current_user.github_login,
-            pdf.filename,
-            pdf.github_sha,
-            f"Delete {pdf.title}"
-        )
+    if _has_stored_content(pdf):
+        backend = await get_storage_backend(current_user, db)
+        await backend.delete(_storage_file_id(pdf), pdf.filename)
 
     await db.delete(pdf)
     await db.commit()
     return {"message": "PDF successfully deleted"}
+
 
 @router.get("/{pdf_id}/content")
 async def get_pdf_content(
@@ -248,35 +215,28 @@ async def get_pdf_content(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Fetch the raw PDF content from GitHub.
-    Uses ETag for caching based on the PDF's GitHub SHA.
+    """Fetch raw PDF content from the user's storage backend.
+
+    Uses ETag caching based on the storage file identifier.
     """
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    if not pdf.github_sha:
+    if not _has_stored_content(pdf):
         raise HTTPException(status_code=400, detail="This PDF is URL-linked and has no stored content")
 
-    # ETag Implementation
-    etag = f'"{pdf.github_sha}"'
+    etag = _etag(pdf)
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304)
 
-    pdf_bytes = await github_repo.download_pdf_from_github(
-        current_user.access_token,
-        current_user.github_login,
-        pdf.filename
-    )
+    backend = await get_storage_backend(current_user, db)
+    pdf_bytes = await backend.download_bytes(_storage_file_id(pdf), pdf.filename)
 
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "ETag": etag,
-            "Cache-Control": "private, max-age=3600"
-        }
+        headers={"ETag": etag, "Cache-Control": "private, max-age=3600"},
     )
 
 
@@ -286,9 +246,7 @@ async def get_pdf_collections(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Get all collections a PDF belongs to.
-    """
+    """Get all collections a PDF belongs to."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
@@ -296,8 +254,7 @@ async def get_pdf_collections(
     result = await db.execute(
         select(PdfCollection.collection_id).where(PdfCollection.pdf_id == pdf_id)
     )
-    collection_ids = [str(row[0]) for row in result.fetchall()]
-    return {"collection_ids": collection_ids}
+    return {"collection_ids": [str(row[0]) for row in result.fetchall()]}
 
 
 @router.get("/{pdf_id}/export-annotated")
@@ -306,18 +263,14 @@ async def export_annotated_pdf(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Fetch the PDF, overlay annotations, and return the baked PDF.
-    """
+    """Fetch the PDF, overlay annotations, and return the baked PDF."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    if not pdf.github_sha:
+    if not _has_stored_content(pdf):
         raise HTTPException(status_code=400, detail="Cannot export annotated PDF for URL-linked documents")
 
-    # Get annotations
-    # Fetch all annotations for this PDF that belong to the current user
     result = await db.execute(
         select(Annotation.page_number, Annotation.type, Annotation.rects, Annotation.color, AnnotationSet.color.label('set_color'))
         .join(AnnotationSet)
@@ -325,21 +278,13 @@ async def export_annotated_pdf(
     )
     db_annotations = result.fetchall()
 
-    # Format for service
-    annotations_list = []
-    for ann in db_annotations:
-        annotations_list.append({
-            'page_number': ann.page_number,
-            'type': ann.type,
-            'rects': ann.rects,
-            'color': ann.color or ann.set_color
-        })
+    annotations_list = [
+        {'page_number': ann.page_number, 'type': ann.type, 'rects': ann.rects, 'color': ann.color or ann.set_color}
+        for ann in db_annotations
+    ]
 
-    pdf_bytes = await github_repo.download_pdf_from_github(
-        current_user.access_token,
-        current_user.github_login,
-        pdf.filename
-    )
+    backend = await get_storage_backend(current_user, db)
+    pdf_bytes = await backend.download_bytes(_storage_file_id(pdf), pdf.filename)
 
     if not annotations_list:
         return Response(content=pdf_bytes, media_type="application/pdf")
@@ -350,7 +295,7 @@ async def export_annotated_pdf(
         return Response(
             content=annotated_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="annotated_{pdf.filename.split("/")[-1]}"'}
+            headers={"Content-Disposition": f'attachment; filename="annotated_{pdf.filename.split("/")[-1]}"'},
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to export annotated PDF: {str(e)}")
