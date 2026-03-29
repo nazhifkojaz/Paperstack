@@ -23,7 +23,12 @@ class Settings(BaseSettings):
     # GitHub OAuth
     GITHUB_CLIENT_ID: str
     GITHUB_CLIENT_SECRET: str
-    
+
+    # Google OAuth + Drive
+    GOOGLE_CLIENT_ID: str
+    GOOGLE_CLIENT_SECRET: str
+    BACKEND_URL: str = "http://localhost:8000"  # Used to construct OAuth redirect URIs
+
     # CORS
     FRONTEND_URL: str = "http://localhost:5173"
 
