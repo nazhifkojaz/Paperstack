@@ -15,12 +15,37 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    github_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
-    github_login: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Legacy GitHub fields — kept nullable for rollback safety; moved to UserOAuthAccount
+    github_id: Mapped[Optional[int]] = mapped_column(BigInteger, unique=True, nullable=True)
+    github_login: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    access_token: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # legacy encrypted token
+    repo_created: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Provider-agnostic fields
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    storage_provider: Mapped[str] = mapped_column(String(10), nullable=False, server_default=text("'github'"))
     display_name: Mapped[Optional[str]] = mapped_column(String(255))
     avatar_url: Mapped[Optional[str]] = mapped_column(String)
-    access_token: Mapped[str] = mapped_column(String, nullable=False)  # encrypted GitHub OAuth token
-    repo_created: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
+    )
+
+
+class UserOAuthAccount(Base):
+    __tablename__ = "user_oauth_accounts"
+    __table_args__ = (UniqueConstraint('provider', 'provider_user_id', name='uq_oauth_provider_user'),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(10), nullable=False)           # 'github' | 'google'
+    provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False)  # GitHub numeric ID or Google sub
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    encrypted_access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    extra_data: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)    # provider-specific (github_login, drive_folder_id, …)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
@@ -35,6 +60,7 @@ class Pdf(Base):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     github_sha: Mapped[Optional[str]] = mapped_column(String(40))
+    drive_file_id: Mapped[Optional[str]] = mapped_column(String(255))
     file_size: Mapped[Optional[int]] = mapped_column(BigInteger)
     page_count: Mapped[Optional[int]] = mapped_column(Integer)
     source_url: Mapped[Optional[str]] = mapped_column(String(2048))

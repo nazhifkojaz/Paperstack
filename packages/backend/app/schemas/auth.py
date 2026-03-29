@@ -15,9 +15,8 @@ class RefreshTokenRequest(BaseModel):
 
 class UserResponse(BaseModel):
     id: uuid.UUID
-    github_id: int
-    github_login: str
+    email: Optional[str] = None
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
-    repo_created: bool
+    storage_provider: str
     model_config = ConfigDict(from_attributes=True)

@@ -30,6 +30,7 @@ class PdfResponse(PdfBase):
     user_id: uuid.UUID
     source_url: Optional[str] = None
     github_sha: Optional[str] = None
+    drive_file_id: Optional[str] = None
     file_size: Optional[int] = None
     page_count: Optional[int] = None
     uploaded_at: datetime
