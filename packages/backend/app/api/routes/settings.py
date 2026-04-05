@@ -1,3 +1,5 @@
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -9,9 +11,20 @@ from app.schemas.auth import UserResponse
 
 router = APIRouter()
 
+PROVIDER_LABELS = {"github": "GitHub", "google": "Google Drive"}
+
 
 class StorageProviderUpdate(BaseModel):
     storage_provider: str
+
+
+class ConnectedAccount(BaseModel):
+    provider: str
+    display_name: str
+
+
+class ConnectedAccountsResponse(BaseModel):
+    accounts: List[ConnectedAccount]
 
 
 @router.patch("/storage-provider", response_model=UserResponse)
@@ -45,3 +58,27 @@ async def update_storage_provider(
     await db.commit()
     await db.refresh(current_user)
     return current_user
+
+
+@router.get("/connected-accounts", response_model=ConnectedAccountsResponse)
+async def get_connected_accounts(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the list of OAuth providers the user has linked."""
+    result = await db.execute(
+        select(UserOAuthAccount.provider).where(
+            UserOAuthAccount.user_id == current_user.id,
+        )
+    )
+    providers = [row[0] for row in result.all()]
+
+    return ConnectedAccountsResponse(
+        accounts=[
+            ConnectedAccount(
+                provider=p,
+                display_name=PROVIDER_LABELS.get(p, p),
+            )
+            for p in providers
+        ]
+    )
