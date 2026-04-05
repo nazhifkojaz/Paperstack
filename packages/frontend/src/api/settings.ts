@@ -7,3 +7,13 @@ export async function updateStorageProvider(provider: 'github' | 'google'): Prom
         body: JSON.stringify({ storage_provider: provider }),
     })
 }
+
+export interface ConnectedAccount {
+    provider: string
+    display_name: string
+}
+
+export async function fetchConnectedAccounts(): Promise<ConnectedAccount[]> {
+    const res = await apiFetch<{ accounts: ConnectedAccount[] }>('/settings/connected-accounts')
+    return res.accounts
+}

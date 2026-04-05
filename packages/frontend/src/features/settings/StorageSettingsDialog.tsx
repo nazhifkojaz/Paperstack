@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useAuthStore } from '@/stores/authStore'
-import { updateStorageProvider } from '@/api/settings'
+import { updateStorageProvider, fetchConnectedAccounts } from '@/api/settings'
 import { toast } from 'sonner'
 
 interface Props {
@@ -28,6 +28,18 @@ const PROVIDERS = [
 export function StorageSettingsDialog({ open, onOpenChange }: Props) {
     const { user, setUser } = useAuthStore()
     const [loading, setLoading] = useState(false)
+    const [connectedProviders, setConnectedProviders] = useState<Set<string>>(new Set())
+
+    useEffect(() => {
+        if (!open) return
+        fetchConnectedAccounts()
+            .then((accounts) => {
+                setConnectedProviders(new Set(accounts.map((a) => a.provider)))
+            })
+            .catch(() => {
+                toast.error('Failed to load connected accounts')
+            })
+    }, [open])
 
     const handleSwitch = async (provider: 'github' | 'google') => {
         if (!user || provider === user.storage_provider) return
@@ -58,6 +70,7 @@ export function StorageSettingsDialog({ open, onOpenChange }: Props) {
                 <div className="flex flex-col gap-3 pt-2">
                     {PROVIDERS.map((p) => {
                         const isActive = user?.storage_provider === p.id
+                        const isConnected = connectedProviders.has(p.id)
                         return (
                             <div
                                 key={p.id}
@@ -71,7 +84,7 @@ export function StorageSettingsDialog({ open, onOpenChange }: Props) {
                                 </div>
                                 {isActive ? (
                                     <span className="text-xs font-medium text-primary">Active</span>
-                                ) : (
+                                ) : isConnected ? (
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -80,6 +93,10 @@ export function StorageSettingsDialog({ open, onOpenChange }: Props) {
                                     >
                                         Switch
                                     </Button>
+                                ) : (
+                                    <span className="text-xs text-muted-foreground">
+                                        Not connected
+                                    </span>
                                 )}
                             </div>
                         )
