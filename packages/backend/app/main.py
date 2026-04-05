@@ -7,7 +7,9 @@ from app.core.config import settings
 from app.core.http_client import HTTPClientState
 from app.middleware.security import SecurityHeadersMiddleware
 from app.middleware.rate_limit import limiter, rate_limit_exceeded_handler
-from app.api.routes import auth, pdfs, collections, tags, annotations, citations, sharing, api_keys, settings, auto_highlight, chat
+from app.api.routes import auth, pdfs, collections, tags, annotations, citations, sharing, api_keys
+from app.api.routes import settings as settings_routes
+from app.api.routes import auto_highlight, chat
 
 
 @asynccontextmanager
@@ -60,7 +62,7 @@ app.include_router(citations.router, prefix=f"{settings.API_V1_STR}/pdfs", tags=
 app.include_router(citations.global_router, prefix=f"{settings.API_V1_STR}/citations", tags=["citations"])
 app.include_router(sharing.router, prefix=f"{settings.API_V1_STR}", tags=["sharing"])
 app.include_router(sharing.public_router, prefix=f"{settings.API_V1_STR}", tags=["sharing"])
-app.include_router(settings.router, prefix=f"{settings.API_V1_STR}/settings", tags=["settings"])
+app.include_router(settings_routes.router, prefix=f"{settings.API_V1_STR}/settings", tags=["settings"])
 app.include_router(api_keys.router, prefix=f"{settings.API_V1_STR}/settings", tags=["settings"])
 app.include_router(auto_highlight.router, prefix=f"{settings.API_V1_STR}/auto-highlight", tags=["auto-highlight"])
 app.include_router(chat.router, prefix=f"{settings.API_V1_STR}/chat", tags=["chat"])
