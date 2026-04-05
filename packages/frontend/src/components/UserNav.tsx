@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
     DropdownMenu,
@@ -9,10 +10,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuthStore } from '@/stores/authStore';
-import { LogOut } from 'lucide-react';
+import { HardDrive, LogOut } from 'lucide-react';
+import { StorageSettingsDialog } from '@/features/settings/StorageSettingsDialog';
 
 export function UserNav() {
     const { user, logout } = useAuthStore();
+    const [storageDialogOpen, setStorageDialogOpen] = useState(false);
 
     if (!user) return null;
 
@@ -44,16 +47,10 @@ export function UserNav() {
                     </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {/* TODO: Re-implement Profile page when ready */}
-                {/* <DropdownMenuItem>
-                    <User className="mr-2 h-4 w-4" />
-                    <span>Profile</span>
-                </DropdownMenuItem> */}
-                {/* TODO: Re-implement Settings page when ready */}
-                {/* <DropdownMenuItem>
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Settings</span>
-                </DropdownMenuItem> */}
+                <DropdownMenuItem onClick={() => setStorageDialogOpen(true)}>
+                    <HardDrive className="mr-2 h-4 w-4" />
+                    <span>Storage Settings</span>
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={logout}>
                     <LogOut className="mr-2 h-4 w-4" />
@@ -61,5 +58,10 @@ export function UserNav() {
                 </DropdownMenuItem>
             </DropdownMenuContent>
         </DropdownMenu>
+
+        <StorageSettingsDialog
+            open={storageDialogOpen}
+            onOpenChange={setStorageDialogOpen}
+        />
     );
 }
