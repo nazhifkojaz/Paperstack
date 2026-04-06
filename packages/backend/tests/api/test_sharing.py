@@ -1,17 +1,27 @@
 """Tests for sharing routes."""
+
 import uuid
 from httpx import AsyncClient
-from tests.fixtures import create_test_pdf, create_test_annotation_set, create_test_annotation, create_test_share
+from tests.fixtures import (
+    create_test_pdf,
+    create_test_annotation_set,
+    create_test_annotation,
+    create_test_share,
+)
 from app.db.models import Share
 
 
 class TestCreateShare:
     """Tests for POST /v1/annotation-sets/{set_id}/share"""
 
-    async def test_create_public_share(self, client: AsyncClient, auth_headers, db_session, test_user) -> None:
+    async def test_create_public_share(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
         """Test creating a public share link."""
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
-        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id)
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id
+        )
         await db_session.commit()
 
         response = await client.post(
@@ -26,10 +36,14 @@ class TestCreateShare:
         assert data["permission"] == "view"
         assert data["shared_with"] is None
 
-    async def test_create_user_specific_share(self, client: AsyncClient, auth_headers, db_session, test_user, test_user_2) -> None:
+    async def test_create_user_specific_share(
+        self, client: AsyncClient, auth_headers, db_session, test_user, test_user_2
+    ) -> None:
         """Test creating a share for a specific user."""
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
-        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id)
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id
+        )
         await db_session.commit()
 
         response = await client.post(
@@ -45,10 +59,14 @@ class TestCreateShare:
         data = response.json()
         assert data["shared_with"] == str(test_user_2.id)
 
-    async def test_create_share_invalid_user_returns_404(self, client: AsyncClient, auth_headers, db_session, test_user) -> None:
+    async def test_create_share_invalid_user_returns_404(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
         """Test creating share for non-existent user returns 404."""
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
-        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id)
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id
+        )
         await db_session.commit()
 
         response = await client.post(
@@ -63,7 +81,9 @@ class TestCreateShare:
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
-    async def test_create_share_other_users_set_returns_404(self, client: AsyncClient, auth_headers) -> None:
+    async def test_create_share_other_users_set_returns_404(
+        self, client: AsyncClient, auth_headers
+    ) -> None:
         """Test creating share for another user's set returns 404."""
         fake_set_id = uuid.uuid4()
 
@@ -76,14 +96,94 @@ class TestCreateShare:
         assert response.status_code == 404
 
 
+class TestGetSharesForSet:
+    """Tests for GET /v1/annotation-sets/{set_id}/shares"""
+
+    async def test_get_shares_for_set(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test listing all shares for an annotation set."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set"
+        )
+
+        await create_test_share(
+            db_session,
+            annotation_set_id=ann_set.id,
+            shared_by=test_user.id,
+            share_token="token_one",
+            permission="view",
+        )
+        await create_test_share(
+            db_session,
+            annotation_set_id=ann_set.id,
+            shared_by=test_user.id,
+            share_token="token_two",
+            permission="comment",
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/annotation-sets/{ann_set.id}/shares",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 2
+        permissions = {d["permission"] for d in data}
+        assert "view" in permissions
+        assert "comment" in permissions
+
+    async def test_get_shares_for_set_empty(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test listing shares for a set with no shares."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id, name="No Shares"
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/annotation-sets/{ann_set.id}/shares",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json() == []
+
+    async def test_get_shares_for_other_users_set_returns_404(
+        self, client: AsyncClient, auth_headers, db_session, test_user_2
+    ) -> None:
+        """Test listing shares for another user's set returns 404."""
+        pdf = await create_test_pdf(db_session, user_id=test_user_2.id)
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user_2.id, name="Other Set"
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/annotation-sets/{ann_set.id}/shares",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404
+
+
 class TestSharedWithMe:
     """Tests for GET /v1/shared/with-me"""
 
-    async def test_list_shared_with_me(self, client: AsyncClient, auth_headers_2, db_session, test_user, test_user_2) -> None:
+    async def test_list_shared_with_me(
+        self, client: AsyncClient, auth_headers_2, db_session, test_user, test_user_2
+    ) -> None:
         """Test listing shares received by current user."""
         # Create a share from test_user to test_user_2
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
-        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set")
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set"
+        )
 
         await create_test_share(
             db_session,
@@ -110,12 +210,16 @@ class TestSharedWithMe:
 class TestRevokeShare:
     """Tests for DELETE /v1/shares/{share_id}"""
 
-    async def test_revoke_share(self, client: AsyncClient, auth_headers, db_session, test_user) -> None:
+    async def test_revoke_share(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
         """Test revoking a share."""
         from sqlalchemy import select
 
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
-        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set")
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set"
+        )
 
         share = await create_test_share(
             db_session,
@@ -137,10 +241,14 @@ class TestRevokeShare:
         result = await db_session.execute(select(Share).where(Share.id == share.id))
         assert result.scalar_one_or_none() is None
 
-    async def test_revoke_other_users_share_returns_404(self, client: AsyncClient, auth_headers, db_session, test_user, test_user_2) -> None:
+    async def test_revoke_other_users_share_returns_404(
+        self, client: AsyncClient, auth_headers, db_session, test_user, test_user_2
+    ) -> None:
         """Test revoking another user's share returns 404."""
         pdf = await create_test_pdf(db_session, user_id=test_user_2.id)
-        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user_2.id, name="Shared Set")
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user_2.id, name="Shared Set"
+        )
 
         share = await create_test_share(
             db_session,
@@ -162,7 +270,9 @@ class TestRevokeShare:
 class TestGetSharedAnnotationsPublic:
     """Tests for GET /v1/shared/annotations/{token}"""
 
-    async def test_get_shared_annotations_public(self, client: AsyncClient, db_session, test_user) -> None:
+    async def test_get_shared_annotations_public(
+        self, client: AsyncClient, db_session, test_user
+    ) -> None:
         """Test public access to shared annotations."""
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
         ann_set = await create_test_annotation_set(
@@ -194,12 +304,16 @@ class TestGetSharedAnnotationsPublic:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["shared_by_login"] == (test_user.display_name or test_user.github_login)
+        assert data["shared_by_login"] == (
+            test_user.display_name or test_user.github_login
+        )
         assert data["permission"] == "view"
         assert data["annotation_set"]["name"] == "Shared Set"
         assert len(data["annotation_set"]["annotations"]) == 1
 
-    async def test_get_shared_annotations_invalid_token_returns_404(self, client: AsyncClient) -> None:
+    async def test_get_shared_annotations_invalid_token_returns_404(
+        self, client: AsyncClient
+    ) -> None:
         """Test accessing with invalid token returns 404."""
         response = await client.get("/v1/shared/annotations/invalid_token")
 
@@ -209,10 +323,16 @@ class TestGetSharedAnnotationsPublic:
 class TestGetSharedPdfPublic:
     """Tests for GET /v1/shared/pdf/{token}"""
 
-    async def test_get_shared_pdf_public(self, client: AsyncClient, mock_github_api, db_session, test_user) -> None:
+    async def test_get_shared_pdf_public(
+        self, client: AsyncClient, mock_github_api, db_session, test_user
+    ) -> None:
         """Test public access to shared PDF content."""
-        pdf = await create_test_pdf(db_session, user_id=test_user.id, github_sha="abc123")
-        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set")
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, github_sha="abc123"
+        )
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set"
+        )
 
         await create_test_share(
             db_session,
@@ -230,10 +350,16 @@ class TestGetSharedPdfPublic:
         assert response.headers["content-type"] == "application/pdf"
         assert "etag" in response.headers
 
-    async def test_get_shared_pdf_etag_cache(self, client: AsyncClient, mock_github_api, db_session, test_user) -> None:
+    async def test_get_shared_pdf_etag_cache(
+        self, client: AsyncClient, mock_github_api, db_session, test_user
+    ) -> None:
         """Test ETag caching for shared PDF."""
-        pdf = await create_test_pdf(db_session, user_id=test_user.id, github_sha="etag_sha")
-        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set")
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, github_sha="etag_sha"
+        )
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id, name="Shared Set"
+        )
 
         await create_test_share(
             db_session,
