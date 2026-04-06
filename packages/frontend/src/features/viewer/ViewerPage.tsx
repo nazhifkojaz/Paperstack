@@ -41,10 +41,11 @@ export function ViewerPage() {
         if (!isLinked && !blob) return;
 
         let isMounted = true;
-        setLoadError(null);
 
         const loadPdf = async () => {
             try {
+                // Clear previous error at start of new load attempt
+                if (isMounted) setLoadError(null);
                 let doc: PDFDocumentProxy;
 
                 if (isLinked && sourceUrl) {

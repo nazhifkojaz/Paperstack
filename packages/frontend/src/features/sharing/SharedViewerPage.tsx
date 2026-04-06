@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { pdfjsLib } from '@/lib/pdfjs';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
@@ -29,7 +29,7 @@ export function SharedViewerPage() {
 
         load();
         return () => { isMounted = false; };
-    }, [data?.pdf_id]);
+    }, [data?.pdf_id, token]);
 
     if (isLoading) {
         return (
@@ -97,30 +97,31 @@ function SharedPdfViewer({ pdfDocument, annotations, setColor }: { pdfDocument: 
 }
 
 function SharedPdfPage({ pdfDocument, pageNumber, annotations, setColor }: { pdfDocument: PDFDocumentProxy; pageNumber: number; annotations: SharedAnnotation[]; setColor: string }) {
-    const [canvasRef, setCanvasRef] = useState<HTMLCanvasElement | null>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
     const [dims, setDims] = useState({ width: 0, height: 0 });
 
     useEffect(() => {
-        if (!canvasRef) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
         const render = async () => {
             const page = await pdfDocument.getPage(pageNumber);
             const viewport = page.getViewport({ scale: 1.2 });
             const dpr = window.devicePixelRatio || 1;
-            canvasRef.width = viewport.width * dpr;
-            canvasRef.height = viewport.height * dpr;
-            canvasRef.style.width = `${viewport.width}px`;
-            canvasRef.style.height = `${viewport.height}px`;
+            canvas.width = viewport.width * dpr;
+            canvas.height = viewport.height * dpr;
+            canvas.style.width = `${viewport.width}px`;
+            canvas.style.height = `${viewport.height}px`;
             setDims({ width: viewport.width, height: viewport.height });
-            const ctx = canvasRef.getContext('2d')!;
+            const ctx = canvas.getContext('2d')!;
             ctx.scale(dpr, dpr);
-            await page.render({ canvasContext: ctx, viewport, canvas: canvasRef }).promise;
+            await page.render({ canvasContext: ctx, viewport, canvas }).promise;
         };
         render();
-    }, [canvasRef, pdfDocument, pageNumber]);
+    }, [pdfDocument, pageNumber]);
 
     return (
         <div className="relative shadow-lg" style={{ width: dims.width, margin: '0 auto' }}>
-            <canvas ref={setCanvasRef} className="block" />
+            <canvas ref={canvasRef} className="block" />
             {dims.width > 0 && (
                 <svg className="absolute inset-0 pointer-events-none" width={dims.width} height={dims.height}>
                     {annotations.map((ann) => ann.rects.map((rect, idx) => (
