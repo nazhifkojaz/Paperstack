@@ -1,9 +1,7 @@
 """Tests for PDF routes."""
 import uuid
 from io import BytesIO
-from unittest.mock import AsyncMock, patch
-import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import AsyncClient
 from tests.fixtures import create_test_pdf, create_test_annotation_set, create_test_annotation, create_test_collection, create_test_pdf_collection
 
 
@@ -121,7 +119,7 @@ class TestListPdfs:
         """Test filtering PDFs by collection."""
         # Create PDFs
         pdf1 = await create_test_pdf(db_session, user_id=test_user.id, title="In Collection", filename="in.pdf", github_sha="abc")
-        pdf2 = await create_test_pdf(db_session, user_id=test_user.id, title="Not In Collection", filename="out.pdf", github_sha="def")
+        await create_test_pdf(db_session, user_id=test_user.id, title="Not In Collection", filename="out.pdf", github_sha="def")
 
         # Create collection and add pdf1
         collection = await create_test_collection(db_session, user_id=test_user.id, name="Test Collection")
@@ -157,8 +155,8 @@ class TestListPdfs:
 
     async def test_list_pdfs_sorting(self, client: AsyncClient, auth_headers, db_session, test_user) -> None:
         """Test sorting PDFs."""
-        pdf1 = await create_test_pdf(db_session, user_id=test_user.id, title="A Title", filename="a.pdf", github_sha="abc")
-        pdf2 = await create_test_pdf(db_session, user_id=test_user.id, title="Z Title", filename="z.pdf", github_sha="def")
+        await create_test_pdf(db_session, user_id=test_user.id, title="A Title", filename="a.pdf", github_sha="abc")
+        await create_test_pdf(db_session, user_id=test_user.id, title="Z Title", filename="z.pdf", github_sha="def")
         await db_session.commit()
 
         # Sort ascending

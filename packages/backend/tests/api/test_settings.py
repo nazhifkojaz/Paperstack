@@ -1,7 +1,5 @@
 """Tests for the settings routes."""
-import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import security
@@ -12,19 +10,10 @@ class TestGetConnectedAccounts:
     """Tests for GET /settings/connected-accounts"""
 
     async def test_returns_linked_providers(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
+        self, client: AsyncClient, auth_headers: dict, test_user: User
     ) -> None:
         """Returns providers the user has linked via OAuth."""
-        oauth = UserOAuthAccount(
-            user_id=test_user.id,
-            provider="github",
-            provider_user_id="123456",
-            encrypted_access_token=security.encrypt_token("gh_token"),
-            extra_data={"github_login": "testuser"},
-        )
-        db_session.add(oauth)
-        await db_session.commit()
-
+        # test_user fixture already has a github OAuth account
         resp = await client.get("/v1/settings/connected-accounts", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
@@ -33,10 +22,24 @@ class TestGetConnectedAccounts:
         assert "github" in provider_ids
 
     async def test_returns_empty_when_no_accounts(
-        self, client: AsyncClient, auth_headers: dict
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
     ) -> None:
         """Returns empty list when user has no OAuth accounts."""
-        resp = await client.get("/v1/settings/connected-accounts", headers=auth_headers)
+        # Remove the OAuth account created by the fixture
+        from sqlalchemy import delete as sa_delete
+
+        await db_session.execute(
+            sa_delete(UserOAuthAccount).where(UserOAuthAccount.user_id == test_user.id)
+        )
+        await db_session.commit()
+
+        # Generate fresh auth headers (test_user still exists in DB)
+        from app.core.security import create_access_token
+
+        token = create_access_token(test_user.id)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.get("/v1/settings/connected-accounts", headers=headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["accounts"] == []
@@ -45,14 +48,14 @@ class TestGetConnectedAccounts:
         self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ) -> None:
         """Returns all linked providers when user has multiple OAuth accounts."""
-        for provider, uid in [("github", "123456"), ("google", "google-sub-123")]:
-            oauth = UserOAuthAccount(
-                user_id=test_user.id,
-                provider=provider,
-                provider_user_id=uid,
-                encrypted_access_token=security.encrypt_token(f"{provider}_token"),
-            )
-            db_session.add(oauth)
+        # test_user already has github; add google
+        oauth = UserOAuthAccount(
+            user_id=test_user.id,
+            provider="google",
+            provider_user_id="google-sub-unique-456",
+            encrypted_access_token=security.encrypt_token("google_token"),
+        )
+        db_session.add(oauth)
         await db_session.commit()
 
         resp = await client.get("/v1/settings/connected-accounts", headers=auth_headers)
@@ -65,14 +68,14 @@ class TestGetConnectedAccounts:
         self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ) -> None:
         """Each account includes a human-readable display_name."""
-        for provider, uid in [("github", "123456"), ("google", "google-sub-123")]:
-            oauth = UserOAuthAccount(
-                user_id=test_user.id,
-                provider=provider,
-                provider_user_id=uid,
-                encrypted_access_token=security.encrypt_token(f"{provider}_token"),
-            )
-            db_session.add(oauth)
+        # Add google to the existing github from fixture
+        oauth = UserOAuthAccount(
+            user_id=test_user.id,
+            provider="google",
+            provider_user_id="google-sub-unique-789",
+            encrypted_access_token=security.encrypt_token("google_token"),
+        )
+        db_session.add(oauth)
         await db_session.commit()
 
         resp = await client.get("/v1/settings/connected-accounts", headers=auth_headers)
@@ -95,16 +98,7 @@ class TestUpdateStorageProvider:
         self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ) -> None:
         """Switches storage provider when user has a matching OAuth account."""
-        oauth = UserOAuthAccount(
-            user_id=test_user.id,
-            provider="github",
-            provider_user_id="123456",
-            encrypted_access_token=security.encrypt_token("gh_token"),
-            extra_data={"github_login": "testuser"},
-        )
-        db_session.add(oauth)
-        await db_session.commit()
-
+        # test_user already has github OAuth account from fixture
         resp = await client.patch(
             "/v1/settings/storage-provider",
             json={"storage_provider": "github"},
@@ -121,15 +115,7 @@ class TestUpdateStorageProvider:
         self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ) -> None:
         """Returns 400 when switching to a provider with no OAuth account."""
-        # Only github linked, try to switch to google
-        oauth = UserOAuthAccount(
-            user_id=test_user.id,
-            provider="github",
-            provider_user_id="123456",
-            encrypted_access_token=security.encrypt_token("gh_token"),
-        )
-        db_session.add(oauth)
-        await db_session.commit()
+        # test_user only has github linked, try to switch to google
 
         resp = await client.patch(
             "/v1/settings/storage-provider",
@@ -163,14 +149,14 @@ class TestUpdateStorageProvider:
         self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ) -> None:
         """Switches from github to google when both are linked."""
-        for provider, uid in [("github", "123456"), ("google", "google-sub-123")]:
-            oauth = UserOAuthAccount(
-                user_id=test_user.id,
-                provider=provider,
-                provider_user_id=uid,
-                encrypted_access_token=security.encrypt_token(f"{provider}_token"),
-            )
-            db_session.add(oauth)
+        # test_user already has github from fixture; add google
+        oauth = UserOAuthAccount(
+            user_id=test_user.id,
+            provider="google",
+            provider_user_id="google-sub-unique-999",
+            encrypted_access_token=security.encrypt_token("google_token"),
+        )
+        db_session.add(oauth)
         await db_session.commit()
 
         # Default is github, switch to google

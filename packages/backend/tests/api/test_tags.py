@@ -1,7 +1,4 @@
 """Tests for tag routes."""
-import uuid
-import datetime
-import pytest
 from httpx import AsyncClient
 from tests.fixtures import create_test_pdf, create_test_tag
 
@@ -110,7 +107,7 @@ class TestUpdateTag:
     async def test_update_tag_duplicate_name_returns_400(self, client: AsyncClient, auth_headers, db_session, test_user) -> None:
         """Test updating to duplicate name returns 400."""
         tag1 = await create_test_tag(db_session, user_id=test_user.id, name="Tag 1", color="#FF0000")
-        tag2 = await create_test_tag(db_session, user_id=test_user.id, name="Tag 2", color="#00FF00")
+        await create_test_tag(db_session, user_id=test_user.id, name="Tag 2", color="#00FF00")
         await db_session.commit()
 
         response = await client.patch(

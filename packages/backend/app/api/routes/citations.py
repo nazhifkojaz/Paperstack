@@ -1,13 +1,12 @@
 from uuid import UUID, uuid4
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
 import httpx
 
 from app.api.deps import get_db, get_current_user
 from app.db.models import User, Pdf, Citation
-from app.schemas.citation import CitationResponse, CitationCreate, CitationUpdate, BulkExportRequest, LookupRequest, LookupResponse, ValidateRequest
+from app.schemas.citation import CitationResponse, CitationUpdate, BulkExportRequest, LookupRequest, LookupResponse, ValidateRequest
 from app.services import citation_extractor
 
 router = APIRouter()

@@ -5,9 +5,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-
-logger = logging.getLogger(__name__)
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +30,8 @@ from app.services.exceptions import (
 from app.services.llm_service import LLMService, CATEGORY_COLORS
 from app.services.pdf_download_service import PdfSource
 from app.services.text_extractor import extract_text_with_pages, is_text_pdf
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

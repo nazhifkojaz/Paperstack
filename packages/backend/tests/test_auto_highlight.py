@@ -1,6 +1,4 @@
-import json
 import pytest
-from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient
 
 
@@ -51,8 +49,6 @@ async def test_get_quota_with_key(admin_client: AsyncClient, auth_headers):
 async def test_analyze_no_key_no_quota(admin_client: AsyncClient, auth_headers, test_user):
     """Should fail if no key and no quota."""
     # Create a PDF record first
-    from app.db.models import Pdf, UserUsageQuota
-    from sqlalchemy import update
     # Exhaust quota by setting to 0 — done via direct DB manipulation in fixture
     # For simplicity, this test assumes quota starts at 5 and in-house keys are not set
     # The actual test would need a PDF fixture and mock the GitHub download

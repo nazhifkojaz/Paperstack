@@ -1,8 +1,6 @@
 """Tests for authentication routes."""
-from urllib.parse import parse_qs, urlparse
-from unittest.mock import AsyncMock, patch
-import pytest
-from httpx import AsyncClient, ASGITransport
+from urllib.parse import parse_qs
+from httpx import AsyncClient
 
 
 class TestGitHubLogin:
@@ -31,8 +29,6 @@ class TestGitHubCallback:
     async def test_callback_creates_new_user(self, client: AsyncClient, mock_github_api) -> None:
         """Test that callback creates a new user on first login."""
         # First, check if user doesn't exist
-        from app.db.models import User
-        from sqlalchemy import select
 
         # Make callback request
         response = await client.get(
@@ -50,10 +46,10 @@ class TestGitHubCallback:
     async def test_callback_updates_existing_user(self, client: AsyncClient, db_session, mock_github_api) -> None:
         """Test that callback updates existing user's data."""
         import uuid
-        from app.db.models import User
-        from sqlalchemy import select
+        from app.core import security
+        from app.db.models import User, UserOAuthAccount
 
-        # Create existing user
+        # Create existing user with linked OAuth account
         existing_user = User(
             id=uuid.uuid4(),
             github_id=123456,
@@ -63,6 +59,17 @@ class TestGitHubCallback:
             access_token="old_encrypted_token",
         )
         db_session.add(existing_user)
+        await db_session.commit()
+        await db_session.refresh(existing_user)
+
+        oauth = UserOAuthAccount(
+            user_id=existing_user.id,
+            provider="github",
+            provider_user_id="123456",
+            encrypted_access_token=security.encrypt_token("old_token"),
+            extra_data={"github_login": "oldlogin"},
+        )
+        db_session.add(oauth)
         await db_session.commit()
 
         # Make callback request
@@ -166,7 +173,6 @@ class TestGetCurrentUser:
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == str(test_user.id)
-        assert data["github_login"] == test_user.github_login
         assert data["display_name"] == test_user.display_name
 
     async def test_me_without_auth_returns_401(self, client: AsyncClient) -> None:

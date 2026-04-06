@@ -1,6 +1,6 @@
 import json
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from app.services.llm_service import (
     LLMService, parse_llm_response, build_prompt, strip_markdown_fences,
     CATEGORY_COLORS,

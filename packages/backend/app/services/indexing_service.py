@@ -10,7 +10,6 @@ Services raise custom exceptions. Route handlers translate to HTTP status codes.
 """
 
 import logging
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path

@@ -4,7 +4,6 @@ Uses PostgreSQL via testcontainers to match production behavior.
 """
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator, Generator
-import uuid
 
 import pytest
 import pytest_asyncio
@@ -16,8 +15,8 @@ from sqlalchemy import text
 from testcontainers.postgres import PostgresContainer
 
 from app.main import app
-from app.db.models import Base, User
-from app.core.security import create_access_token, create_refresh_token
+from app.db.models import Base, User, UserOAuthAccount
+from app.core.security import create_access_token
 
 
 @pytest.fixture(scope="session")
@@ -36,7 +35,6 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 @pytest.fixture(scope="session")
 def test_engine(postgres_container: PostgresContainer):
     """Create a SQLAlchemy engine connected to the test container."""
-    import asyncio
     from sqlalchemy.pool import NullPool
 
     connection_url = postgres_container.get_connection_url()
@@ -162,6 +160,18 @@ async def test_user(db_session: AsyncSession) -> User:
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
+
+    # Create OAuth account so storage factory can resolve the backend
+    oauth = UserOAuthAccount(
+        user_id=user.id,
+        provider="github",
+        provider_user_id=str(user.github_id),
+        encrypted_access_token=security.encrypt_token("gh_test_token"),
+        extra_data={"github_login": user.github_login},
+    )
+    db_session.add(oauth)
+    await db_session.commit()
+
     return user
 
 
@@ -183,6 +193,17 @@ async def test_user_2(db_session: AsyncSession) -> User:
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
+
+    oauth = UserOAuthAccount(
+        user_id=user.id,
+        provider="github",
+        provider_user_id=str(user.github_id),
+        encrypted_access_token=security.encrypt_token("gh_test_token_2"),
+        extra_data={"github_login": user.github_login},
+    )
+    db_session.add(oauth)
+    await db_session.commit()
+
     return user
 
 

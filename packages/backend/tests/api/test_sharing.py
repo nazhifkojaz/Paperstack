@@ -1,6 +1,5 @@
 """Tests for sharing routes."""
 import uuid
-import pytest
 from httpx import AsyncClient
 from tests.fixtures import create_test_pdf, create_test_annotation_set, create_test_annotation, create_test_share
 from app.db.models import Share
@@ -191,11 +190,11 @@ class TestGetSharedAnnotationsPublic:
         await db_session.commit()
 
         # Public access - no auth headers
-        response = await client.get(f"/v1/shared/annotations/public_token_123")
+        response = await client.get("/v1/shared/annotations/public_token_123")
 
         assert response.status_code == 200
         data = response.json()
-        assert data["shared_by_login"] == test_user.github_login
+        assert data["shared_by_login"] == (test_user.display_name or test_user.github_login)
         assert data["permission"] == "view"
         assert data["annotation_set"]["name"] == "Shared Set"
         assert len(data["annotation_set"]["annotations"]) == 1
@@ -225,7 +224,7 @@ class TestGetSharedPdfPublic:
         await db_session.commit()
 
         # Public access - no auth headers
-        response = await client.get(f"/v1/shared/pdf/pdf_token_123")
+        response = await client.get("/v1/shared/pdf/pdf_token_123")
 
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/pdf"
@@ -246,12 +245,12 @@ class TestGetSharedPdfPublic:
         await db_session.commit()
 
         # First request
-        response1 = await client.get(f"/v1/shared/pdf/cache_token")
+        response1 = await client.get("/v1/shared/pdf/cache_token")
         etag = response1.headers.get("etag")
 
         # Second request with If-None-Match
         response2 = await client.get(
-            f"/v1/shared/pdf/cache_token",
+            "/v1/shared/pdf/cache_token",
             headers={"if-none-match": etag},
         )
 

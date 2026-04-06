@@ -2,7 +2,6 @@
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -18,7 +17,6 @@ from app.db.models import (
     ChatConversation,
     ChatMessage,
     Pdf,
-    PdfIndexStatus,
     User,
 )
 from app.middleware.rate_limit import limiter
@@ -254,7 +252,7 @@ async def stream_message(
 
         # Handle stale/active indexing
         try:
-            was_reset = await local_indexing_service.reset_if_stale(index_status, db)
+            was_reset = await local_indexing_service.reset_if_stale(index_status, db)  # noqa: F841
         except IndexInProgressError as e:
             raise HTTPException(status_code=409, detail=str(e))
 

@@ -96,7 +96,6 @@ def multi_page_pdf_bytes(page_count: int = 3) -> bytes:
     # Build pages objects
     page_objects = []
     kids_refs = []
-    offset = 0
 
     # Catalog (1 0 obj) and Pages (2 0 obj) are fixed
     # Page objects start from 3 0 obj
@@ -119,7 +118,7 @@ endobj
 
     kids_str = " ".join(kids_refs)
 
-    pdf_content = f"""%PDF-1.4
+    pdf_body = f"""%PDF-1.4
 1 0 obj
 <<
 /Type /Catalog
@@ -145,9 +144,9 @@ trailer
 /Root 1 0 R
 >>
 startxref
-{len(pdf_content.encode())}
-%%EOF
 """
+
+    pdf_content = pdf_body + f"{len(pdf_body.encode())}\n%%EOF\n"
 
     return pdf_content.encode()
 

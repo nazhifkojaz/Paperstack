@@ -13,8 +13,6 @@ Evaluates:
 import argparse
 import json
 import re
-import sys
-from pathlib import Path
 
 import httpx
 from pypdf import PdfReader
@@ -118,7 +116,7 @@ def call_glm(system_prompt: str, user_prompt: str, api_key: str) -> str:
 def call_gemini(system_prompt: str, user_prompt: str, api_key: str) -> str:
     """Call Google Gemini API."""
     resp = httpx.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
         headers={"x-goog-api-key": api_key},
         json={
             "system_instruction": {"parts": [{"text": system_prompt}]},
@@ -195,7 +193,7 @@ def evaluate_response(raw_response: str, source_text: str, categories: list[str]
     if wrong_cat:
         print(f"[WARN] {len(wrong_cat)} highlights with invalid categories: {set(h.get('category') for h in wrong_cat)}")
     else:
-        print(f"[OK] All highlights use valid categories")
+        print("[OK] All highlights use valid categories")
 
     # 5. Page range check
     pages = [h.get("page", 0) for h in highlights]

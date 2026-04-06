@@ -1,5 +1,4 @@
 """Test data fixtures for Paperstack backend tests."""
-from datetime import datetime, timezone
 import uuid
 
 from app.db.models import Pdf, Tag, AnnotationSet, Annotation, Collection, Citation, Share, PdfCollection

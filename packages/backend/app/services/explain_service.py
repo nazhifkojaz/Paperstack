@@ -17,14 +17,13 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Pdf, PdfIndexStatus, User
+from app.db.models import Pdf, User
 from app.services.chat_service import ChatService
 from app.services.embedding_service import EmbeddingService
-from app.services.exceptions import EmbeddingError, IndexingError
 from app.services.indexing_service import IndexingService, get_indexing_service
 from app.services.llm_service import LLMService
 from app.services.pdf_download_service import pdf_download_service
-from app.services.vector_search_service import SearchResult, vector_search_service
+from app.services.vector_search_service import vector_search_service
 
 
 logger = logging.getLogger(__name__)

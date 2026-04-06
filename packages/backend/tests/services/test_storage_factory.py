@@ -17,15 +17,8 @@ class TestGetStorageBackend:
         self, db_session: AsyncSession, test_user: User
     ) -> None:
         """Returns GitHubStorageBackend when storage_provider is 'github'."""
+        # test_user fixture already has a github OAuth account
         test_user.storage_provider = "github"
-        oauth = UserOAuthAccount(
-            user_id=test_user.id,
-            provider="github",
-            provider_user_id="123456",
-            encrypted_access_token=security.encrypt_token("gh_token"),
-            extra_data={"github_login": "testuser"},
-        )
-        db_session.add(oauth)
         await db_session.commit()
 
         backend = await get_storage_backend(test_user, db_session)
@@ -39,7 +32,7 @@ class TestGetStorageBackend:
         oauth = UserOAuthAccount(
             user_id=test_user.id,
             provider="google",
-            provider_user_id="google-sub-123",
+            provider_user_id="google-sub-unique-456",
             encrypted_access_token=security.encrypt_token("google_token"),
         )
         db_session.add(oauth)
@@ -52,13 +45,13 @@ class TestGetStorageBackend:
         self, db_session: AsyncSession, test_user: User
     ) -> None:
         """Raises 400 when no OAuth account exists for the storage provider."""
-        test_user.storage_provider = "github"
-        # No UserOAuthAccount created
+        test_user.storage_provider = "google"
+        # test_user fixture only has github OAuth, not google
 
         with pytest.raises(HTTPException) as exc_info:
             await get_storage_backend(test_user, db_session)
         assert exc_info.value.status_code == 400
-        assert "No github account linked" in str(exc_info.value.detail)
+        assert "No google account linked" in str(exc_info.value.detail)
 
     async def test_errors_on_unknown_provider(
         self, db_session: AsyncSession, test_user: User
@@ -68,7 +61,7 @@ class TestGetStorageBackend:
         oauth = UserOAuthAccount(
             user_id=test_user.id,
             provider="dropbox",
-            provider_user_id="dropbox-123",
+            provider_user_id="dropbox-unique-789",
             encrypted_access_token=security.encrypt_token("db_token"),
         )
         db_session.add(oauth)
@@ -84,14 +77,17 @@ class TestGetStorageBackend:
     ) -> None:
         """Raises 400 when GitHub OAuth account is missing github_login in extra_data."""
         test_user.storage_provider = "github"
-        oauth = UserOAuthAccount(
-            user_id=test_user.id,
-            provider="github",
-            provider_user_id="123456",
-            encrypted_access_token=security.encrypt_token("gh_token"),
-            extra_data={},  # Missing github_login
+        # Update the existing github OAuth account to remove github_login
+        from sqlalchemy import select, update
+
+        await db_session.execute(
+            update(UserOAuthAccount)
+            .where(
+                UserOAuthAccount.user_id == test_user.id,
+                UserOAuthAccount.provider == "github",
+            )
+            .values(extra_data={})
         )
-        db_session.add(oauth)
         await db_session.commit()
 
         with pytest.raises(HTTPException) as exc_info:

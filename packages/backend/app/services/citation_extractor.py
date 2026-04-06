@@ -369,7 +369,7 @@ async def search_semantic_scholar(title: str, authors: Optional[str] = None) -> 
             title,
         )
         return None
-    except Exception as exc:
+    except Exception:
         logger.exception(
             "Unexpected error searching Semantic Scholar for title '%s'",
             title,

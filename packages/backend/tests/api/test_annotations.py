@@ -1,6 +1,5 @@
 """Tests for annotation routes."""
 import uuid
-import pytest
 from httpx import AsyncClient
 from tests.fixtures import create_test_pdf, create_test_annotation_set, create_test_annotation
 
@@ -125,7 +124,7 @@ class TestDeleteAnnotationSet:
 
         pdf = await create_test_pdf(db_session, user_id=test_user.id, title="Test PDF", filename="test.pdf", github_sha="abc")
         ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id, name="To Delete")
-        ann = await create_test_annotation(db_session, set_id=ann_set.id, page_number=1)
+        await create_test_annotation(db_session, set_id=ann_set.id, page_number=1)
         await db_session.commit()
 
         response = await client.delete(
