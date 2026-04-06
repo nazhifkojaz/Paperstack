@@ -30,7 +30,7 @@ from app.services.exceptions import (
 )
 from app.services.pdf_download_service import PdfDownloadService, PdfSource
 from app.services.storage.factory import get_storage_backend
-from app.services.text_extractor import extract_text_with_pages
+from app.services.text_extractor import extract_text_with_pages, validate_extraction
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ class IndexResult:
         error_message: Error message (if failed)
         indexed_at: Timestamp when indexing completed (if indexed)
     """
+
     status: str
     chunk_count: Optional[int]
     error_message: Optional[str]
@@ -184,10 +185,29 @@ class IndexingService:
 
             # 2. Extract text
             with open(tmp_path, "rb") as f:
-                text_with_pages, _total_pages, _pages_analyzed = extract_text_with_pages(f)
+                text_with_pages, _total_pages, _pages_analyzed = (
+                    extract_text_with_pages(f)
+                )
 
             if not text_with_pages.strip():
-                raise TextExtractionError("PDF has no extractable text (may be image-only).")
+                raise TextExtractionError(
+                    "PDF has no extractable text (may be image-only)."
+                )
+
+            # 2.5. Validate extraction quality
+            quality = validate_extraction(text_with_pages)
+            if not quality.is_usable:
+                raise TextExtractionError(
+                    f"Extracted text quality too low (score: {quality.score:.1f}). "
+                    f"Issues: {'; '.join(quality.warnings)}. "
+                    f"This PDF may be image-only or have an unsupported layout."
+                )
+            if quality.warnings:
+                logger.warning(
+                    "Extraction quality warnings for PDF %s: %s",
+                    pdf_row.id,
+                    quality.warnings,
+                )
 
             # 3. Chunk text
             chunks = chunk_text_with_pages(text_with_pages)
@@ -207,14 +227,16 @@ class IndexingService:
             )
 
             for chunk, embedding in zip(chunks, embeddings):
-                db.add(PdfChunk(
-                    pdf_id=pdf_row.id,
-                    user_id=user.id,
-                    chunk_index=chunk.chunk_index,
-                    page_number=chunk.page_number,
-                    content=chunk.content.replace('\x00', ''),
-                    embedding=embedding,
-                ))
+                db.add(
+                    PdfChunk(
+                        pdf_id=pdf_row.id,
+                        user_id=user.id,
+                        chunk_index=chunk.chunk_index,
+                        page_number=chunk.page_number,
+                        content=chunk.content.replace("\x00", ""),
+                        embedding=embedding,
+                    )
+                )
 
             # 6. Update status to indexed
             now = datetime.now(timezone.utc)
@@ -285,7 +307,11 @@ class IndexingService:
         """
         try:
             # Case 1: URL-linked PDF (no stored content)
-            if pdf_row.source_url and not pdf_row.github_sha and not pdf_row.drive_file_id:
+            if (
+                pdf_row.source_url
+                and not pdf_row.github_sha
+                and not pdf_row.drive_file_id
+            ):
                 result = await self.download_service.download_to_tempfile(
                     source=PdfSource.EXTERNAL_URL,
                     external_url=pdf_row.source_url,
