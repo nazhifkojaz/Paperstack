@@ -1,4 +1,5 @@
 """Tests for the storage backend factory."""
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -78,7 +79,7 @@ class TestGetStorageBackend:
         """Raises 400 when GitHub OAuth account is missing github_login in extra_data."""
         test_user.storage_provider = "github"
         # Update the existing github OAuth account to remove github_login
-        from sqlalchemy import select, update
+        from sqlalchemy import update
 
         await db_session.execute(
             update(UserOAuthAccount)
