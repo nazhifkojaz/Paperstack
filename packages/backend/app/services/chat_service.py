@@ -1,4 +1,5 @@
 """Chat service: builds RAG context and orchestrates streaming LLM calls."""
+
 from typing import AsyncIterator
 
 from app.services.llm_service import LLMService, STREAM_PROVIDERS
@@ -44,8 +45,14 @@ class ChatService:
         """Format retrieved chunks into a context string for the LLM prompt.
 
         Each chunk dict must have 'page_number' and 'content' keys.
+        Optional 'section_title' key adds section context to the header.
         """
-        parts = [f"[Page {c['page_number']}]\n{c['content']}" for c in chunks]
+        parts = []
+        for c in chunks:
+            header = f"[Page {c['page_number']}]"
+            if c.get("section_title"):
+                header = f"[Page {c['page_number']} · {c['section_title']}]"
+            parts.append(f"{header}\n{c['content']}")
         return "\n\n---\n\n".join(parts)
 
     def build_messages(
@@ -67,7 +74,11 @@ class ChatService:
             user_message: the current user question
             base_prompt: override the default SYSTEM_PROMPT (e.g. COLLECTION_SYSTEM_PROMPT)
         """
-        system = (base_prompt or SYSTEM_PROMPT) + "\n\n## Context from the papers:\n\n" + context
+        system = (
+            (base_prompt or SYSTEM_PROMPT)
+            + "\n\n## Context from the papers:\n\n"
+            + context
+        )
         msgs: list[dict] = []
         # Cap history to last CONTEXT_WINDOW messages
         for h in history[-CONTEXT_WINDOW:]:

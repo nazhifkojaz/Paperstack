@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Paperstack"
     VERSION: str = "0.1.0"
@@ -12,14 +13,14 @@ class Settings(BaseSettings):
     @property
     def effective_database_url(self) -> str:
         return self.DEV_DATABASE_URL or self.DATABASE_URL
-    
+
     # Security
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_EXPIRE_DAYS: int = 30
     ENCRYPTION_KEY: str
-    
+
     # GitHub OAuth
     GITHUB_CLIENT_ID: str
     GITHUB_CLIENT_SECRET: str
@@ -58,12 +59,19 @@ class Settings(BaseSettings):
     RATE_LIMIT_SEMANTIC_SEARCH: str = "10/minute"
     RATE_LIMIT_CHAT_EXPLAIN: str = "10/minute"
 
+    # Chunking
+    CHUNK_SIZE: int = 800
+    CHUNK_OVERLAP: int = 150
+
     # HTTP Client Connection Pooling
     HTTP_CONNECTION_LIMIT: int = 100  # Max concurrent connections
     HTTP_TIMEOUT_CONNECT: float = 10.0  # Connection timeout in seconds
     HTTP_TIMEOUT_READ: float = 120.0  # Read timeout in seconds (for LLM streaming)
     HTTP_MAX_KEEPALIVE: int = 20  # Max idle connections to keep alive
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", case_sensitive=True, extra="ignore"
+    )
+
 
 settings = Settings()
