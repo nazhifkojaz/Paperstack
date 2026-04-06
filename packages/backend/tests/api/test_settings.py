@@ -65,19 +65,22 @@ class TestGetConnectedAccounts:
         self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ) -> None:
         """Each account includes a human-readable display_name."""
-        oauth = UserOAuthAccount(
-            user_id=test_user.id,
-            provider="github",
-            provider_user_id="123456",
-            encrypted_access_token=security.encrypt_token("gh_token"),
-        )
-        db_session.add(oauth)
+        for provider, uid in [("github", "123456"), ("google", "google-sub-123")]:
+            oauth = UserOAuthAccount(
+                user_id=test_user.id,
+                provider=provider,
+                provider_user_id=uid,
+                encrypted_access_token=security.encrypt_token(f"{provider}_token"),
+            )
+            db_session.add(oauth)
         await db_session.commit()
 
         resp = await client.get("/v1/settings/connected-accounts", headers=auth_headers)
         accounts = resp.json()["accounts"]
         github = next(a for a in accounts if a["provider"] == "github")
+        google = next(a for a in accounts if a["provider"] == "google")
         assert github["display_name"] == "GitHub"
+        assert google["display_name"] == "Google Drive"
 
     async def test_requires_auth(self, client: AsyncClient) -> None:
         """Returns 401 without authentication."""
@@ -155,3 +158,31 @@ class TestUpdateStorageProvider:
             json={"storage_provider": "github"},
         )
         assert resp.status_code == 401
+
+    async def test_switch_between_linked_providers(
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
+    ) -> None:
+        """Switches from github to google when both are linked."""
+        for provider, uid in [("github", "123456"), ("google", "google-sub-123")]:
+            oauth = UserOAuthAccount(
+                user_id=test_user.id,
+                provider=provider,
+                provider_user_id=uid,
+                encrypted_access_token=security.encrypt_token(f"{provider}_token"),
+            )
+            db_session.add(oauth)
+        await db_session.commit()
+
+        # Default is github, switch to google
+        assert test_user.storage_provider == "github"
+        resp = await client.patch(
+            "/v1/settings/storage-provider",
+            json={"storage_provider": "google"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["storage_provider"] == "google"
+
+        # Verify DB was updated
+        await db_session.refresh(test_user)
+        assert test_user.storage_provider == "google"
