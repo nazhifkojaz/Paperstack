@@ -1,5 +1,4 @@
-import { render, screen } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { render, screen } from '@/test/test-utils'
 import { AppLayout } from './AppLayout'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -15,22 +14,14 @@ describe('AppLayout', () => {
   })
 
   test('renders main content area', () => {
-    render(
-      <BrowserRouter>
-        <AppLayout />
-      </BrowserRouter>
-    )
+    render(<AppLayout />, { router: true })
 
     const main = screen.getByRole('main')
     expect(main).toBeInTheDocument()
   })
 
   test('renders top bar', () => {
-    render(
-      <BrowserRouter>
-        <AppLayout />
-      </BrowserRouter>
-    )
+    render(<AppLayout />, { router: true })
 
     const header = screen.getByRole('banner')
     expect(header).toBeInTheDocument()

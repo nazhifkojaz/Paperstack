@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
-import { usePdfs, useDeletePdf, type Pdf } from '@/api/pdfs';
+import { usePdfs, useDeletePdf, useBulkDeletePdfs, type Pdf } from '@/api/pdfs';
 import { useLibraryStore } from '@/stores/libraryStore';
-import { useSemanticSearch, type SemanticSearchResult } from '@/api/chat';
+import { useSemanticSearch } from '@/api/chat';
 import { useValidateCitations, useBulkExportCitations } from '@/api/citations';
 import { AddPdfModal } from './AddPdfModal';
 import { EditPdfDialog } from './EditPdfDialog';
@@ -11,10 +11,11 @@ import { PdfGrid } from './PdfGrid';
 import { PdfList } from './PdfList';
 import { FloatingActionBar } from './FloatingActionBar';
 import { ExportDialog } from './ExportDialog';
+import { DeepSearchResults } from './DeepSearchResults';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui/button';
-import { Plus, Loader2, SearchX } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
-import { useNavigate } from 'react-router-dom';
 
 export function LibraryPage() {
     const {
@@ -51,6 +52,7 @@ export function LibraryPage() {
     });
 
     const deletePdf = useDeletePdf();
+    const bulkDeletePdfs = useBulkDeletePdfs();
     const validateCitations = useValidateCitations();
     const bulkExportCitations = useBulkExportCitations();
 
@@ -64,6 +66,10 @@ export function LibraryPage() {
     const [addPdfOpen, setAddPdfOpen] = useState(false);
     const [editPdf, setEditPdf] = useState<Pdf | null>(null);
     const [manageProjectsPdf, setManageProjectsPdf] = useState<Pdf | null>(null);
+
+    // Delete confirmation state
+    const [deleteConfirmPdf, setDeleteConfirmPdf] = useState<Pdf | null>(null);
+    const [deleteBulkConfirm, setDeleteBulkConfirm] = useState(false);
 
     // Citation export state
     const [showExportDialog, setShowExportDialog] = useState(false);
@@ -84,16 +90,48 @@ export function LibraryPage() {
         prevFilters.current = filters;
     }, [selectedProjectId, searchQuery, sortOption, isSelectionMode, clearSelection]);
 
-    const handleDelete = async (id: string) => {
-        if (!window.confirm('Delete this PDF? This cannot be undone.')) return;
+    // Delete handlers
+    const handleDeleteClick = (id: string) => {
+        const pdf = pdfs.find((p) => p.id === id);
+        if (pdf) setDeleteConfirmPdf(pdf);
+    };
+
+    const handleDeleteConfirm = async () => {
+        if (!deleteConfirmPdf) return;
+
         try {
-            await toast.promise(deletePdf.mutateAsync(id), {
+            await toast.promise(deletePdf.mutateAsync(deleteConfirmPdf.id), {
                 loading: 'Deleting PDF...',
                 success: 'PDF deleted',
                 error: 'Failed to delete PDF',
             });
         } catch {
             // error shown by toast
+        } finally {
+            setDeleteConfirmPdf(null);
+        }
+    };
+
+    const handleBulkDeleteClick = () => {
+        setDeleteBulkConfirm(true);
+    };
+
+    const handleBulkDeleteConfirm = async () => {
+        const ids = Array.from(selectedPdfIds);
+        if (ids.length === 0) return;
+
+        try {
+            await toast.promise(bulkDeletePdfs.mutateAsync(ids), {
+                loading: `Deleting ${ids.length} PDF${ids.length > 1 ? 's' : ''}...`,
+                success: `${ids.length} PDF${ids.length > 1 ? 's' : ''} deleted`,
+                error: 'Failed to delete PDFs',
+            });
+            clearSelection();
+            setSelectionMode(false);
+        } catch {
+            // error shown by toast
+        } finally {
+            setDeleteBulkConfirm(false);
         }
     };
 
@@ -104,18 +142,22 @@ export function LibraryPage() {
         const pdfIds = Array.from(selectedPdfIds);
         if (pdfIds.length === 0) return;
 
-        const result = await validateCitations.mutateAsync(pdfIds);
-        const missingPdfs = pdfs.filter(pdf => result.missing.includes(pdf.id));
-        const hasCitationCount = result.has_citation.length;
+        try {
+            const result = await validateCitations.mutateAsync(pdfIds);
+            const missingPdfs = pdfs.filter(pdf => result.missing.includes(pdf.id));
+            const hasCitationCount = result.has_citation.length;
 
-        if (missingPdfs.length === 0) {
-            await bulkExportCitations.mutateAsync({ pdf_ids: pdfIds, format: 'bibtex' });
-            setSelectionMode(false);
-            return;
+            if (missingPdfs.length === 0) {
+                await bulkExportCitations.mutateAsync({ pdf_ids: pdfIds, format: 'bibtex' });
+                setSelectionMode(false);
+                return;
+            }
+
+            setValidationResult({ hasCitationCount, missingPdfs });
+            setShowExportDialog(true);
+        } catch {
+            toast.error('Export failed. Please try again.');
         }
-
-        setValidationResult({ hasCitationCount, missingPdfs });
-        setShowExportDialog(true);
     };
 
     const handleExportConfirm = async () => {
@@ -124,12 +166,16 @@ export function LibraryPage() {
             .filter(pdf => !validationResult.missingPdfs.some(m => m.id === pdf.id))
             .map(pdf => pdf.id);
 
-        if (pdfsWithCitations.length > 0) {
-            await bulkExportCitations.mutateAsync({ pdf_ids: pdfsWithCitations, format: 'bibtex' });
+        try {
+            if (pdfsWithCitations.length > 0) {
+                await bulkExportCitations.mutateAsync({ pdf_ids: pdfsWithCitations, format: 'bibtex' });
+            }
+            setShowExportDialog(false);
+            setValidationResult(null);
+            setSelectionMode(false);
+        } catch {
+            toast.error('Export failed. Please try again.');
         }
-        setShowExportDialog(false);
-        setValidationResult(null);
-        setSelectionMode(false);
     };
 
     return (
@@ -170,7 +216,7 @@ export function LibraryPage() {
                                     isLoading={isLoading}
                                     searchQuery={searchQuery}
                                     onEdit={setEditPdf}
-                                    onDelete={handleDelete}
+                                    onDelete={handleDeleteClick}
                                     onManageProjects={setManageProjectsPdf}
                                 />
                             ) : (
@@ -179,7 +225,7 @@ export function LibraryPage() {
                                     isLoading={isLoading}
                                     searchQuery={searchQuery}
                                     onEdit={setEditPdf}
-                                    onDelete={handleDelete}
+                                    onDelete={handleDeleteClick}
                                     onManageProjects={setManageProjectsPdf}
                                 />
                             )}
@@ -192,6 +238,7 @@ export function LibraryPage() {
             <AddPdfModal open={addPdfOpen} onOpenChange={setAddPdfOpen} />
 
             <EditPdfDialog
+                key={editPdf?.id ?? 'none'}
                 pdf={editPdf}
                 open={!!editPdf}
                 onOpenChange={(open) => { if (!open) setEditPdf(null); }}
@@ -207,6 +254,7 @@ export function LibraryPage() {
                 <FloatingActionBar
                     selectedCount={selectedPdfIds.size}
                     onExport={handleExportClick}
+                    onDelete={handleBulkDeleteClick}
                     onCancel={() => setSelectionMode(false)}
                 />
             )}
@@ -223,60 +271,39 @@ export function LibraryPage() {
                     }}
                 />
             )}
-        </div>
-    );
-}
 
-// ── Deep Search Results ───────────────────────────────────────────────────────
+            {/* Delete confirmation dialogs */}
+            <ConfirmDialog
+                open={!!deleteConfirmPdf}
+                title="Delete PDF?"
+                description={
+                    <span>
+                        <strong>&ldquo;{deleteConfirmPdf?.title}&rdquo;</strong> will be permanently deleted.
+                        This action cannot be undone.
+                    </span>
+                }
+                confirmLabel="Delete"
+                variant="destructive"
+                isLoading={deletePdf.isPending}
+                onConfirm={handleDeleteConfirm}
+                onCancel={() => setDeleteConfirmPdf(null)}
+            />
 
-function DeepSearchResults({
-    results,
-    isLoading,
-    query,
-}: {
-    results: SemanticSearchResult[];
-    isLoading: boolean;
-    query: string;
-}) {
-    const navigate = useNavigate();
-
-    if (isLoading) {
-        return (
-            <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                <span className="text-sm">Searching…</span>
-            </div>
-        );
-    }
-
-    if (results.length === 0) {
-        return (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center text-muted-foreground">
-                <SearchX className="h-8 w-8 opacity-40" />
-                <p className="text-sm">No indexed PDFs match <strong>"{query}"</strong>.</p>
-                <p className="text-xs">Open a PDF and send a chat message to index it first.</p>
-            </div>
-        );
-    }
-
-    return (
-        <div className="mt-4 flex flex-col gap-3">
-            <p className="text-xs text-muted-foreground">{results.length} result{results.length !== 1 ? 's' : ''} for "{query}"</p>
-            {results.map((r) => (
-                <button
-                    key={`${r.pdf_id}-${r.page_number}`}
-                    onClick={() => navigate(`/viewer/${r.pdf_id}`)}
-                    className="w-full text-left rounded-lg border bg-card p-4 hover:bg-muted/50 transition-colors"
-                >
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                        <span className="font-medium text-sm line-clamp-1">{r.pdf_title}</span>
-                        <span className="text-xs text-muted-foreground shrink-0">
-                            {Math.round(r.score * 100)}% match · p.{r.page_number}
-                        </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground line-clamp-2">{r.snippet}</p>
-                </button>
-            ))}
+            <ConfirmDialog
+                open={deleteBulkConfirm}
+                title={`Delete ${selectedPdfIds.size} PDF${selectedPdfIds.size > 1 ? 's' : ''}?`}
+                description={
+                    <span>
+                        {selectedPdfIds.size} PDF{selectedPdfIds.size > 1 ? 's' : ''} will be permanently deleted.
+                        This action cannot be undone.
+                    </span>
+                }
+                confirmLabel="Delete All"
+                variant="destructive"
+                isLoading={bulkDeletePdfs.isPending}
+                onConfirm={handleBulkDeleteConfirm}
+                onCancel={() => setDeleteBulkConfirm(false)}
+            />
         </div>
     );
 }

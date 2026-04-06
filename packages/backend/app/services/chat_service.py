@@ -1,7 +1,7 @@
 """Chat service: builds RAG context and orchestrates streaming LLM calls."""
 from typing import AsyncIterator
 
-from app.services.llm_service import llm_service, STREAM_PROVIDERS
+from app.services.llm_service import LLMService, STREAM_PROVIDERS
 
 SYSTEM_PROMPT = (
     "You are a research assistant helping a user understand academic papers. "
@@ -27,6 +27,19 @@ CONTEXT_WINDOW = 10  # maximum number of past messages sent as conversation hist
 
 
 class ChatService:
+    """Chat service for building RAG context and streaming LLM replies.
+
+    Accepts an optional LLMService instance for dependency injection.
+    """
+
+    def __init__(self, llm_service: LLMService | None = None):
+        """Initialize chat service with optional LLM service.
+
+        Args:
+            llm_service: LLMService instance for streaming. If None, uses default.
+        """
+        self._llm_service = llm_service or LLMService()
+
     def build_context(self, chunks: list[dict]) -> str:
         """Format retrieved chunks into a context string for the LLM prompt.
 
@@ -85,9 +98,10 @@ class ChatService:
             raise ValueError(
                 f"Unknown provider '{provider}'. Valid: {list(STREAM_PROVIDERS)}"
             )
-        stream_method = getattr(llm_service, method_name)
+        stream_method = getattr(self._llm_service, method_name)
         async for token in stream_method(system_prompt, messages, api_key):
             yield token
 
 
+# Default singleton for backward compatibility (will be replaced with DI)
 chat_service = ChatService()

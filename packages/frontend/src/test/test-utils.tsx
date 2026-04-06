@@ -27,11 +27,6 @@ function createTestQueryClient() {
         retry: false,
       },
     },
-    logger: {
-      log: console.log,
-      warn: console.warn,
-      error: () => {}, // Suppress error logging in tests
-    },
   })
 }
 
@@ -78,9 +73,6 @@ function renderWithProviders(
 export function resetStore<T extends { getState: () => unknown; setState: (state: Partial<T>) => void }>(
   store: T
 ) {
-  const initialState = store.getState() as Partial<T>
-  // Get initial state by creating a new store instance
-  // This assumes stores export a way to get initial state
   store.setState({} as Partial<T>)
 }
 
@@ -91,11 +83,13 @@ export function resetStore<T extends { getState: () => unknown; setState: (state
 export function createMockPdf(overrides = {}) {
   return {
     id: 'pdf-1',
+    user_id: 'user-1',
     title: 'Test PDF',
     filename: 'test.pdf',
     file_size: 12345,
     page_count: 10,
     uploaded_at: '2026-03-09T00:00:00Z',
+    updated_at: '2026-03-09T00:00:00Z',
     doi: null,
     isbn: null,
     ...overrides,
@@ -147,10 +141,10 @@ export function createMockCitation(overrides = {}) {
 export function createMockUser(overrides = {}) {
   return {
     id: 'user-1',
-    github_id: 123456,
-    github_login: 'testuser',
+    email: 'test@example.com',
     display_name: 'Test User',
     avatar_url: 'https://example.com/avatar.png',
+    storage_provider: 'github' as const,
     ...overrides,
   }
 }

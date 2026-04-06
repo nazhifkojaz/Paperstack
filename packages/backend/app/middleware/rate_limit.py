@@ -4,7 +4,6 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from app.core.config import settings
 
 
 def get_identifier(request: Request) -> str:
@@ -46,7 +45,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
                 limit_item, *view_rate_limit[1]
             )
             reset_in = 1 + window_stats[0]
-            remaining = window_stats[1]
+            remaining = window_stats[1]  # noqa: F841
         except Exception:
             pass
 

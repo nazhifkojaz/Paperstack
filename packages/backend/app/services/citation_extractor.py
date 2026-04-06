@@ -7,11 +7,15 @@ Pipeline:
 3. lookup_doi_crossref() — fetch BibTeX + CSL-JSON from CrossRef via DOI
 4. auto_extract_citation() — orchestrate the full pipeline and return a dict
 """
+import logging
 import re
 from io import BytesIO
 from typing import Optional
+
 import httpx
 from pypdf import PdfReader
+
+logger = logging.getLogger(__name__)
 
 
 # ────────────────────────────────────────────────────────────
@@ -355,7 +359,21 @@ async def search_semantic_scholar(title: str, authors: Optional[str] = None) -> 
             "authors": s2_authors_str,
             "year": paper.get("year"),
         }
+    except httpx.TimeoutException as exc:
+        logger.warning("Semantic Scholar timeout for title '%s': %s", title, exc)
+        return None
+    except httpx.HTTPStatusError as exc:
+        logger.debug(
+            "Semantic Scholar returned HTTP %s for title '%s'",
+            exc.response.status_code,
+            title,
+        )
+        return None
     except Exception:
+        logger.exception(
+            "Unexpected error searching Semantic Scholar for title '%s'",
+            title,
+        )
         return None
 
 
@@ -386,8 +404,19 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
                 "csl_json": crossref.get("csl_json"),
                 "source": "crossref",
             }
-        except (ValueError, httpx.HTTPStatusError):
-            pass  # Fall through to next strategy
+        except ValueError as exc:
+            logger.debug("DOI validation failed for DOI '%s': %s", doi, exc)
+            # Fall through to next strategy
+        except httpx.TimeoutException as exc:
+            logger.warning("CrossRef timeout for DOI '%s': %s", doi, exc)
+            # Fall through to next strategy
+        except httpx.HTTPStatusError as exc:
+            logger.debug(
+                "CrossRef lookup failed for DOI '%s': HTTP %s",
+                doi,
+                exc.response.status_code,
+            )
+            # Fall through to next strategy
 
     # 3. No DOI — try Semantic Scholar title search
     if meta.get("title"):
@@ -407,8 +436,21 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
                         "csl_json": crossref.get("csl_json"),
                         "source": "semantic_scholar+crossref",
                     }
-                except (ValueError, httpx.HTTPStatusError):
-                    pass  # CrossRef lookup failed, use S2 data directly
+                except ValueError as exc:
+                    logger.debug(
+                        "DOI validation failed for S2 DOI '%s': %s",
+                        s2_doi,
+                        exc,
+                    )
+                except httpx.TimeoutException as exc:
+                    logger.warning("CrossRef timeout for S2 DOI '%s': %s", s2_doi, exc)
+                except httpx.HTTPStatusError as exc:
+                    logger.debug(
+                        "CrossRef lookup failed for S2 DOI '%s': HTTP %s",
+                        s2_doi,
+                        exc.response.status_code,
+                    )
+                # CrossRef lookup failed, use S2 data directly
 
             # Return Semantic Scholar data with generated BibTeX
             s2_title = s2_result.get("title") or meta.get("title") or "Unknown Title"

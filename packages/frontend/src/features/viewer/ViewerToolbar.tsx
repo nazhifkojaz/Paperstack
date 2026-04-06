@@ -7,12 +7,14 @@ import { Button } from '@/components/ui/button';
 import {
     ZoomIn, ZoomOut, RotateCw,
     ChevronLeft, ChevronRight,
-    Maximize, Layout, Download, BookOpen, Square, PanelLeft, PanelLeftOpen, MessageSquare
+    Download, BookOpen, Square, PanelLeft, PanelLeftOpen, MessageSquare
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { useParams } from 'react-router-dom';
 import { apiFetchBlob } from '@/api/client';
+import { downloadBlob } from '@/lib/download-utils';
+import { toast } from 'sonner';
 
 export const ViewerToolbar = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
@@ -21,9 +23,9 @@ export const ViewerToolbar = () => {
         currentPage, totalPages, zoom,
         setCurrentPage, setZoom, setRotation
     } = usePdfViewerStore();
-    const { isPanelOpen, togglePanel } = useCitationStore();
-    const { isPanelOpen: isChatOpen, togglePanel: toggleChat } = useChatStore();
-    const { isDrawingRect, setIsDrawingRect, isSidebarOpen, toggleSidebar } = useAnnotationStore();
+    const { isCitationPanelOpen, toggleCitationPanel } = useCitationStore();
+    const { isChatPanelOpen, toggleChatPanel } = useChatStore();
+    const { isDrawingRect, setIsDrawingRect, isAnnotationSidebarOpen, toggleAnnotationSidebar } = useAnnotationStore();
 
     const handlePageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const page = parseInt(e.target.value, 10);
@@ -37,17 +39,10 @@ export const ViewerToolbar = () => {
         try {
             setIsExporting(true);
             const blob = await apiFetchBlob(`/pdfs/${pdfId}/export-annotated`);
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `annotated_${pdfId}.pdf`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
+            downloadBlob(blob, `annotated_${pdfId}.pdf`);
         } catch (error) {
             console.error('Failed to export annotated PDF:', error);
-            alert('Failed to export annotated PDF.');
+            toast.error('Failed to export annotated PDF.');
         } finally {
             setIsExporting(false);
         }
@@ -59,10 +54,10 @@ export const ViewerToolbar = () => {
             <div className="flex items-center space-x-2">
                 <Button
                     variant="ghost" size="icon"
-                    onClick={toggleSidebar}
-                    title={isSidebarOpen ? "Close sidebar (Ctrl+\\)" : "Open sidebar (Ctrl+\\)"}
+                    onClick={toggleAnnotationSidebar}
+                    title={isAnnotationSidebarOpen ? "Close sidebar (Ctrl+\\)" : "Open sidebar (Ctrl+\\)"}
                 >
-                    {isSidebarOpen ? <PanelLeft className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+                    {isAnnotationSidebarOpen ? <PanelLeft className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
                 </Button>
                 <Separator orientation="vertical" className="h-6" />
                 <Button
@@ -130,12 +125,14 @@ export const ViewerToolbar = () => {
                 >
                     <RotateCw className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="icon" title="Fit Page" disabled>
+                {/* TODO: Re-implement Fit Page functionality when ready */}
+                {/* <Button variant="ghost" size="icon" title="Fit Page" disabled>
                     <Maximize className="h-4 w-4" />
-                </Button>
-                <Button variant="ghost" size="icon" title="Fit Width" disabled>
+                </Button> */}
+                {/* TODO: Re-implement Fit Width functionality when ready */}
+                {/* <Button variant="ghost" size="icon" title="Fit Width" disabled>
                     <Layout className="h-4 w-4" />
-                </Button>
+                </Button> */}
                 <Button
                     variant={isDrawingRect ? 'default' : 'ghost'}
                     size="icon"
@@ -148,9 +145,9 @@ export const ViewerToolbar = () => {
                 <Separator orientation="vertical" className="h-6 mx-2" />
 
                 <Button
-                    variant={isPanelOpen ? 'default' : 'outline'}
+                    variant={isCitationPanelOpen ? 'default' : 'outline'}
                     size="sm"
-                    onClick={togglePanel}
+                    onClick={toggleCitationPanel}
                     className="gap-2 ml-2"
                     title="Citation"
                 >
@@ -159,9 +156,9 @@ export const ViewerToolbar = () => {
                 </Button>
 
                 <Button
-                    variant={isChatOpen ? 'default' : 'outline'}
+                    variant={isChatPanelOpen ? 'default' : 'outline'}
                     size="sm"
-                    onClick={toggleChat}
+                    onClick={toggleChatPanel}
                     className="gap-2 ml-2"
                     title="Chat with paper"
                 >

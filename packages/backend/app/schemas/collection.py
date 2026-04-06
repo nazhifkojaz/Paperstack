@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class CollectionBase(BaseModel):
     name: str
@@ -18,9 +18,7 @@ class CollectionUpdate(BaseModel):
 class CollectionResponse(CollectionBase):
     id: uuid.UUID
     user_id: uuid.UUID
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PdfCollectionCreate(BaseModel):
     pdf_id: uuid.UUID

@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 import { useAuthStore } from '@/stores/authStore';
-
-const API_URL = import.meta.env?.VITE_API_URL ?? '/v1';
+import { API_URL } from '@/lib/config';
 
 // --- Types ---
 
@@ -142,6 +141,7 @@ export async function streamChat(params: {
     onToken: (token: string) => void;
     onDone: (messageId: string, chunks: ContextChunk[]) => void;
     onError: (err: Error) => void;
+    signal?: AbortSignal;
 }): Promise<void> {
     const token = useAuthStore.getState().accessToken;
     const res = await fetch(
@@ -153,6 +153,7 @@ export async function streamChat(params: {
                 ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
             body: JSON.stringify({ content: params.message }),
+            signal: params.signal,
         },
     );
 
@@ -162,7 +163,12 @@ export async function streamChat(params: {
         return;
     }
 
-    const reader = res.body!.getReader();
+    if (!res.body) {
+        params.onError(new Error('No response body received from server'));
+        return;
+    }
+
+    const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
 

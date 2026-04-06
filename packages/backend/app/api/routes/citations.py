@@ -1,15 +1,13 @@
 from uuid import UUID, uuid4
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
 import httpx
 
 from app.api.deps import get_db, get_current_user
 from app.db.models import User, Pdf, Citation
-from app.schemas.citation import CitationResponse, CitationCreate, CitationUpdate, BulkExportRequest, LookupRequest, LookupResponse, ValidateRequest
+from app.schemas.citation import CitationResponse, CitationUpdate, BulkExportRequest, LookupRequest, LookupResponse, ValidateRequest
 from app.services import citation_extractor
-from app.services.github_repo import download_pdf_from_github
 
 router = APIRouter()
 global_router = APIRouter()
@@ -81,19 +79,18 @@ async def auto_extract_citation(
     if not pdf:
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    # 2. Download raw PDF bytes (GitHub for stored PDFs, direct URL for linked PDFs)
+    # 2. Download raw PDF bytes (storage backend for stored PDFs, direct URL for linked PDFs)
     try:
-        if pdf.source_url and not pdf.github_sha:
+        if pdf.source_url and not pdf.github_sha and not pdf.drive_file_id:
             async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
                 response = await client.get(pdf.source_url)
                 response.raise_for_status()
                 pdf_bytes = response.content
         else:
-            pdf_bytes = await download_pdf_from_github(
-                access_token=current_user.access_token,
-                github_login=current_user.github_login,
-                filepath=pdf.filename,
-            )
+            from app.services.storage.factory import get_storage_backend
+            backend = await get_storage_backend(current_user, db)
+            file_id = pdf.drive_file_id or pdf.github_sha
+            pdf_bytes = await backend.download_bytes(file_id, pdf.filename)
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=502, detail=f"Could not fetch linked PDF: {e}")
     except Exception as e:

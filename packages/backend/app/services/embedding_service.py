@@ -1,4 +1,6 @@
 """Embedding service: wraps Gemini gemini-embedding-001 for chunk and query embedding."""
+from typing import Optional
+
 import httpx
 
 from app.core.config import settings
@@ -8,9 +10,24 @@ _EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-emb
 
 
 class EmbeddingService:
+    """Service for text embedding using Gemini API.
+
+    Accepts an optional http_client parameter for dependency injection.
+    If not provided, creates a new client per request (legacy behavior).
+    """
+
     MODEL = "gemini-embedding-001"
     DIMENSIONS = 768
     BATCH_SIZE = 100  # Gemini batchEmbedContents limit
+
+    def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
+        """Initialize embedding service with optional shared HTTP client.
+
+        Args:
+            http_client: Shared httpx.AsyncClient for connection pooling.
+                        If None, creates new client per request (not recommended).
+        """
+        self._client = http_client
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Batch embed a list of texts using Gemini gemini-embedding-001.
@@ -36,8 +53,20 @@ class EmbeddingService:
                 }
                 for t in batch
             ]
+
+            client = self._client or httpx.AsyncClient(timeout=60.0)
+            should_close = self._client is None
+
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
+                if should_close:
+                    async with client:
+                        resp = await client.post(
+                            _EMBED_URL,
+                            headers={"x-goog-api-key": settings.GEMINI_EMBEDDING_KEY},
+                            json={"requests": requests_payload},
+                        )
+                        resp.raise_for_status()
+                else:
                     resp = await client.post(
                         _EMBED_URL,
                         headers={"x-goog-api-key": settings.GEMINI_EMBEDDING_KEY},
@@ -62,6 +91,3 @@ class EmbeddingService:
         """Embed a single query string. Returns a 768-dim float vector."""
         results = await self.embed_texts([text])
         return results[0]
-
-
-embedding_service = EmbeddingService()

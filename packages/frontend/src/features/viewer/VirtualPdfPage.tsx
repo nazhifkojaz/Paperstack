@@ -12,7 +12,7 @@ interface VirtualPdfPageProps {
 export const VirtualPdfPage = ({ pdfDocument, pageNumber, pdfId }: VirtualPdfPageProps) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [isVisible, setIsVisible] = useState(false);
-    const { setCurrentPage } = usePdfViewerStore();
+    const { setCurrentPage, getScaledDimensions } = usePdfViewerStore();
 
     useEffect(() => {
         const observer = new IntersectionObserver(
@@ -41,17 +41,28 @@ export const VirtualPdfPage = ({ pdfDocument, pageNumber, pdfId }: VirtualPdfPag
         return () => observer.disconnect();
     }, [pageNumber, setCurrentPage]);
 
+    // Get scaled dimensions from store, fall back to defaults
+    const scaledDimensions = getScaledDimensions(pageNumber);
+    const placeholderWidth = scaledDimensions?.width ?? 600;
+    const placeholderHeight = scaledDimensions?.height ?? 800;
+
     return (
         <div
             ref={containerRef}
             id={`pdf-page-${pageNumber}`}
-            className="w-full flex justify-center mb-6 min-h-[800px] transition-all"
+            className="w-full flex justify-center mb-6 transition-all"
         >
             <div className="relative">
                 {isVisible ? (
                     <PdfCanvas pdfDocument={pdfDocument} pageNumber={pageNumber} pdfId={pdfId} />
                 ) : (
-                    <div className="bg-white shadow-sm w-[600px] h-[800px] animate-pulse flex items-center justify-center border text-muted-foreground/30 text-2xl font-bold">
+                    <div
+                        className="bg-white shadow-sm animate-pulse flex items-center justify-center border text-muted-foreground/30 text-2xl font-bold"
+                        style={{
+                            width: `${placeholderWidth}px`,
+                            height: `${placeholderHeight}px`,
+                        }}
+                    >
                         {pageNumber}
                     </div>
                 )}

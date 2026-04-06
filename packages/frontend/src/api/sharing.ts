@@ -6,6 +6,7 @@ export interface Share {
     annotation_set_id: string;
     shared_by: string;
     shared_with: string | null;
+    shared_with_github_login?: string | null;
     share_token: string;
     permission: 'view' | 'comment';
     created_at: string;
@@ -74,7 +75,7 @@ export const useCreateShare = (setId: string) => {
         mutationFn: (data) =>
             apiFetch(`/annotation-sets/${setId}/share`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify(data),
             }),
         onSuccess: () => qc.invalidateQueries({ queryKey: ['shares', setId] }),

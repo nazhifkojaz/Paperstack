@@ -12,7 +12,10 @@ import { vi } from 'vitest'
 // =============================================================================
 
 class MockPDFPageProxy {
-  constructor(private pageNum: number) {}
+  pageNum: number
+  constructor(pageNum: number) {
+    this.pageNum = pageNum
+  }
 
   async getViewport(params: { scale: number; rotation?: number }) {
     return {
@@ -25,7 +28,7 @@ class MockPDFPageProxy {
     }
   }
 
-  async render(_params: { canvasContext: any; viewport: any }) {
+  async render(_params: { canvasContext: unknown; viewport: unknown }) {
     // Simulate async render operation
     return {
       promise: Promise.resolve(undefined),
@@ -88,20 +91,17 @@ class MockPDFDocumentProxy {
 }
 
 // =============================================================================
-// Mock Worker Transport
-// =============================================================================
-
-class MockPDFWorkerTransport {
-  destroy() {}
-}
-
-// =============================================================================
 // Mock getDocument Function
 // =============================================================================
 
-const getDocument = vi.fn((src: string | any) => {
+const getDocument = vi.fn((src: string | Record<string, unknown>) => {
   // Handle different src types
-  let loadingTask: any = {
+  const loadingTask: {
+    promise: Promise<MockPDFDocumentProxy>;
+    destroy: ReturnType<typeof vi.fn>;
+    onPassword: ReturnType<typeof vi.fn>;
+    onProgress: ReturnType<typeof vi.fn>;
+  } = {
     promise: Promise.resolve(new MockPDFDocumentProxy()),
     destroy: vi.fn(),
     onPassword: vi.fn(),
@@ -111,7 +111,7 @@ const getDocument = vi.fn((src: string | any) => {
   // Handle custom document properties
   if (typeof src === 'object' && src?.data) {
     // Buffer or array source
-    loadingTask.promise = Promise.resolve(new MockPDFDocumentProxy(src.numPages || 10))
+    loadingTask.promise = Promise.resolve(new MockPDFDocumentProxy((src.numPages as number) || 10))
   }
 
   return loadingTask
@@ -122,7 +122,7 @@ const getDocument = vi.fn((src: string | any) => {
 // =============================================================================
 
 class MockTextLayer {
-  constructor(_params: any) {}
+  constructor(_params: Record<string, unknown>) {}
   render = vi.fn(() => Promise.resolve())
   cancel = vi.fn()
 }
@@ -135,7 +135,7 @@ const TextLayer = MockTextLayer
 
 const GlobalWorkerOptions = {
   workerSrc: '',
-  workerPort: null as any,
+  workerPort: null as unknown,
 }
 
 // =============================================================================
@@ -146,7 +146,7 @@ export default {
   getDocument,
   TextLayer,
   GlobalWorkerOptions,
-  PDFDocumentProxy,
+  PDFDocumentProxy: MockPDFDocumentProxy,
   PDFPageProxy: MockPDFPageProxy,
 }
 

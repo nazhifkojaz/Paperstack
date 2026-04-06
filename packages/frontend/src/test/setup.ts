@@ -22,7 +22,7 @@ class MockIntersectionObserver implements IntersectionObserver {
   unobserve() {}
 }
 
-global.IntersectionObserver = MockIntersectionObserver as any
+global.IntersectionObserver = MockIntersectionObserver as unknown as typeof IntersectionObserver
 
 // =============================================================================
 // ResizeObserver Mock
@@ -35,7 +35,7 @@ class MockResizeObserver implements ResizeObserver {
   unobserve() {}
 }
 
-global.ResizeObserver = MockResizeObserver as any
+global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver
 
 // =============================================================================
 // Clipboard API Mock

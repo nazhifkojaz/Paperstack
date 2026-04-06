@@ -1,7 +1,8 @@
 import { usePdfContent, type Pdf } from '@/api/pdfs';
 
 export function usePdfSource(pdfMetadata: Pdf | undefined) {
-    const isLinked = !!pdfMetadata?.source_url && !pdfMetadata?.github_sha;
+    // A PDF is "linked" if it has a source_url but no stored content (GitHub sha or Drive file ID)
+    const isLinked = !!pdfMetadata?.source_url && !pdfMetadata?.github_sha && !pdfMetadata?.drive_file_id;
 
     // Only fetch content from backend for stored PDFs
     const contentQuery = usePdfContent(

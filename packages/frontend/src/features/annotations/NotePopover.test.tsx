@@ -10,15 +10,10 @@ vi.mock('@/api/annotations', () => ({
 
 describe('NotePopover', () => {
     const mockOnClose = vi.fn()
-    let mockContainerRef: React.RefObject<HTMLDivElement>
+    const mockContainerDims = { width: 800, height: 1000 }
 
     beforeEach(() => {
         vi.clearAllMocks()
-        // Create a container div with known dimensions
-        const div = document.createElement('div')
-        Object.defineProperty(div, 'offsetWidth', { value: 800 })
-        Object.defineProperty(div, 'offsetHeight', { value: 1000 })
-        mockContainerRef = { current: div }
     })
 
     it('renders existing note content in view mode', () => {
@@ -30,7 +25,7 @@ describe('NotePopover', () => {
         render(
             <NotePopover
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onClose={mockOnClose}
             />
         )
@@ -49,7 +44,7 @@ describe('NotePopover', () => {
         render(
             <NotePopover
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onClose={mockOnClose}
             />
         )
@@ -69,7 +64,7 @@ describe('NotePopover', () => {
         render(
             <NotePopover
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onClose={mockOnClose}
             />
         )
@@ -93,7 +88,7 @@ describe('NotePopover', () => {
         render(
             <NotePopover
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onClose={mockOnClose}
             />
         )
@@ -117,7 +112,7 @@ describe('NotePopover', () => {
         render(
             <NotePopover
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onClose={mockOnClose}
             />
         )
@@ -132,7 +127,7 @@ describe('NotePopover', () => {
         render(
             <NotePopover
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onClose={mockOnClose}
             />
         )

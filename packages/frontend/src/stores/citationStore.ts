@@ -1,15 +1,15 @@
 import { create } from 'zustand';
 
 interface CitationStore {
-    isPanelOpen: boolean;
+    isCitationPanelOpen: boolean;
     isEditing: boolean;
-    togglePanel: () => void;
+    toggleCitationPanel: () => void;
     setIsEditing: (isEditing: boolean) => void;
 }
 
 export const useCitationStore = create<CitationStore>((set) => ({
-    isPanelOpen: false,
+    isCitationPanelOpen: false,
     isEditing: false,
-    togglePanel: () => set((state) => ({ isPanelOpen: !state.isPanelOpen })),
+    toggleCitationPanel: () => set((state) => ({ isCitationPanelOpen: !state.isCitationPanelOpen })),
     setIsEditing: (isEditing) => set({ isEditing }),
 }));

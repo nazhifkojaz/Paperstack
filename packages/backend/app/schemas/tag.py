@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class TagBase(BaseModel):
     name: str
@@ -16,9 +16,7 @@ class TagUpdate(BaseModel):
 class TagResponse(TagBase):
     id: uuid.UUID
     user_id: uuid.UUID
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PdfTagCreate(BaseModel):
     tag_id: uuid.UUID

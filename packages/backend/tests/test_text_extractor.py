@@ -1,7 +1,6 @@
 import io
-import pytest
 from pypdf import PdfWriter
-from app.services.text_extractor import extract_text_with_pages, _truncate_text, is_text_pdf, MAX_TEXT_LENGTH
+from app.services.text_extractor import extract_text_with_pages, _truncate_text, is_text_pdf
 
 
 def _make_pdf(page_texts: list[str]) -> io.BytesIO:

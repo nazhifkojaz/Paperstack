@@ -95,9 +95,9 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
   const setSelectedSetId = useAnnotationStore((state) => state.setSelectedSetId)
 
   const handleAnnotationClick = (annotation: Annotation) => {
-    setSelectedAnnotationId(annotation.id)
     setSelectedSetId(setId)
     setCurrentPage(annotation.page_number)
+    setSelectedAnnotationId(annotation.id)  // Set last since setSelectedSetId resets it
   }
 
   const groupedAnnotations: AnnotationGroup[] = React.useMemo(() => {

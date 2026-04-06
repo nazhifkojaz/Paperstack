@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
 import { useLibraryStore } from '@/stores/libraryStore';
+import { getHostname } from '@/lib/url-utils';
 
 interface PdfListProps {
     pdfs: Pdf[];
@@ -84,7 +85,7 @@ export const PdfList = ({ pdfs, isLoading, onDelete, onEdit, onManageProjects, s
                                 <h4 className="font-medium text-sm truncate" title={pdf.title}>{pdf.title}</h4>
                                 <p className="text-xs text-muted-foreground truncate max-w-sm" title={pdf.source_url || pdf.filename}>
                                     {pdf.source_url
-                                        ? (() => { try { return new URL(pdf.source_url).hostname; } catch { return pdf.source_url; } })()
+                                        ? getHostname(pdf.source_url)
                                         : pdf.filename.split('/').pop() ?? pdf.filename
                                     }
                                 </p>

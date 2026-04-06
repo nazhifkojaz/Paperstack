@@ -91,7 +91,7 @@ export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProx
                     if (textLayerInstanceRef.current !== instance) return; // stale
                     const items: PdfTextItem[] = [];
                     for (const item of content.items) {
-                        if ('str' in item && (item as any).str) {
+                        if ('str' in item && typeof (item as Record<string, unknown>).str === 'string' && (item as Record<string, unknown>).str) {
                             items.push(item as unknown as PdfTextItem);
                         }
                     }
@@ -181,7 +181,7 @@ export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProx
             // Clear native selection — our SVG overlay provides the visual highlight
             window.getSelection()?.removeAllRanges();
         }, 10);
-    }, [pageProxy, zoom, rotation]);
+    }, [pageProxy, zoom]);
 
     const handleDismiss = useCallback(() => {
         setSelectionState(null);

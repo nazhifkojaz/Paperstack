@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { type Pdf, usePdfCollections } from '@/api/pdfs';
 import { useCollections, useAddPdfToCollection, useRemovePdfFromCollection } from '@/api/collections';
-import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
     Dialog,
@@ -25,7 +24,7 @@ export const ManageProjectsDialog = ({ pdf, open, onOpenChange }: ManageProjects
     const { data: membership, isLoading: isLoadingMembership } = usePdfCollections(pdf?.id ?? '');
     const addToCollection = useAddPdfToCollection();
     const removeFromCollection = useRemovePdfFromCollection();
-    const queryClient = useQueryClient();
+    // Mutations handle cache invalidation in their own onSuccess callbacks
 
     // Local checked state, initialised from server membership
     const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -41,7 +40,7 @@ export const ManageProjectsDialog = ({ pdf, open, onOpenChange }: ManageProjects
     const toggle = (id: string) => {
         setChecked((prev) => {
             const next = new Set(prev);
-            next.has(id) ? next.delete(id) : next.add(id);
+            if (next.has(id)) { next.delete(id); } else { next.add(id); }
             return next;
         });
     };
@@ -63,8 +62,7 @@ export const ManageProjectsDialog = ({ pdf, open, onOpenChange }: ManageProjects
                     removeFromCollection.mutateAsync({ pdfId: pdf.id, collectionId })
                 ),
             ]);
-            // Invalidate membership cache so next open is fresh
-            queryClient.invalidateQueries({ queryKey: ['pdfs', pdf.id, 'collections'] });
+            // Note: mutations already handle cache invalidation in their onSuccess callbacks
             toast.success('Projects updated');
             onOpenChange(false);
         } catch {

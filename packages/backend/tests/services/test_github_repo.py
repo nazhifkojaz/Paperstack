@@ -1,6 +1,6 @@
 """Tests for GitHub repo service."""
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from fastapi import HTTPException
 
 

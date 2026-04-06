@@ -1,14 +1,20 @@
 import io
+import logging
 from pypdf import PdfReader
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
 
 def extract_page_count(file_bytes: bytes) -> Optional[int]:
     """Extracts the number of pages from a PDF byte stream."""
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
-        return len(reader.pages)
-    except Exception as e:
-        print(f"Error extracting page count: {e}")
+        page_count = len(reader.pages)
+        logger.debug("Extracted page count: %d pages", page_count)
+        return page_count
+    except Exception as exc:
+        logger.warning("Failed to extract page count from PDF: %s", exc)
         return None
 
 def get_pdf_file_size(file_bytes: bytes) -> int:

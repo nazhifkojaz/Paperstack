@@ -11,7 +11,7 @@ import { Loader2, Sparkles, Copy, Check, Pencil, X } from 'lucide-react';
 
 export const CitationPanel = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
-    const { isPanelOpen } = useCitationStore();
+    const { isCitationPanelOpen } = useCitationStore();
     const { isEditing, setIsEditing } = useCitationStore();
 
     const { data: citation, isLoading } = useCitation(pdfId || '');
@@ -45,7 +45,7 @@ export const CitationPanel = () => {
         });
     };
 
-    if (!isPanelOpen) return null;
+    if (!isCitationPanelOpen) return null;
 
     return (
         <div className="w-80 h-full border-l bg-background flex flex-col shrink-0">

@@ -7,7 +7,8 @@ export interface Pdf {
     title: string;
     filename: string;
     source_url?: string | null;
-    github_sha?: string;
+    github_sha?: string | null;
+    drive_file_id?: string | null;
     file_size?: number;
     page_count?: number;
     doi?: string;
@@ -142,6 +143,29 @@ export const useDeletePdf = () => {
             await apiFetch(`/pdfs/${id}`, {
                 method: 'DELETE',
             });
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['pdfs'] });
+        },
+    });
+};
+
+/**
+ * Bulk delete PDFs by calling the single delete endpoint multiple times.
+ * This is a client-side convenience for batch operations.
+ */
+export const useBulkDeletePdfs = () => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (ids: string[]): Promise<void> => {
+            await Promise.all(
+                ids.map((id) =>
+                    apiFetch(`/pdfs/${id}`, {
+                        method: 'DELETE',
+                    })
+                )
+            );
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['pdfs'] });

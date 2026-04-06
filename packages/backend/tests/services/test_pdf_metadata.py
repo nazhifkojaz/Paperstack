@@ -1,5 +1,4 @@
 """Tests for PDF metadata service."""
-import pytest
 
 
 class TestExtractPageCount:

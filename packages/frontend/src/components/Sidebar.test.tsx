@@ -10,9 +10,9 @@ vi.mock('@/stores/libraryStore');
 vi.mock('@/api/collections');
 
 describe('Sidebar', () => {
-  const mockLibraryStore = useLibraryStore as ReturnType<typeof vi.mock>;
-  const mockUseCollections = useCollections as ReturnType<typeof vi.mock>;
-  const mockUseCreateCollection = useCreateCollection as ReturnType<typeof vi.mock>;
+  const mockLibraryStore = vi.mocked(useLibraryStore);
+  const mockUseCollections = vi.mocked(useCollections);
+  const mockUseCreateCollection = vi.mocked(useCreateCollection);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -23,8 +23,8 @@ describe('Sidebar', () => {
       resetFilters: vi.fn(),
     });
 
-    mockUseCollections.mockReturnValue({ data: [] });
-    mockUseCreateCollection.mockReturnValue({ mutateAsync: vi.fn(), isPending: false });
+    mockUseCollections.mockReturnValue({ data: [] } as unknown as ReturnType<typeof useCollections>);
+    mockUseCreateCollection.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as unknown as ReturnType<typeof useCreateCollection>);
   });
 
   it('renders the sidebar with All Documents button', () => {
@@ -51,7 +51,7 @@ describe('Sidebar', () => {
     const mockProjects = [
       { id: '1', name: 'Research Paper', user_id: 'u1', parent_id: null, position: 0, created_at: '' },
     ];
-    mockUseCollections.mockReturnValue({ data: mockProjects });
+    mockUseCollections.mockReturnValue({ data: mockProjects } as unknown as ReturnType<typeof useCollections>);
 
     render(
       <BrowserRouter>
@@ -63,7 +63,7 @@ describe('Sidebar', () => {
   });
 
   it('shows empty state when no projects exist', () => {
-    mockUseCollections.mockReturnValue({ data: [] });
+    mockUseCollections.mockReturnValue({ data: [] } as unknown as ReturnType<typeof useCollections>);
 
     render(
       <BrowserRouter>

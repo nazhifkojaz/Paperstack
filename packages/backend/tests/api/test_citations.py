@@ -1,6 +1,5 @@
 """Tests for citation routes."""
 import uuid
-import pytest
 from httpx import AsyncClient
 from tests.fixtures import create_test_pdf, create_test_citation
 

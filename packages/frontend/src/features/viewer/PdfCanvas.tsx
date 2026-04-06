@@ -17,7 +17,7 @@ export const PdfCanvas = ({ pdfDocument, pageNumber, pdfId, className = '' }: Pd
     const textLayerHandleRef = useRef<TextLayerHandle>(null);
     const { zoom, rotation } = usePdfViewerStore();
     const [pageProxy, setPageProxy] = useState<PDFPageProxy | null>(null);
-    const renderTaskRef = useRef<any>(null);
+    const renderTaskRef = useRef<{ cancel: () => void } | null>(null);
 
     // Load the requested page
     useEffect(() => {

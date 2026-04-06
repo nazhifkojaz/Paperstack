@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ShareCreate(BaseModel):
@@ -14,12 +14,11 @@ class ShareResponse(BaseModel):
     annotation_set_id: UUID
     shared_by: UUID
     shared_with: Optional[UUID] = None
+    shared_with_github_login: Optional[str] = None
     share_token: str
     permission: str
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AnnotationData(BaseModel):

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { type Pdf, useUpdatePdf } from '@/api/pdfs';
 import { toast } from 'sonner';
 import {
@@ -20,21 +20,12 @@ interface EditPdfDialogProps {
 }
 
 export const EditPdfDialog = ({ pdf, open, onOpenChange }: EditPdfDialogProps) => {
-    const [title, setTitle] = useState('');
-    const [doi, setDoi] = useState('');
-    const [isbn, setIsbn] = useState('');
-    const [sourceUrl, setSourceUrl] = useState('');
+    const [title, setTitle] = useState(() => pdf?.title ?? '');
+    const [doi, setDoi] = useState(() => pdf?.doi ?? '');
+    const [isbn, setIsbn] = useState(() => pdf?.isbn ?? '');
+    const [sourceUrl, setSourceUrl] = useState(() => pdf?.source_url ?? '');
 
     const updatePdf = useUpdatePdf();
-
-    useEffect(() => {
-        if (open && pdf) {
-            setTitle(pdf.title);
-            setDoi(pdf.doi ?? '');
-            setIsbn(pdf.isbn ?? '');
-            setSourceUrl(pdf.source_url ?? '');
-        }
-    }, [open, pdf]);
 
     const handleSave = async () => {
         if (!pdf || !title.trim()) return;

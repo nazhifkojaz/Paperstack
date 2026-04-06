@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
 from app.api.deps import get_db, get_current_user
-from app.core.security import encrypt_token, decrypt_token
+from app.core.security import encrypt_token
 from app.db.models import User, UserApiKey
 from app.schemas.api_key import ApiKeyCreate, ApiKeyResponse
 from app.middleware.rate_limit import limiter

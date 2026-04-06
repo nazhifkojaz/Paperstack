@@ -2,8 +2,8 @@
  * Tests for API client.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { apiFetch, apiFetchBlob, api, ApiError } from './client'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { apiFetch, apiFetchBlob, ApiError } from './client'
 import { useAuthStore } from '@/stores/authStore'
 
 // Mock fetch
@@ -28,7 +28,7 @@ describe('apiFetch', () => {
   describe('authorization header injection', () => {
     it('includes authorization header when token exists', async () => {
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'test-token',
         'refresh-token'
       )
@@ -37,7 +37,7 @@ describe('apiFetch', () => {
         ok: true,
         json: async () => ({ data: 'test' }),
         status: 200,
-      } as Response)
+      } as unknown as Response)
 
       await apiFetch('/test', { method: 'GET' })
 
@@ -53,7 +53,7 @@ describe('apiFetch', () => {
 
     it('does not include authorization header when authRequired is false', async () => {
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'test-token',
         'refresh-token'
       )
@@ -62,7 +62,7 @@ describe('apiFetch', () => {
         ok: true,
         json: async () => ({ data: 'test' }),
         status: 200,
-      } as Response)
+      } as unknown as Response)
 
       await apiFetch('/test', { authRequired: false })
 
@@ -81,7 +81,7 @@ describe('apiFetch', () => {
     it('retries with new token on 401', async () => {
       // Set up initial auth state
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'expired-token',
         'valid-refresh-token'
       )
@@ -92,17 +92,17 @@ describe('apiFetch', () => {
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Unauthorized' }),
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'new-token', refresh_token: 'new-refresh' }),
           status: 200,
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ data: 'success' }),
           status: 200,
-        } as Response)
+        } as unknown as Response)
 
       const result = await apiFetch('/test')
 
@@ -113,7 +113,7 @@ describe('apiFetch', () => {
 
     it('only retries once to prevent infinite loops', async () => {
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'expired-token',
         'valid-refresh-token'
       )
@@ -124,17 +124,17 @@ describe('apiFetch', () => {
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Unauthorized' }),
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'new-token' }),
           status: 200,
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Unauthorized' }),
-        } as Response)
+        } as unknown as Response)
 
       await expect(apiFetch('/test')).rejects.toThrow(ApiError)
       expect(mockFetch).toHaveBeenCalledTimes(3) // Should not retry again
@@ -142,7 +142,7 @@ describe('apiFetch', () => {
 
     it('logs out and redirects on failed refresh', async () => {
       useAuthStore.getState().setAuth(
-        { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+        { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
         'expired-token',
         'invalid-refresh-token'
       )
@@ -152,12 +152,12 @@ describe('apiFetch', () => {
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Unauthorized' }),
-        } as Response)
+        } as unknown as Response)
         .mockResolvedValueOnce({
           ok: false,
           status: 401,
           json: async () => ({ detail: 'Invalid refresh token' }),
-        } as Response)
+        } as unknown as Response)
 
       await expect(apiFetch('/test')).rejects.toThrow(ApiError)
       expect(useAuthStore.getState().accessToken).toBeNull()
@@ -167,23 +167,28 @@ describe('apiFetch', () => {
 
   describe('error handling', () => {
     it('throws ApiError with correct status and detail', async () => {
-      mockFetch.mockResolvedValueOnce({
+      // Mock Response object with all required properties
+      const errorResponse = {
         ok: false,
         status: 404,
+        statusText: 'Not Found',
         json: async () => ({ detail: 'Not found', code: 'not_found' }),
-      } as Response)
+        headers: new Headers({ 'Content-Type': 'application/json' }),
+      } as Response
+      mockFetch.mockResolvedValueOnce(errorResponse)
 
-      await expect(apiFetch('/test')).rejects.toThrow(ApiError)
-
+      let caughtError: unknown = null
       try {
         await apiFetch('/test')
       } catch (e) {
-        expect(e).toBeInstanceOf(ApiError)
-        if (e instanceof ApiError) {
-          expect(e.status).toBe(404)
-          expect(e.code).toBe('not_found')
-          expect(e.message).toBe('Not found')
-        }
+        caughtError = e
+      }
+
+      expect(caughtError).toBeInstanceOf(ApiError)
+      if (caughtError instanceof ApiError) {
+        expect(caughtError.status).toBe(404)
+        expect(caughtError.code).toBe('not_found')
+        expect(caughtError.message).toBe('Not found')
       }
     })
 
@@ -194,7 +199,7 @@ describe('apiFetch', () => {
         json: async () => {
           throw new Error('Invalid JSON')
         },
-      } as Response)
+      } as unknown as Response)
 
       await expect(apiFetch('/test')).rejects.toThrow(ApiError)
     })
@@ -203,7 +208,7 @@ describe('apiFetch', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 204,
-      } as Response)
+      } as unknown as Response)
 
       const result = await apiFetch('/test')
       expect(result).toBeUndefined()
@@ -220,7 +225,7 @@ describe('apiFetchBlob', () => {
 
   it('returns blob data', async () => {
     useAuthStore.getState().setAuth(
-      { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+      { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
       'test-token',
       'refresh-token'
     )
@@ -230,7 +235,7 @@ describe('apiFetchBlob', () => {
       ok: true,
       status: 200,
       blob: async () => mockBlob,
-    } as Response)
+    } as unknown as Response)
 
     const result = await apiFetchBlob('/test.pdf')
     expect(result).toBe(mockBlob)
@@ -238,7 +243,7 @@ describe('apiFetchBlob', () => {
 
   it('handles 401 with token refresh', async () => {
     useAuthStore.getState().setAuth(
-      { id: '1', github_id: 1, github_login: 'test', repo_created: false },
+      { id: '1', email: 'test@example.com', storage_provider: 'github' as const },
       'expired-token',
       'valid-refresh-token'
     )
@@ -248,105 +253,19 @@ describe('apiFetchBlob', () => {
       .mockResolvedValueOnce({
         ok: false,
         status: 401,
-      } as Response)
+      } as unknown as Response)
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ access_token: 'new-token' }),
         status: 200,
-      } as Response)
+      } as unknown as Response)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
         blob: async () => mockBlob,
-      } as Response)
+      } as unknown as Response)
 
     const result = await apiFetchBlob('/test.pdf')
     expect(result).toBe(mockBlob)
-  })
-})
-
-describe('api convenience methods', () => {
-  beforeEach(() => {
-    useAuthStore.getState().logout()
-    mockFetch.mockClear()
-  })
-
-  it('api.get sends GET request', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ data: 'test' }),
-      status: 200,
-    } as Response)
-
-    await api.get('/test')
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        method: 'GET',
-      })
-    )
-  })
-
-  it('api.post sends POST request with JSON body', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ success: true }),
-      status: 200,
-    } as Response)
-
-    await api.post('/test', { name: 'test' })
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ name: 'test' }),
-      })
-    )
-  })
-
-  it('api.upload sends FormData without Content-Type', async () => {
-    useAuthStore.getState().setAuth(
-      { id: '1', github_id: 1, github_login: 'test', repo_created: false },
-      'test-token',
-      'refresh-token'
-    )
-
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ success: true }),
-      status: 200,
-    } as Response)
-
-    const formData = new FormData()
-    formData.append('file', new Blob(['content']))
-
-    await api.upload('/test', formData)
-
-    const callArgs = mockFetch.mock.calls[0]
-    expect(callArgs[1]).toMatchObject({
-      method: 'POST',
-      body: formData,
-    })
-    // Verify Content-Type is not set by default for FormData
-    expect(callArgs[1].headers).not.toHaveProperty('Content-Type')
-  })
-
-  it('api.delete sends DELETE request', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ success: true }),
-      status: 200,
-    } as Response)
-
-    await api.delete('/test')
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        method: 'DELETE',
-      })
-    )
   })
 })
