@@ -20,6 +20,7 @@ router = APIRouter()
 # Shared upsert helper — called by both OAuth callbacks
 # ---------------------------------------------------------------------------
 
+
 async def _upsert_oauth_user(
     db: AsyncSession,
     *,
@@ -67,7 +68,7 @@ async def _upsert_oauth_user(
             user.github_login = extra_data.get("github_login")
             user.access_token = encrypted_access_token
         user.display_name = display_name or user.display_name
-        user.avatar_url = avatar_url or user.avatar_url
+        user.avatar_url = user.avatar_url or avatar_url
         if provider_email and not user.email:
             user.email = provider_email
         db.add(user)
@@ -94,13 +95,13 @@ async def _upsert_oauth_user(
             user.github_id = int(provider_user_id)
             user.github_login = extra_data.get("github_login")
             user.access_token = encrypted_access_token
-            user.repo_created = False   # new account — no repo yet
+            user.repo_created = False  # new account — no repo yet
         db.add(user)
         await db.flush()  # get user.id before creating the OAuth account
     else:
         # Existing user — update profile if richer data is available
         user.display_name = display_name or user.display_name
-        user.avatar_url = avatar_url or user.avatar_url
+        user.avatar_url = user.avatar_url or avatar_url
         if provider_email and not user.email:
             user.email = provider_email
         # Keep legacy fields in sync for GitHub
@@ -144,6 +145,7 @@ def _redirect_with_tokens(user: User) -> RedirectResponse:
 # GitHub OAuth
 # ---------------------------------------------------------------------------
 
+
 @router.get("/github/login")
 @limiter.limit(settings.RATE_LIMIT_AUTH_OAUTH)
 async def github_login(request: Request):
@@ -158,7 +160,9 @@ async def github_login(request: Request):
 
 @router.get("/github/callback")
 @limiter.limit(settings.RATE_LIMIT_AUTH_OAUTH)
-async def github_callback(request: Request, code: str, db: AsyncSession = Depends(deps.get_db)):
+async def github_callback(
+    request: Request, code: str, db: AsyncSession = Depends(deps.get_db)
+):
     """Exchange GitHub code for token, upsert user, issue JWT."""
     github_token = await github.get_github_access_token(code)
     if not github_token:
@@ -168,18 +172,20 @@ async def github_callback(request: Request, code: str, db: AsyncSession = Depend
     if not github_user_data:
         raise HTTPException(status_code=400, detail="Failed to fetch GitHub user")
 
+    email = github_user_data.get("email")
+    if not email:
+        email = await github.get_github_emails(github_token)
+
     user = await _upsert_oauth_user(
         db,
         provider="github",
         provider_user_id=str(github_user_data["id"]),
-        provider_email=github_user_data.get("email"),
+        provider_email=email,
         display_name=github_user_data.get("name"),
         avatar_url=github_user_data.get("avatar_url"),
         encrypted_access_token=security.encrypt_token(github_token),
-        encrypted_refresh_token=None,   # GitHub tokens don't expire
+        encrypted_refresh_token=None,  # GitHub tokens don't expire
         token_expires_at=None,
-        # Do not include repo_created — preserve whatever value is already stored.
-        # It is set to False only on new account creation (inside _upsert_oauth_user).
         extra_data={"github_login": github_user_data["login"]},
     )
     return _redirect_with_tokens(user)
@@ -188,6 +194,7 @@ async def github_callback(request: Request, code: str, db: AsyncSession = Depend
 # ---------------------------------------------------------------------------
 # Google OAuth
 # ---------------------------------------------------------------------------
+
 
 @router.get("/google/login")
 @limiter.limit(settings.RATE_LIMIT_AUTH_OAUTH)
@@ -208,7 +215,9 @@ async def google_login(request: Request):
 
 @router.get("/google/callback")
 @limiter.limit(settings.RATE_LIMIT_AUTH_OAUTH)
-async def google_callback(request: Request, code: str, db: AsyncSession = Depends(deps.get_db)):
+async def google_callback(
+    request: Request, code: str, db: AsyncSession = Depends(deps.get_db)
+):
     """Exchange Google code for tokens, upsert user, issue JWT."""
     tokens = await google.get_google_tokens(code)
     if not tokens or "access_token" not in tokens:
@@ -231,7 +240,9 @@ async def google_callback(request: Request, code: str, db: AsyncSession = Depend
         display_name=google_user_data.get("name"),
         avatar_url=google_user_data.get("picture"),
         encrypted_access_token=security.encrypt_token(tokens["access_token"]),
-        encrypted_refresh_token=security.encrypt_token(refresh_token) if refresh_token else None,
+        encrypted_refresh_token=security.encrypt_token(refresh_token)
+        if refresh_token
+        else None,
         token_expires_at=token_expires_at,
         extra_data={},
     )
@@ -241,6 +252,7 @@ async def google_callback(request: Request, code: str, db: AsyncSession = Depend
 # ---------------------------------------------------------------------------
 # Token refresh, /me, logout
 # ---------------------------------------------------------------------------
+
 
 @router.post("/refresh", response_model=Token)
 @limiter.limit(settings.RATE_LIMIT_AUTH_REFRESH)
