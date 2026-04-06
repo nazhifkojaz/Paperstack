@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Annotation } from '@/api/annotations';
 import { useUpdateAnnotation } from '@/api/annotations';
 import type { TextLayerHandle } from '@/features/viewer/TextLayer';
@@ -49,7 +49,7 @@ export function useTextMatcher(
     const [resolvedMap, setResolvedMap] = useState<
         Map<string, { rects: Rect[]; page: number }>
     >(new Map());
-    const unmatchedIds = useRef<Set<string>>(new Set());
+    const [unmatchedIds, setUnmatchedIds] = useState<Set<string>>(new Set());
     const updateAnnotation = useUpdateAnnotation();
 
     useEffect(() => {
@@ -149,10 +149,10 @@ export function useTextMatcher(
             }
 
             // Update unmatched tracking — prune IDs that were resolved
-            unmatchedIds.current = new Set(
-                [...unmatchedIds.current, ...newUnmatched]
+            setUnmatchedIds(prev => new Set(
+                [...prev, ...newUnmatched]
                     .filter(id => !newResolved.has(id)),
-            );
+            ));
 
             if (newResolved.size > 0) {
                 setResolvedMap(prev => {
@@ -164,7 +164,7 @@ export function useTextMatcher(
         });
 
         return () => { cancelled = true; };
-    }, [annotations, pageNumber, textLayerHandle]);
+    }, [annotations, pageNumber, textLayerHandle, updateAnnotation]);
 
     return annotations.map(ann => {
         if (ann.rects.length > 0) return ann;
@@ -177,7 +177,7 @@ export function useTextMatcher(
                 _resolved: true,
             };
         }
-        if (unmatchedIds.current.has(ann.id)) {
+        if (unmatchedIds.has(ann.id)) {
             return { ...ann, _unmatched: true };
         }
         return ann;
@@ -193,7 +193,7 @@ export function useTextMatcher(
 export function normalize(text: string): string {
     return text
         .normalize('NFKC')
-        .replace(/[\u00AD\u200B\u200C\u200D\uFEFF]/g, '')
+        .replace(/[\u00AD\u200B\uFEFF\u200C\u200D]/g, '')
         .replace(/['\u2018\u2019]/g, "'")
         .replace(/["\u201C\u201D]/g, '"')
         .replace(/[\u2013\u2014]/g, '-')
@@ -253,7 +253,7 @@ export function buildNormMap(fullText: string): { norm: string; toOrig: number[]
         const ch = fullText.slice(origI, origI + charLen).normalize('NFKC');
 
         // Skip zero-width / invisible characters
-        if (/^[\u00AD\u200B\u200C\u200D\uFEFF]$/.test(ch)) continue;
+        if (/^[\u00AD\u200B\uFEFF\u200C\u200D]$/.test(ch)) continue;
 
         // Quote and dash normalization
         let normalized = ch;

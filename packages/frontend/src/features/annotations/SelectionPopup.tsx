@@ -58,9 +58,10 @@ export const SelectionPopup = ({
 
         document.addEventListener('mousedown', handleMouseDown, { capture: true });
         document.addEventListener('click', handleClick, { capture: true });
+        const listenerOpts: EventListenerOptions = { capture: true };
         return () => {
-            document.removeEventListener('mousedown', handleMouseDown, { capture: true } as any);
-            document.removeEventListener('click', handleClick, { capture: true } as any);
+            document.removeEventListener('mousedown', handleMouseDown, listenerOpts);
+            document.removeEventListener('click', handleClick, listenerOpts);
         };
     }, [onDismiss]);
 

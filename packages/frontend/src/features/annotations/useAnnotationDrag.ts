@@ -34,8 +34,8 @@ export function useAnnotationDrag(containerRef: React.RefObject<HTMLDivElement>)
     // Refs to access latest state in document listeners without re-registering
     const resizeRef = useRef(resizeState);
     const moveRef = useRef(moveState);
-    resizeRef.current = resizeState;
-    moveRef.current = moveState;
+    useEffect(() => { resizeRef.current = resizeState; });
+    useEffect(() => { moveRef.current = moveState; });
 
     const isDragging = resizeState !== null || moveState !== null;
 

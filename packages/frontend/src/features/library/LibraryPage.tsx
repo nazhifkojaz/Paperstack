@@ -238,6 +238,7 @@ export function LibraryPage() {
             <AddPdfModal open={addPdfOpen} onOpenChange={setAddPdfOpen} />
 
             <EditPdfDialog
+                key={editPdf?.id ?? 'none'}
                 pdf={editPdf}
                 open={!!editPdf}
                 onOpenChange={(open) => { if (!open) setEditPdf(null); }}
