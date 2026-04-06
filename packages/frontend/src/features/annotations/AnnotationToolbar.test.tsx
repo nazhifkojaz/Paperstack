@@ -9,14 +9,10 @@ vi.mock('@/api/annotations', () => ({
 }))
 
 describe('AnnotationToolbar', () => {
-    let mockContainerRef: React.RefObject<HTMLDivElement>
+    const mockContainerDims = { width: 800, height: 1000 }
 
     beforeEach(() => {
         vi.clearAllMocks()
-        const div = document.createElement('div')
-        Object.defineProperty(div, 'offsetWidth', { value: 800 })
-        Object.defineProperty(div, 'offsetHeight', { value: 1000 })
-        mockContainerRef = { current: div }
     })
 
     it('does not render a delete button', () => {
@@ -25,7 +21,7 @@ describe('AnnotationToolbar', () => {
         render(
             <AnnotationToolbar
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onEditNote={vi.fn()}
             />
         )
@@ -39,7 +35,7 @@ describe('AnnotationToolbar', () => {
         render(
             <AnnotationToolbar
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onEditNote={vi.fn()}
             />
         )
@@ -57,7 +53,7 @@ describe('AnnotationToolbar', () => {
         render(
             <AnnotationToolbar
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onEditNote={vi.fn()}
             />
         )
@@ -71,7 +67,7 @@ describe('AnnotationToolbar', () => {
         render(
             <AnnotationToolbar
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onEditNote={vi.fn()}
             />
         )
@@ -85,7 +81,7 @@ describe('AnnotationToolbar', () => {
         render(
             <AnnotationToolbar
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onEditNote={vi.fn()}
             />
         )
@@ -100,7 +96,7 @@ describe('AnnotationToolbar', () => {
         render(
             <AnnotationToolbar
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onEditNote={onEditNote}
             />
         )
@@ -120,7 +116,7 @@ describe('AnnotationToolbar', () => {
         render(
             <AnnotationToolbar
                 annotation={annotation}
-                containerRef={mockContainerRef as any}
+                containerDims={mockContainerDims}
                 onEditNote={vi.fn()}
             />
         )

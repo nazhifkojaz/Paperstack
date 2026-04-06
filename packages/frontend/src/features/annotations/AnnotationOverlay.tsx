@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { StickyNote } from 'lucide-react';
 import { useAnnotationStore } from '@/stores/annotationStore';
-import { useAnnotationSets, useMultiSetAnnotations, useCreateAnnotation, useUpdateAnnotation } from '@/api/annotations';
+import { useAnnotationSets, useMultiSetAnnotations, useCreateAnnotation } from '@/api/annotations';
 import type { TextLayerHandle } from '@/features/viewer/TextLayer';
 import { useTextMatcher } from './useTextMatcher';
 import { useRectCreate, type Rect } from './useRectCreate';
@@ -30,11 +30,22 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
     );
     const { data: annotations } = useMultiSetAnnotations(visibleSetIds);
     const { mutate: createAnnotation } = useCreateAnnotation();
-    const { mutate: updateAnnotation } = useUpdateAnnotation();
 
     // Refs and local state
     const containerRef = useRef<HTMLDivElement>(null);
     const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+    const [containerDims, setContainerDims] = useState<{ width: number; height: number } | null>(null);
+
+    // Track container dimensions via ResizeObserver (avoids reading ref during render)
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const observer = new ResizeObserver(() => {
+            setContainerDims({ width: el.offsetWidth, height: el.offsetHeight });
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, []);
 
     // Custom hooks
     const rectCreate = useRectCreate({
@@ -67,26 +78,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         previewRects: dragPreviewRects,
         startResize,
         startMove,
-        onDragEnd,
-        onDragEndCallbackRef,
     } = useAnnotationDrag(containerRef as React.RefObject<HTMLDivElement>);
-
-    // Wire drag end callback
-    const handleDragEnd = () => {
-        const result = onDragEnd();
-        if (!result) return;
-
-        const ann = pageAnnotations.find(a => a.id === selectedAnnotationId);
-        if (!ann) return;
-
-        if (result.type === 'resize') {
-            updateAnnotation({ id: ann.id, data: { rects: [result.rect] } });
-        } else if (result.type === 'move') {
-            updateAnnotation({ id: ann.id, data: { rects: result.rects } });
-        }
-    };
-
-    onDragEndCallbackRef.current = handleDragEnd;
 
     // Clear annotation selection on scroll so the toolbar doesn't linger
     useEffect(() => {
@@ -287,7 +279,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                 return (
                     <NotePopover
                         annotation={noteAnn}
-                        containerRef={containerRef}
+                        containerDims={containerDims}
                         onClose={() => {
                             setEditingNoteId(null);
                             annotationExplain.clearExplain();
@@ -299,10 +291,9 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
             })()}
 
             {/* Note indicators for highlight/rect annotations that have note_content */}
-            {containerRef.current && pageAnnotations
+            {containerDims && pageAnnotations
                 .filter(ann => ann.type !== 'note' && ann.note_content)
                 .map(ann => {
-                    const container = containerRef.current!;
                     const rects = ann.rects;
                     const maxX = Math.max(...rects.map(r => r.x + r.w));
                     const minY = Math.min(...rects.map(r => r.y));
@@ -311,8 +302,8 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                             key={`note-indicator-${ann.id}`}
                             className="absolute z-40 pointer-events-auto"
                             style={{
-                                left: `${maxX * container.offsetWidth}px`,
-                                top: `${minY * container.offsetHeight}px`,
+                                left: `${maxX * containerDims.width}px`,
+                                top: `${minY * containerDims.height}px`,
                                 transform: 'translate(-50%, -50%)',
                             }}
                             title={ann.note_content ?? ''}
@@ -336,7 +327,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                 return (
                     <AnnotationToolbar
                         annotation={selectedAnn}
-                        containerRef={containerRef}
+                        containerDims={containerDims}
                         onEditNote={() => setEditingNoteId(selectedAnnotationId)}
                     />
                 );

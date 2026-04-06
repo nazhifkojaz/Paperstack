@@ -7,18 +7,19 @@ import { Save, Pencil, Loader2 } from 'lucide-react';
 
 interface NotePopoverProps {
     annotation: Annotation;
-    containerRef: React.RefObject<HTMLDivElement | null>;
+    containerDims: { width: number; height: number } | null;
     onClose: () => void;
     isExplaining?: boolean;
     explainStatusMessage?: string;
 }
 
-export const NotePopover = ({ annotation, containerRef, onClose, isExplaining, explainStatusMessage }: NotePopoverProps) => {
+export const NotePopover = ({ annotation, containerDims, onClose, isExplaining, explainStatusMessage }: NotePopoverProps) => {
     const [content, setContent] = useState(annotation.note_content || '');
     const [isEditing, setIsEditing] = useState(!annotation.note_content);
     const prevIsExplainingRef = useRef(isExplaining ?? false);
 
     // Sync state only when isExplaining transitions true → false (explain just completed)
+    /* eslint-disable react-hooks/set-state-in-effect -- Sync after explain completes */
     useEffect(() => {
         if (prevIsExplainingRef.current && !isExplaining && annotation.note_content) {
             setContent(annotation.note_content);
@@ -26,7 +27,7 @@ export const NotePopover = ({ annotation, containerRef, onClose, isExplaining, e
         }
         prevIsExplainingRef.current = isExplaining ?? false;
     }, [isExplaining, annotation.note_content]);
-
+    /* eslint-enable react-hooks/set-state-in-effect */
     const { mutate: updateAnnotation } = useUpdateAnnotation();
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const popoverRef = useRef<HTMLDivElement>(null);
@@ -73,18 +74,17 @@ export const NotePopover = ({ annotation, containerRef, onClose, isExplaining, e
     };
 
     // Compute position from normalized coordinates with edge handling
-    const container = containerRef.current;
-    if (!container || !annotation.rects[0]) return null;
+    if (!containerDims || !annotation.rects[0]) return null;
 
     const rect = annotation.rects[0];
-    const centerX = (rect.x + rect.w / 2) * container.offsetWidth;
-    const topY = (rect.y + rect.h) * container.offsetHeight;
+    const centerX = (rect.x + rect.w / 2) * containerDims.width;
+    const topY = (rect.y + rect.h) * containerDims.height;
 
     // Edge detection: if note is near right edge, align to right side
     const popoverWidth = 256; // w-64 = 16rem = 256px
-    const shouldAlignRight = centerX + popoverWidth / 2 > container.offsetWidth;
+    const shouldAlignRight = centerX + popoverWidth / 2 > containerDims.width;
     const adjustedLeft = shouldAlignRight
-        ? container.offsetWidth - popoverWidth - 8
+        ? containerDims.width - popoverWidth - 8
         : centerX;
 
     return (

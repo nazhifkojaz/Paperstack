@@ -4,11 +4,11 @@ import { ANNOTATION_COLORS } from './constants';
 
 interface AnnotationToolbarProps {
     annotation: Annotation;
-    containerRef: React.RefObject<HTMLDivElement | null>;
+    containerDims: { width: number; height: number } | null;
     onEditNote: () => void;
 }
 
-export const AnnotationToolbar = ({ annotation, containerRef, onEditNote }: AnnotationToolbarProps) => {
+export const AnnotationToolbar = ({ annotation, containerDims, onEditNote }: AnnotationToolbarProps) => {
     const { mutate: updateAnnotation } = useUpdateAnnotation();
 
     const handleColorChange = (color: string) => {
@@ -16,8 +16,7 @@ export const AnnotationToolbar = ({ annotation, containerRef, onEditNote }: Anno
     };
 
     // Compute position from normalized coordinates
-    const container = containerRef.current;
-    if (!container || !annotation.rects[0]) return null;
+    if (!containerDims || !annotation.rects[0]) return null;
 
     // Use bounding box of all rects
     const rects = annotation.rects;
@@ -25,13 +24,13 @@ export const AnnotationToolbar = ({ annotation, containerRef, onEditNote }: Anno
     const minY = Math.min(...rects.map(r => r.y));
     const maxX = Math.max(...rects.map(r => r.x + r.w));
 
-    const centerX = ((minX + maxX) / 2) * container.offsetWidth;
-    const topY = minY * container.offsetHeight;
+    const centerX = ((minX + maxX) / 2) * containerDims.width;
+    const topY = minY * containerDims.height;
 
     // If annotation is near the top of the page, show toolbar below instead
     const showBelow = minY < 0.08;
     const maxY = Math.max(...rects.map(r => r.y + r.h));
-    const bottomY = maxY * container.offsetHeight;
+    const bottomY = maxY * containerDims.height;
 
     return (
         <div

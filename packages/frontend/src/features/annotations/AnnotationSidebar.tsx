@@ -87,6 +87,7 @@ export const AnnotationSidebar = () => {
     }, [annotationSets, selectedSetId, setSelectedSetId]);
 
     // Auto-expand selected set
+    /* eslint-disable react-hooks/set-state-in-effect -- Sync expansion to selection */
     useEffect(() => {
         if (selectedSetId) {
             setExpandedSetIds(prev => {
@@ -95,6 +96,7 @@ export const AnnotationSidebar = () => {
             });
         }
     }, [selectedSetId]);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     if (!isAnnotationSidebarOpen) return null;
 
