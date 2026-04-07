@@ -471,3 +471,99 @@ class TestHybridSearchAll:
         row.content = content
         row.score = score
         return row
+
+
+class TestHybridSearchWeights:
+    """Tests for configurable hybrid search weights (CQ-3)."""
+
+    async def test_search_pdf_passes_weight_params(self):
+        """search_pdf hybrid query should pass sem_weight and kw_weight to SQL."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="test query",
+        )
+
+        call_args = mock_db.execute.call_args
+        params = call_args[0][1]
+        assert "sem_weight" in params
+        assert "kw_weight" in params
+        assert params["sem_weight"] == 0.7
+        assert params["kw_weight"] == 0.3
+
+    async def test_search_collection_passes_weight_params(self):
+        """search_collection hybrid query should pass sem_weight and kw_weight."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        await service.search_collection(
+            query_vector=[0.1] * 384,
+            collection_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="test query",
+        )
+
+        call_args = mock_db.execute.call_args
+        params = call_args[0][1]
+        assert "sem_weight" in params
+        assert "kw_weight" in params
+        assert params["sem_weight"] == 0.7
+        assert params["kw_weight"] == 0.3
+
+    async def test_search_all_passes_weight_params(self):
+        """search_all hybrid query should pass sem_weight and kw_weight."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        await service.search_all(
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=3,
+            db=mock_db,
+            query_text="test query",
+        )
+
+        call_args = mock_db.execute.call_args
+        params = call_args[0][1]
+        assert "sem_weight" in params
+        assert "kw_weight" in params
+        assert params["sem_weight"] == 0.7
+        assert params["kw_weight"] == 0.3
+
+    async def test_search_pdf_vector_only_no_weight_params(self):
+        """Pure vector search should NOT pass weight params."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+        )
+
+        call_args = mock_db.execute.call_args
+        params = call_args[0][1]
+        assert "sem_weight" not in params
+        assert "kw_weight" not in params

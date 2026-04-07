@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     CHAT_TOP_K_COLLECTION: int = 8
     EXPLAIN_TOP_K: int = 4
 
+    # Hybrid search weights
+    HYBRID_SEMANTIC_WEIGHT: float = 0.7
+    HYBRID_KEYWORD_WEIGHT: float = 0.3
+
     # HTTP Client Connection Pooling
     HTTP_CONNECTION_LIMIT: int = 100  # Max concurrent connections
     HTTP_TIMEOUT_CONNECT: float = 10.0  # Connection timeout in seconds

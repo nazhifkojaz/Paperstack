@@ -16,6 +16,8 @@ from uuid import UUID
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +35,14 @@ class SearchResult:
         content: The chunk text content
         score: Cosine similarity score (0-1, higher is better)
     """
+
     chunk_id: str | None
     pdf_id: str | None
     pdf_title: str | None
     page_number: int
-    end_page_number: int | None = None
     content: str
     score: float
+    end_page_number: int | None = None
 
 
 class VectorSearchService:
@@ -99,8 +102,8 @@ class VectorSearchService:
                            COALESCE(v.page_number, k.page_number) as page_number,
                            COALESCE(v.end_page_number, k.end_page_number) as end_page_number,
                            COALESCE(v.content, k.content) as content,
-                           (COALESCE(v.semantic_score, 0) * 0.7 +
-                            COALESCE(k.keyword_score, 0) * 0.3) AS combined_score
+                           (COALESCE(v.semantic_score, 0) * :sem_weight +
+                            COALESCE(k.keyword_score, 0) * :kw_weight) AS combined_score
                     FROM vector_results v
                     FULL OUTER JOIN keyword_results k ON v.id = k.id
                     ORDER BY combined_score DESC
@@ -113,6 +116,8 @@ class VectorSearchService:
                     "k": top_k,
                     "k2": top_k * 2,
                     "query": query_text,
+                    "sem_weight": settings.HYBRID_SEMANTIC_WEIGHT,
+                    "kw_weight": settings.HYBRID_KEYWORD_WEIGHT,
                 },
             )
         else:
@@ -216,8 +221,8 @@ class VectorSearchService:
                            COALESCE(v.end_page_number, k.end_page_number) as end_page_number,
                            COALESCE(v.content, k.content) as content,
                            COALESCE(v.pdf_title, k.pdf_title) as pdf_title,
-                           (COALESCE(v.semantic_score, 0) * 0.7 +
-                            COALESCE(k.keyword_score, 0) * 0.3) AS combined_score
+                           (COALESCE(v.semantic_score, 0) * :sem_weight +
+                            COALESCE(k.keyword_score, 0) * :kw_weight) AS combined_score
                     FROM vector_results v
                     FULL OUTER JOIN keyword_results k ON v.id = k.id
                     ORDER BY combined_score DESC
@@ -230,6 +235,8 @@ class VectorSearchService:
                     "k": top_k,
                     "k2": top_k * 2,
                     "query": query_text,
+                    "sem_weight": settings.HYBRID_SEMANTIC_WEIGHT,
+                    "kw_weight": settings.HYBRID_KEYWORD_WEIGHT,
                 },
             )
         else:
@@ -320,8 +327,8 @@ class VectorSearchService:
                            COALESCE(v.page_number, k.page_number) as page_number,
                            COALESCE(v.end_page_number, k.end_page_number) as end_page_number,
                            COALESCE(v.content, k.content) as content,
-                           (COALESCE(v.semantic_score, 0) * 0.7 +
-                            COALESCE(k.keyword_score, 0) * 0.3) AS combined_score
+                           (COALESCE(v.semantic_score, 0) * :sem_weight +
+                            COALESCE(k.keyword_score, 0) * :kw_weight) AS combined_score
                     FROM vector_results v
                     FULL OUTER JOIN keyword_results k ON v.pdf_id = k.pdf_id
                     ORDER BY combined_score DESC
@@ -333,6 +340,8 @@ class VectorSearchService:
                     "limit": limit,
                     "limit2": limit * 2,
                     "query": query_text,
+                    "sem_weight": settings.HYBRID_SEMANTIC_WEIGHT,
+                    "kw_weight": settings.HYBRID_KEYWORD_WEIGHT,
                 },
             )
         else:
