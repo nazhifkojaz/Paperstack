@@ -233,6 +233,7 @@ class IndexingService:
                         user_id=user.id,
                         chunk_index=chunk.chunk_index,
                         page_number=chunk.page_number,
+                        end_page_number=chunk.end_page_number,
                         content=chunk.content.replace("\x00", ""),
                         embedding=embedding,
                         section_title=chunk.section_title,
