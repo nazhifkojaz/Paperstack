@@ -1,6 +1,11 @@
 """Tests for the chat service context formatting (Phase 1.3)."""
 
-from app.services.chat_service import ChatService, _count_tokens, _truncate_to_tokens
+from app.services.chat_service import (
+    ChatService,
+    _count_tokens,
+    _truncate_to_tokens,
+    _deduplicate_chunks,
+)
 
 
 def test_build_context_basic():
@@ -121,3 +126,166 @@ def test_truncate_to_tokens_no_truncation_when_fits():
     text = "Short text."
     result = _truncate_to_tokens(text, max_tokens=100)
     assert result == text
+
+
+# --- Context deduplication (Phase 4.3) ---
+
+
+def test_deduplicate_removes_near_duplicates():
+    """Chunks with high Jaccard similarity should be removed."""
+    chunks = [
+        {"page_number": 1, "content": "The quick brown fox jumps over the lazy dog"},
+        {"page_number": 2, "content": "The quick brown fox jumps over the lazy dog"},
+        {"page_number": 3, "content": "Completely different content here"},
+    ]
+    result = _deduplicate_chunks(chunks, similarity_threshold=0.9)
+    assert len(result) == 2
+    assert result[0]["page_number"] == 1
+    assert result[1]["page_number"] == 3
+
+
+def test_deduplicate_keeps_first_occurrence():
+    """When duplicates exist, the first one (highest ranked) should be kept."""
+    chunks = [
+        {"page_number": 5, "content": "Important finding about attention"},
+        {"page_number": 6, "content": "Important finding about attention mechanisms"},
+    ]
+    result = _deduplicate_chunks(chunks, similarity_threshold=0.5)
+    assert len(result) == 1
+    assert result[0]["page_number"] == 5
+
+
+def test_deduplicate_no_duplicates():
+    """When all chunks are different, all should be kept."""
+    chunks = [
+        {"page_number": 1, "content": "Introduction to the topic"},
+        {"page_number": 2, "content": "Methods used in the study"},
+        {"page_number": 3, "content": "Results of the experiment"},
+    ]
+    result = _deduplicate_chunks(chunks)
+    assert len(result) == 3
+
+
+def test_deduplicate_empty_content():
+    """Chunks with empty content should be filtered out."""
+    chunks = [
+        {"page_number": 1, "content": "Real content"},
+        {"page_number": 2, "content": ""},
+        {"page_number": 3, "content": "More real content"},
+    ]
+    result = _deduplicate_chunks(chunks)
+    assert len(result) == 2
+    assert all(c["content"] for c in result)
+
+
+def test_deduplicate_single_chunk():
+    """A single chunk should be returned unchanged."""
+    chunks = [{"page_number": 1, "content": "Only chunk"}]
+    result = _deduplicate_chunks(chunks)
+    assert len(result) == 1
+
+
+def test_deduplicate_empty_list():
+    """An empty list should be returned unchanged."""
+    result = _deduplicate_chunks([])
+    assert result == []
+
+
+def test_deduplicate_threshold_sensitivity():
+    """Higher threshold should allow more similar chunks through."""
+    base = "The model achieves state of the art performance"
+    similar = "The model achieves state of the art results"
+    chunks = [
+        {"page_number": 1, "content": base},
+        {"page_number": 2, "content": similar},
+    ]
+    # At high threshold (0.95), both should pass
+    result_strict = _deduplicate_chunks(chunks, similarity_threshold=0.95)
+    assert len(result_strict) == 2
+    # At lower threshold (0.5), the similar one should be removed
+    result_loose = _deduplicate_chunks(chunks, similarity_threshold=0.5)
+    assert len(result_loose) == 1
+
+
+def test_build_context_deduplicates():
+    """build_context should remove duplicate chunks before formatting."""
+    service = ChatService()
+    chunks = [
+        {"page_number": 1, "content": "Identical content here"},
+        {"page_number": 2, "content": "Identical content here"},
+        {"page_number": 3, "content": "Different content"},
+    ]
+    result = service.build_context(chunks)
+    # Only 2 unique chunks should appear
+    assert result.count("---") == 1  # 2 chunks = 1 separator
+    assert "[Page 1]" in result
+    assert "[Page 3]" in result
+
+
+def test_deduplicate_preserves_section_metadata():
+    """Deduplication should preserve all metadata from the kept chunk."""
+    chunks = [
+        {
+            "page_number": 1,
+            "content": "Important finding about attention",
+            "section_title": "Introduction",
+        },
+        {
+            "page_number": 6,
+            "content": "Important finding about attention mechanisms",
+            "section_title": "Discussion",
+        },
+    ]
+    result = _deduplicate_chunks(chunks, similarity_threshold=0.5)
+    assert len(result) == 1
+    assert result[0]["section_title"] == "Introduction"
+    assert result[0]["page_number"] == 1
+
+
+def test_deduplicate_whitespace_only_chunks():
+    """Chunks with only whitespace should be filtered out."""
+    chunks = [
+        {"page_number": 1, "content": "Real content"},
+        {"page_number": 2, "content": "   \n\t  "},
+        {"page_number": 3, "content": "More real content"},
+    ]
+    result = _deduplicate_chunks(chunks)
+    assert len(result) == 2
+
+
+def test_deduplicate_case_insensitive():
+    """Similarity should be case-insensitive."""
+    chunks = [
+        {"page_number": 1, "content": "The Quick Brown Fox"},
+        {"page_number": 2, "content": "the quick brown fox"},
+    ]
+    result = _deduplicate_chunks(chunks, similarity_threshold=0.9)
+    assert len(result) == 1
+
+
+def test_deduplicate_subset_chunks():
+    """When one chunk's words are a subset of another, both should pass (low Jaccard)."""
+    chunks = [
+        {
+            "page_number": 1,
+            "content": "attention mechanism transformer neural network deep learning model",
+        },
+        {"page_number": 2, "content": "attention mechanism"},
+    ]
+    # Subset has high overlap ratio but low Jaccard (union is large)
+    result = _deduplicate_chunks(chunks, similarity_threshold=0.9)
+    assert len(result) == 2  # Both kept — Jaccard penalizes subset relationship
+
+
+def test_deduplicate_preserves_order():
+    """Original ranking order should be preserved after dedup."""
+    chunks = [
+        {"page_number": 10, "content": "First unique topic"},
+        {"page_number": 11, "content": "First unique topic repeated"},
+        {"page_number": 12, "content": "Second unique topic"},
+        {"page_number": 13, "content": "Second unique topic repeated"},
+        {"page_number": 14, "content": "Third unique topic"},
+    ]
+    result = _deduplicate_chunks(chunks, similarity_threshold=0.5)
+    assert len(result) == 3
+    assert [c["page_number"] for c in result] == [10, 12, 14]

@@ -59,6 +59,38 @@ def _truncate_to_tokens(text: str, max_tokens: int) -> str:
     return text[:remaining_chars] + "\n[...truncated]"
 
 
+def _deduplicate_chunks(
+    chunks: list[dict], similarity_threshold: float = 0.9
+) -> list[dict]:
+    """Remove chunks with highly overlapping content.
+
+    Uses Jaccard similarity on word sets. Keeps the first occurrence
+    when duplicates are found (preserving retrieval ranking order).
+    """
+    if len(chunks) <= 1:
+        return chunks
+
+    unique: list[dict] = []
+    unique_word_sets: list[set[str]] = []
+
+    for chunk in chunks:
+        words = set(chunk["content"].lower().split())
+        if not words:
+            continue
+        is_dup = False
+        for existing_words in unique_word_sets:
+            intersection = len(words & existing_words)
+            union = len(words | existing_words)
+            if union > 0 and intersection / union > similarity_threshold:
+                is_dup = True
+                break
+        if not is_dup:
+            unique.append(chunk)
+            unique_word_sets.append(words)
+
+    return unique
+
+
 class ChatService:
     """Chat service for building RAG context and streaming LLM replies.
 
@@ -84,10 +116,11 @@ class ChatService:
         Respects a token budget (max_tokens). Chunks that would exceed the
         budget are truncated with a marker; subsequent chunks are dropped.
         """
+        deduped = _deduplicate_chunks(chunks)
         parts = []
         total_tokens = 0
 
-        for c in chunks:
+        for c in deduped:
             header = f"[Page {c['page_number']}]"
             if c.get("section_title"):
                 header = f"[Page {c['page_number']} · {c['section_title']}]"
