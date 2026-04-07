@@ -154,7 +154,7 @@ class ExplainService:
 
         # 4. Build context
         context = self._chat_service.build_context(
-            [{"page_number": c.page_number, "content": c.content} for c in top_chunks]
+            [{"page_number": c.page_number, "end_page_number": c.end_page_number, "content": c.content} for c in top_chunks]
         )
 
         # 5. Build prompt and call LLM (non-streaming)

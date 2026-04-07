@@ -29,14 +29,15 @@ class SearchResult:
         pdf_id: PDF ID (None for single-PDF search)
         pdf_title: PDF title (None for single-PDF search)
         page_number: Page number where chunk appears
+        end_page_number: End page number (same as page_number if single page)
         content: The chunk text content
         score: Cosine similarity score (0-1, higher is better)
     """
-
     chunk_id: str | None
     pdf_id: str | None
     pdf_title: str | None
     page_number: int
+    end_page_number: int | None = None
     content: str
     score: float
 
@@ -77,7 +78,7 @@ class VectorSearchService:
             rows = await db.execute(
                 sql_text("""
                     WITH vector_results AS (
-                        SELECT id, page_number, content,
+                        SELECT id, page_number, end_page_number, content,
                                1 - (embedding <=> CAST(:vec AS vector)) AS semantic_score
                         FROM pdf_chunks
                         WHERE user_id = :user_id
@@ -86,7 +87,7 @@ class VectorSearchService:
                         LIMIT :k2
                     ),
                     keyword_results AS (
-                        SELECT id, page_number, content,
+                        SELECT id, page_number, end_page_number, content,
                                ts_rank(search_vector, plainto_tsquery('english', :query)) AS keyword_score
                         FROM pdf_chunks
                         WHERE user_id = :user_id
@@ -96,6 +97,7 @@ class VectorSearchService:
                     )
                     SELECT COALESCE(v.id, k.id) as id,
                            COALESCE(v.page_number, k.page_number) as page_number,
+                           COALESCE(v.end_page_number, k.end_page_number) as end_page_number,
                            COALESCE(v.content, k.content) as content,
                            (COALESCE(v.semantic_score, 0) * 0.7 +
                             COALESCE(k.keyword_score, 0) * 0.3) AS combined_score
@@ -116,7 +118,7 @@ class VectorSearchService:
         else:
             rows = await db.execute(
                 sql_text("""
-                    SELECT pc.id, pc.page_number, pc.content,
+                    SELECT pc.id, pc.page_number, pc.end_page_number, pc.content,
                            1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
                     FROM pdf_chunks pc
                     WHERE pc.user_id = :user_id
@@ -138,6 +140,7 @@ class VectorSearchService:
                 pdf_id=None,
                 pdf_title=None,
                 page_number=r.page_number,
+                end_page_number=r.end_page_number,
                 content=r.content,
                 score=float(r.combined_score if query_text else r.score),
             )
@@ -186,7 +189,7 @@ class VectorSearchService:
             rows = await db.execute(
                 sql_text("""
                     WITH vector_results AS (
-                        SELECT pc.id, pc.pdf_id, pc.page_number, pc.content, p.title AS pdf_title,
+                        SELECT pc.id, pc.pdf_id, pc.page_number, pc.end_page_number, pc.content, p.title AS pdf_title,
                                1 - (pc.embedding <=> CAST(:vec AS vector)) AS semantic_score
                         FROM pdf_chunks pc
                         JOIN pdfs p ON p.id = pc.pdf_id
@@ -197,7 +200,7 @@ class VectorSearchService:
                         LIMIT :k2
                     ),
                     keyword_results AS (
-                        SELECT pc.id, pc.pdf_id, pc.page_number, pc.content, p.title AS pdf_title,
+                        SELECT pc.id, pc.pdf_id, pc.page_number, pc.end_page_number, pc.content, p.title AS pdf_title,
                                ts_rank(pc.search_vector, plainto_tsquery('english', :query)) AS keyword_score
                         FROM pdf_chunks pc
                         JOIN pdfs p ON p.id = pc.pdf_id
@@ -210,6 +213,7 @@ class VectorSearchService:
                     SELECT COALESCE(v.id, k.id) as id,
                            COALESCE(v.pdf_id, k.pdf_id) as pdf_id,
                            COALESCE(v.page_number, k.page_number) as page_number,
+                           COALESCE(v.end_page_number, k.end_page_number) as end_page_number,
                            COALESCE(v.content, k.content) as content,
                            COALESCE(v.pdf_title, k.pdf_title) as pdf_title,
                            (COALESCE(v.semantic_score, 0) * 0.7 +
@@ -231,7 +235,7 @@ class VectorSearchService:
         else:
             rows = await db.execute(
                 sql_text("""
-                    SELECT pc.id, pc.pdf_id, pc.page_number, pc.content, p.title AS pdf_title,
+                    SELECT pc.id, pc.pdf_id, pc.page_number, pc.end_page_number, pc.content, p.title AS pdf_title,
                            1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
                     FROM pdf_chunks pc
                     JOIN pdfs p ON p.id = pc.pdf_id
@@ -255,6 +259,7 @@ class VectorSearchService:
                 pdf_id=str(r.pdf_id),
                 pdf_title=r.pdf_title,
                 page_number=r.page_number,
+                end_page_number=r.end_page_number,
                 content=r.content,
                 score=float(r.combined_score if query_text else r.score),
             )
@@ -292,7 +297,7 @@ class VectorSearchService:
             rows = await db.execute(
                 sql_text("""
                     WITH vector_results AS (
-                        SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
+                        SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
                                1 - (pc.embedding <=> CAST(:vec AS vector)) AS semantic_score
                         FROM pdf_chunks pc
                         JOIN pdfs p ON p.id = pc.pdf_id
@@ -301,7 +306,7 @@ class VectorSearchService:
                         LIMIT :limit2
                     ),
                     keyword_results AS (
-                        SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
+                        SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
                                ts_rank(pc.search_vector, plainto_tsquery('english', :query)) AS keyword_score
                         FROM pdf_chunks pc
                         JOIN pdfs p ON p.id = pc.pdf_id
@@ -312,6 +317,7 @@ class VectorSearchService:
                     SELECT COALESCE(v.pdf_id, k.pdf_id) as pdf_id,
                            COALESCE(v.pdf_title, k.pdf_title) as pdf_title,
                            COALESCE(v.page_number, k.page_number) as page_number,
+                           COALESCE(v.end_page_number, k.end_page_number) as end_page_number,
                            COALESCE(v.content, k.content) as content,
                            (COALESCE(v.semantic_score, 0) * 0.7 +
                             COALESCE(k.keyword_score, 0) * 0.3) AS combined_score
@@ -331,7 +337,7 @@ class VectorSearchService:
         else:
             rows = await db.execute(
                 sql_text("""
-                    SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
+                    SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
                            1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
                     FROM pdf_chunks pc
                     JOIN pdfs p ON p.id = pc.pdf_id
@@ -355,6 +361,7 @@ class VectorSearchService:
                     pdf_id=pdf_id_str,
                     pdf_title=r.pdf_title,
                     page_number=r.page_number,
+                    end_page_number=r.end_page_number if query_text else None,
                     content=r.content if query_text else r.content[:300],
                     score=float(r.combined_score if query_text else r.score),
                 )

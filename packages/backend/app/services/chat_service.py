@@ -121,9 +121,15 @@ class ChatService:
         total_tokens = 0
 
         for c in deduped:
-            header = f"[Page {c['page_number']}]"
+            # Format page label with span support
+            end_page = c.get("end_page_number")
+            if end_page and end_page > c["page_number"]:
+                page_label = f"Pages {c['page_number']}-{end_page}"
+            else:
+                page_label = f"Page {c['page_number']}"
+            header = f"[{page_label}]"
             if c.get("section_title"):
-                header = f"[Page {c['page_number']} · {c['section_title']}]"
+                header = f"[{page_label} · {c['section_title']}]"
             chunk_text = f"{header}\n{c['content']}"
             chunk_tokens = _count_tokens(chunk_text)
 

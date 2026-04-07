@@ -308,7 +308,7 @@ async def stream_message(
             query_text=data.content,
         )
         context = local_chat_service.build_context(
-            [{"page_number": c.page_number, "content": c.content} for c in top_chunks]
+            [{"page_number": c.page_number, "end_page_number": c.end_page_number, "content": c.content, "section_title": c.section_title} for c in top_chunks]
         )
     else:
         # Collection chat: search across all indexed PDFs in the collection
@@ -331,9 +331,14 @@ async def stream_message(
                 status_code=422,
                 detail="No indexed PDFs found in this collection. Open each PDF in the viewer and send a message to index it first.",
             )
-        context_parts = [
-            f"[{c.pdf_title}, Page {c.page_number}]\n{c.content}" for c in top_chunks
-        ]
+        context_parts = []
+        for c in top_chunks:
+            end_page = getattr(c, "end_page_number", None)
+            if end_page and end_page > c.page_number:
+                page_label = f"Pages {c.page_number}-{end_page}"
+            else:
+                page_label = f"Page {c.page_number}"
+            context_parts.append(f"[{c.pdf_title}, {page_label}]\n{c.content}")
         context = "\n\n---\n\n".join(context_parts)
 
     history_result = await db.execute(
