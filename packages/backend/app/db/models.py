@@ -397,6 +397,7 @@ class PdfChunk(Base):
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[Optional[Any]] = mapped_column(Vector(768))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)

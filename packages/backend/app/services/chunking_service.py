@@ -94,6 +94,7 @@ def _is_reference_heading(text: str, heading_type: str | None = None) -> bool:
 class Chunk:
     chunk_index: int
     page_number: int
+    end_page_number: int
     content: str
     section_title: str | None = None
     section_level: int | None = None
@@ -451,7 +452,8 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
 
     chunks: list[Chunk] = []
     current_text = ""
-    current_page = _get_page_for_offset(paragraphs[0][0], page_boundaries)
+    chunk_start_page = _get_page_for_offset(paragraphs[0][0], page_boundaries)
+    current_page = chunk_start_page
     current_section_title: str | None = None
     current_section_level: int | None = None
     # Track which paragraphs are in the current chunk for overlap
@@ -487,7 +489,8 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
                 chunks.append(
                     Chunk(
                         chunk_index=chunk_idx,
-                        page_number=current_page,
+                        page_number=chunk_start_page,
+                        end_page_number=current_page,
                         content=stripped,
                         section_title=current_section_title,
                         section_level=current_section_level,
@@ -505,6 +508,9 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
                 overlap_parts.insert(0, p_text)
             if overlap_parts:
                 current_text = "\n\n".join(overlap_parts) + "\n\n" + para_text
+                chunk_start_page = _get_page_for_offset(
+                    current_chunk_paras[0][0], page_boundaries
+                )
             else:
                 # Fallback: if no single paragraph fits, take the last few chars
                 # of the last paragraph at a sentence boundary
@@ -514,8 +520,14 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
                         last_para, len(last_para), chunk_overlap
                     )
                     current_text = last_para[overlap_start:] + "\n\n" + para_text
+                    chunk_start_page = _get_page_for_offset(
+                        current_chunk_paras[-1][0], page_boundaries
+                    )
                 else:
                     current_text = last_para + "\n\n" + para_text
+                    chunk_start_page = _get_page_for_offset(
+                        current_chunk_paras[-1][0], page_boundaries
+                    )
 
             current_page = para_page
             current_chunk_paras = [(para_start, para_end, para_text)]
@@ -535,7 +547,8 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
         chunks.append(
             Chunk(
                 chunk_index=chunk_idx,
-                page_number=current_page,
+                page_number=chunk_start_page,
+                end_page_number=current_page,
                 content=stripped,
                 section_title=current_section_title,
                 section_level=current_section_level,

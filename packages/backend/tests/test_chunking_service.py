@@ -24,6 +24,7 @@ def test_chunk_has_section_fields():
     c = Chunk(
         chunk_index=0,
         page_number=1,
+        end_page_number=1,
         content="test content",
         section_title="Introduction",
         section_level=1,
@@ -33,9 +34,20 @@ def test_chunk_has_section_fields():
 
 
 def test_chunk_section_fields_default_none():
-    c = Chunk(chunk_index=0, page_number=1, content="test content")
+    c = Chunk(chunk_index=0, page_number=1, end_page_number=1, content="test content")
     assert c.section_title is None
     assert c.section_level is None
+
+
+def test_chunk_end_page_number_field():
+    c = Chunk(
+        chunk_index=0,
+        page_number=3,
+        end_page_number=5,
+        content="test content",
+    )
+    assert c.page_number == 3
+    assert c.end_page_number == 5
 
 
 # --- _find_sentence_boundary ---
@@ -270,9 +282,13 @@ def test_chunk_text_with_pages_multi_page():
     text = f"--- PAGE 1 ---\n\n{page1_text}\n\n--- PAGE 2 ---\n\n{page2_text}"
     chunks = chunk_text_with_pages(text)
     assert len(chunks) >= 2
-    pages = set(c.page_number for c in chunks)
-    assert 1 in pages
-    assert 2 in pages
+    # Check page spans cover both pages (page_number is start, end_page_number is end)
+    all_pages = set()
+    for c in chunks:
+        for p in range(c.page_number, c.end_page_number + 1):
+            all_pages.add(p)
+    assert 1 in all_pages
+    assert 2 in all_pages
 
 
 def test_chunk_text_with_pages_section_metadata():
