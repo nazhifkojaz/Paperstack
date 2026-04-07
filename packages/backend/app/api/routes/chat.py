@@ -305,6 +305,7 @@ async def stream_message(
             user_id=current_user.id,
             top_k=settings.CHAT_TOP_K_SINGLE_PDF,
             db=db,
+            query_text=data.content,
         )
         context = local_chat_service.build_context(
             [{"page_number": c.page_number, "content": c.content} for c in top_chunks]
@@ -323,6 +324,7 @@ async def stream_message(
             user_id=current_user.id,
             top_k=settings.CHAT_TOP_K_COLLECTION,
             db=db,
+            query_text=data.content,
         )
         if not top_chunks:
             raise HTTPException(
@@ -459,6 +461,7 @@ async def semantic_search(
             user_id=current_user.id,
             top_k=data.limit * 3,  # over-fetch for dedup
             db=db,
+            query_text=data.query,
         )
     else:
         results = await vector_search_service.search_all(
@@ -466,6 +469,7 @@ async def semantic_search(
             user_id=current_user.id,
             limit=data.limit,
             db=db,
+            query_text=data.query,
         )
 
     # Convert SearchResult to SemanticSearchResult

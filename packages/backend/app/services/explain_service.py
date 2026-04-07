@@ -149,6 +149,7 @@ class ExplainService:
             user_id=user.id,
             top_k=settings.EXPLAIN_TOP_K,
             db=db,
+            query_text=selected_text,
         )
 
         # 4. Build context
