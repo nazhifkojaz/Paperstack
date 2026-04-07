@@ -18,6 +18,7 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Pdf, User
+from app.core.config import settings
 from app.services.chat_service import ChatService
 from app.services.embedding_service import EmbeddingService
 from app.services.indexing_service import IndexingService, get_indexing_service
@@ -48,6 +49,7 @@ class ExplainResult:
         context_chunks: The chunks used as context for the explanation
         note_content: Full note content including timestamp
     """
+
     explanation: str
     context_chunks: list[dict]
     note_content: str
@@ -77,7 +79,9 @@ class ExplainService:
         self._embedding_service = embedding_service or EmbeddingService()
         self._llm_service = llm_service or LLMService()
         self._chat_service = chat_service or ChatService()
-        self._indexing_service = indexing_service or get_indexing_service(pdf_download_service)
+        self._indexing_service = indexing_service or get_indexing_service(
+            pdf_download_service
+        )
 
     async def explain_with_provider(
         self,
@@ -143,7 +147,7 @@ class ExplainService:
             query_vector=query_vector,
             pdf_id=pdf_row.id,
             user_id=user.id,
-            top_k=4,
+            top_k=settings.EXPLAIN_TOP_K,
             db=db,
         )
 
@@ -153,10 +157,11 @@ class ExplainService:
         )
 
         # 5. Build prompt and call LLM (non-streaming)
-        system_prompt = EXPLAIN_SYSTEM_PROMPT + "\n\n## Context from the paper:\n\n" + context
+        system_prompt = (
+            EXPLAIN_SYSTEM_PROMPT + "\n\n## Context from the paper:\n\n" + context
+        )
         user_message = (
-            f'Explain this passage from page {page_number}:\n\n'
-            f'"{selected_text}"'
+            f'Explain this passage from page {page_number}:\n\n"{selected_text}"'
         )
 
         call_method = getattr(self._llm_service, f"call_{provider}")

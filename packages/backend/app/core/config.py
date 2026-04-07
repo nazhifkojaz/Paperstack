@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150
 
+    # Retrieval top_k values
+    CHAT_TOP_K_SINGLE_PDF: int = 6
+    CHAT_TOP_K_COLLECTION: int = 8
+    EXPLAIN_TOP_K: int = 4
+
     # HTTP Client Connection Pooling
     HTTP_CONNECTION_LIMIT: int = 100  # Max concurrent connections
     HTTP_TIMEOUT_CONNECT: float = 10.0  # Connection timeout in seconds
