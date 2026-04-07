@@ -52,8 +52,12 @@ class VectorSearchService:
         top_k: int,
         db: AsyncSession,
         current_page: int | None = None,
+        query_text: str | None = None,
     ) -> list[SearchResult]:
         """Search within a single PDF for semantically similar chunks.
+
+        Uses hybrid search (vector + full-text) when query_text is provided,
+        otherwise falls back to pure vector similarity.
 
         Args:
             query_vector: Embedding vector for the query text
@@ -62,28 +66,71 @@ class VectorSearchService:
             top_k: Maximum number of results to return
             db: Database session
             current_page: Optional current page for proximity boosting
+            query_text: Optional raw query text for full-text search (enables hybrid)
 
         Returns:
             List of SearchResult ordered by similarity (highest first)
         """
         vec_str = f"[{','.join(str(x) for x in query_vector)}]"
-        rows = await db.execute(
-            sql_text("""
-                SELECT pc.id, pc.page_number, pc.content,
-                       1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
-                FROM pdf_chunks pc
-                WHERE pc.user_id = :user_id
-                  AND pc.pdf_id = :pdf_id
-                ORDER BY pc.embedding <=> CAST(:vec AS vector)
-                LIMIT :k
-            """),
-            {
-                "vec": vec_str,
-                "user_id": str(user_id),
-                "pdf_id": str(pdf_id),
-                "k": top_k,
-            },
-        )
+
+        if query_text:
+            rows = await db.execute(
+                sql_text("""
+                    WITH vector_results AS (
+                        SELECT id, page_number, content,
+                               1 - (embedding <=> CAST(:vec AS vector)) AS semantic_score
+                        FROM pdf_chunks
+                        WHERE user_id = :user_id
+                          AND pdf_id = :pdf_id
+                        ORDER BY embedding <=> CAST(:vec AS vector)
+                        LIMIT :k2
+                    ),
+                    keyword_results AS (
+                        SELECT id, page_number, content,
+                               ts_rank(search_vector, plainto_tsquery('english', :query)) AS keyword_score
+                        FROM pdf_chunks
+                        WHERE user_id = :user_id
+                          AND pdf_id = :pdf_id
+                          AND search_vector @@ plainto_tsquery('english', :query)
+                        LIMIT :k
+                    )
+                    SELECT COALESCE(v.id, k.id) as id,
+                           COALESCE(v.page_number, k.page_number) as page_number,
+                           COALESCE(v.content, k.content) as content,
+                           (COALESCE(v.semantic_score, 0) * 0.7 +
+                            COALESCE(k.keyword_score, 0) * 0.3) AS combined_score
+                    FROM vector_results v
+                    FULL OUTER JOIN keyword_results k ON v.id = k.id
+                    ORDER BY combined_score DESC
+                    LIMIT :k
+                """),
+                {
+                    "vec": vec_str,
+                    "user_id": str(user_id),
+                    "pdf_id": str(pdf_id),
+                    "k": top_k,
+                    "k2": top_k * 2,
+                    "query": query_text,
+                },
+            )
+        else:
+            rows = await db.execute(
+                sql_text("""
+                    SELECT pc.id, pc.page_number, pc.content,
+                           1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
+                    FROM pdf_chunks pc
+                    WHERE pc.user_id = :user_id
+                      AND pc.pdf_id = :pdf_id
+                    ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                    LIMIT :k
+                """),
+                {
+                    "vec": vec_str,
+                    "user_id": str(user_id),
+                    "pdf_id": str(pdf_id),
+                    "k": top_k,
+                },
+            )
 
         results = [
             SearchResult(
@@ -92,7 +139,7 @@ class VectorSearchService:
                 pdf_title=None,
                 page_number=r.page_number,
                 content=r.content,
-                score=float(r.score),
+                score=float(r.combined_score if query_text else r.score),
             )
             for r in rows
         ]
@@ -114,8 +161,12 @@ class VectorSearchService:
         user_id: UUID | str,
         top_k: int,
         db: AsyncSession,
+        query_text: str | None = None,
     ) -> list[SearchResult]:
         """Search across all indexed PDFs in a collection.
+
+        Uses hybrid search (vector + full-text) when query_text is provided,
+        otherwise falls back to pure vector similarity.
 
         Args:
             query_vector: Embedding vector for the query text
@@ -123,31 +174,80 @@ class VectorSearchService:
             user_id: The user ID (for ownership check)
             top_k: Maximum number of results to return
             db: Database session
+            query_text: Optional raw query text for full-text search (enables hybrid)
 
         Returns:
             List of SearchResult ordered by similarity (highest first),
             with pdf_id and pdf_title populated
         """
         vec_str = f"[{','.join(str(x) for x in query_vector)}]"
-        rows = await db.execute(
-            sql_text("""
-                SELECT pc.id, pc.pdf_id, pc.page_number, pc.content, p.title AS pdf_title,
-                       1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
-                FROM pdf_chunks pc
-                JOIN pdfs p ON p.id = pc.pdf_id
-                JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id
-                WHERE pc.user_id = :user_id
-                  AND pcol.collection_id = :collection_id
-                ORDER BY pc.embedding <=> CAST(:vec AS vector)
-                LIMIT :k
-            """),
-            {
-                "vec": vec_str,
-                "collection_id": str(collection_id),
-                "user_id": str(user_id),
-                "k": top_k,
-            },
-        )
+
+        if query_text:
+            rows = await db.execute(
+                sql_text("""
+                    WITH vector_results AS (
+                        SELECT pc.id, pc.pdf_id, pc.page_number, pc.content, p.title AS pdf_title,
+                               1 - (pc.embedding <=> CAST(:vec AS vector)) AS semantic_score
+                        FROM pdf_chunks pc
+                        JOIN pdfs p ON p.id = pc.pdf_id
+                        JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id
+                        WHERE pc.user_id = :user_id
+                          AND pcol.collection_id = :collection_id
+                        ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                        LIMIT :k2
+                    ),
+                    keyword_results AS (
+                        SELECT pc.id, pc.pdf_id, pc.page_number, pc.content, p.title AS pdf_title,
+                               ts_rank(pc.search_vector, plainto_tsquery('english', :query)) AS keyword_score
+                        FROM pdf_chunks pc
+                        JOIN pdfs p ON p.id = pc.pdf_id
+                        JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id
+                        WHERE pc.user_id = :user_id
+                          AND pcol.collection_id = :collection_id
+                          AND pc.search_vector @@ plainto_tsquery('english', :query)
+                        LIMIT :k
+                    )
+                    SELECT COALESCE(v.id, k.id) as id,
+                           COALESCE(v.pdf_id, k.pdf_id) as pdf_id,
+                           COALESCE(v.page_number, k.page_number) as page_number,
+                           COALESCE(v.content, k.content) as content,
+                           COALESCE(v.pdf_title, k.pdf_title) as pdf_title,
+                           (COALESCE(v.semantic_score, 0) * 0.7 +
+                            COALESCE(k.keyword_score, 0) * 0.3) AS combined_score
+                    FROM vector_results v
+                    FULL OUTER JOIN keyword_results k ON v.id = k.id
+                    ORDER BY combined_score DESC
+                    LIMIT :k
+                """),
+                {
+                    "vec": vec_str,
+                    "collection_id": str(collection_id),
+                    "user_id": str(user_id),
+                    "k": top_k,
+                    "k2": top_k * 2,
+                    "query": query_text,
+                },
+            )
+        else:
+            rows = await db.execute(
+                sql_text("""
+                    SELECT pc.id, pc.pdf_id, pc.page_number, pc.content, p.title AS pdf_title,
+                           1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
+                    FROM pdf_chunks pc
+                    JOIN pdfs p ON p.id = pc.pdf_id
+                    JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id
+                    WHERE pc.user_id = :user_id
+                      AND pcol.collection_id = :collection_id
+                    ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                    LIMIT :k
+                """),
+                {
+                    "vec": vec_str,
+                    "collection_id": str(collection_id),
+                    "user_id": str(user_id),
+                    "k": top_k,
+                },
+            )
 
         return [
             SearchResult(
@@ -156,7 +256,7 @@ class VectorSearchService:
                 pdf_title=r.pdf_title,
                 page_number=r.page_number,
                 content=r.content,
-                score=float(r.score),
+                score=float(r.combined_score if query_text else r.score),
             )
             for r in rows
         ]
@@ -167,8 +267,12 @@ class VectorSearchService:
         user_id: UUID | str,
         limit: int,
         db: AsyncSession,
+        query_text: str | None = None,
     ) -> list[SearchResult]:
         """Search across all of the user's indexed PDFs.
+
+        Uses hybrid search (vector + full-text) when query_text is provided,
+        otherwise falls back to pure vector similarity.
 
         Deduplicates results to return only the best chunk per PDF.
 
@@ -177,40 +281,82 @@ class VectorSearchService:
             user_id: The user ID
             limit: Maximum number of PDFs to return (not chunks)
             db: Database session
+            query_text: Optional raw query text for full-text search (enables hybrid)
 
         Returns:
             List of SearchResult, one per PDF, ordered by similarity
         """
         vec_str = f"[{','.join(str(x) for x in query_vector)}]"
-        rows = await db.execute(
-            sql_text("""
-                SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
-                       1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
-                FROM pdf_chunks pc
-                JOIN pdfs p ON p.id = pc.pdf_id
-                WHERE pc.user_id = :user_id
-                ORDER BY pc.embedding <=> CAST(:vec AS vector)
-                LIMIT :limit
-            """),
-            {
-                "vec": vec_str,
-                "user_id": str(user_id),
-                "limit": limit * 3,  # Over-fetch to allow dedup by pdf_id
-            },
-        )
 
-        # Deduplicate: keep best-scoring chunk per PDF
+        if query_text:
+            rows = await db.execute(
+                sql_text("""
+                    WITH vector_results AS (
+                        SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
+                               1 - (pc.embedding <=> CAST(:vec AS vector)) AS semantic_score
+                        FROM pdf_chunks pc
+                        JOIN pdfs p ON p.id = pc.pdf_id
+                        WHERE pc.user_id = :user_id
+                        ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                        LIMIT :limit2
+                    ),
+                    keyword_results AS (
+                        SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
+                               ts_rank(pc.search_vector, plainto_tsquery('english', :query)) AS keyword_score
+                        FROM pdf_chunks pc
+                        JOIN pdfs p ON p.id = pc.pdf_id
+                        WHERE pc.user_id = :user_id
+                          AND pc.search_vector @@ plainto_tsquery('english', :query)
+                        LIMIT :limit
+                    )
+                    SELECT COALESCE(v.pdf_id, k.pdf_id) as pdf_id,
+                           COALESCE(v.pdf_title, k.pdf_title) as pdf_title,
+                           COALESCE(v.page_number, k.page_number) as page_number,
+                           COALESCE(v.content, k.content) as content,
+                           (COALESCE(v.semantic_score, 0) * 0.7 +
+                            COALESCE(k.keyword_score, 0) * 0.3) AS combined_score
+                    FROM vector_results v
+                    FULL OUTER JOIN keyword_results k ON v.pdf_id = k.pdf_id
+                    ORDER BY combined_score DESC
+                    LIMIT :limit
+                """),
+                {
+                    "vec": vec_str,
+                    "user_id": str(user_id),
+                    "limit": limit,
+                    "limit2": limit * 2,
+                    "query": query_text,
+                },
+            )
+        else:
+            rows = await db.execute(
+                sql_text("""
+                    SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.content,
+                           1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
+                    FROM pdf_chunks pc
+                    JOIN pdfs p ON p.id = pc.pdf_id
+                    WHERE pc.user_id = :user_id
+                    ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                    LIMIT :limit
+                """),
+                {
+                    "vec": vec_str,
+                    "user_id": str(user_id),
+                    "limit": limit * 3,
+                },
+            )
+
         seen: dict[str, SearchResult] = {}
         for r in rows:
             pdf_id_str = str(r.pdf_id)
             if pdf_id_str not in seen:
                 seen[pdf_id_str] = SearchResult(
-                    chunk_id=None,  # We don't return chunk_id for multi-PDF search
+                    chunk_id=str(r.id) if query_text else None,
                     pdf_id=pdf_id_str,
                     pdf_title=r.pdf_title,
                     page_number=r.page_number,
-                    content=r.content[:300],  # Snippet for preview
-                    score=float(r.score),
+                    content=r.content if query_text else r.content[:300],
+                    score=float(r.combined_score if query_text else r.score),
                 )
             if len(seen) >= limit:
                 break

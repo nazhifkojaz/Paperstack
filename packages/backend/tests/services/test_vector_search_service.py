@@ -1,4 +1,4 @@
-"""Tests for the vector search service (Phase 3.3: proximity boosting)."""
+"""Tests for the vector search service (Phase 3.3: proximity boosting, Phase 4.1: hybrid search)."""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -202,3 +202,272 @@ class TestSearchCollection:
             assert r.pdf_id is not None
             assert r.pdf_title is not None
             assert r.content is not None
+
+
+class TestHybridSearchPdf:
+    """Tests for hybrid search (Phase 4.1: keyword + semantic)."""
+
+    async def test_hybrid_search_uses_combined_score(self):
+        """Hybrid search should use combined_score column from CTE query."""
+        mock_db = AsyncMock()
+        rows = [
+            self._make_hybrid_row(uuid4(), 1, "BERT model content", 0.85),
+            self._make_hybrid_row(uuid4(), 3, "Neural network content", 0.72),
+            self._make_hybrid_row(uuid4(), 5, "Other content", 0.60),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter(rows)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="BERT model",
+        )
+
+        assert len(results) == 3
+        assert results[0].content == "BERT model content"
+        assert results[0].score == 0.85
+
+    async def test_hybrid_search_falls_back_to_vector_only(self, sample_rows):
+        """Without query_text, should use pure vector search."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter(sample_rows)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=5,
+            db=mock_db,
+        )
+
+        assert len(results) == 5
+        for r in results:
+            original = 0.8 - (r.page_number - 1) * 0.05
+            assert abs(r.score - original) < 0.001
+
+    async def test_hybrid_search_with_proximity_boost(self):
+        """Hybrid search should still support proximity boosting."""
+        mock_db = AsyncMock()
+        rows = [
+            self._make_hybrid_row(uuid4(), 1, "Page 1 content", 0.80),
+            self._make_hybrid_row(uuid4(), 2, "Page 2 content", 0.60),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter(rows)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=2,
+            db=mock_db,
+            query_text="test",
+            current_page=1,
+        )
+
+        assert len(results) == 2
+        assert results[0].page_number == 1
+        assert abs(results[0].score - 0.80 * 1.1) < 0.001
+
+    @staticmethod
+    def _make_hybrid_row(id_, page, content, score):
+        row = MagicMock()
+        row.id = id_
+        row.page_number = page
+        row.content = content
+        row.combined_score = score
+        return row
+
+
+class TestHybridSearchCollection:
+    """Tests for hybrid search in collection (Phase 4.1)."""
+
+    async def test_hybrid_collection_search_uses_combined_score(self):
+        """Hybrid collection search should use combined_score column."""
+        mock_db = AsyncMock()
+        rows = [
+            self._make_hybrid_collection_row(
+                uuid4(), uuid4(), "Paper 1", 1, "BERT transformer content", 0.88
+            ),
+            self._make_hybrid_collection_row(
+                uuid4(),
+                uuid4(),
+                "Paper 2",
+                3,
+                "Neural network content",
+                0.75,
+            ),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter(rows)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_collection(
+            query_vector=[0.1] * 384,
+            collection_id=uuid4(),
+            user_id=uuid4(),
+            top_k=2,
+            db=mock_db,
+            query_text="BERT transformer",
+        )
+
+        assert len(results) == 2
+        assert results[0].pdf_title == "Paper 1"
+        assert results[0].score == 0.88
+        assert results[0].pdf_id is not None
+
+    async def test_hybrid_collection_falls_back_to_vector_only(
+        self, sample_rows_collection
+    ):
+        """Without query_text, collection search should use pure vector."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter(sample_rows_collection)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_collection(
+            query_vector=[0.1] * 384,
+            collection_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+        )
+
+        assert len(results) == 3
+        for r in results:
+            assert r.pdf_id is not None
+            assert r.pdf_title is not None
+
+    @staticmethod
+    def _make_hybrid_collection_row(id_, pdf_id, pdf_title, page, content, score):
+        row = MagicMock()
+        row.id = id_
+        row.pdf_id = pdf_id
+        row.pdf_title = pdf_title
+        row.page_number = page
+        row.content = content
+        row.combined_score = score
+        return row
+
+
+class TestHybridSearchAll:
+    """Tests for hybrid search across all PDFs (Phase 4.1)."""
+
+    async def test_hybrid_all_search_uses_combined_score(self):
+        """Hybrid all-PDF search should use combined_score column."""
+        mock_db = AsyncMock()
+        rows = [
+            self._make_hybrid_all_row(
+                uuid4(), "Paper A", 5, "BERT model results", 0.90
+            ),
+            self._make_hybrid_all_row(
+                uuid4(),
+                "Paper B",
+                2,
+                "Transformer architecture",
+                0.82,
+            ),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter(rows)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_all(
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=2,
+            db=mock_db,
+            query_text="BERT model",
+        )
+
+        assert len(results) == 2
+        assert results[0].pdf_title == "Paper A"
+        assert results[0].score == 0.90
+
+    async def test_hybrid_all_search_deduplicates_by_pdf_id(self):
+        """Should deduplicate results to one chunk per PDF."""
+        mock_db = AsyncMock()
+        pdf_a = uuid4()
+        pdf_b = uuid4()
+        rows = [
+            self._make_hybrid_all_row(pdf_a, "Paper A", 1, "Content A1", 0.90),
+            self._make_hybrid_all_row(pdf_a, "Paper A", 3, "Content A2", 0.85),
+            self._make_hybrid_all_row(pdf_b, "Paper B", 2, "Content B1", 0.80),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter(rows)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_all(
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=5,
+            db=mock_db,
+            query_text="test",
+        )
+
+        pdf_ids = {r.pdf_id for r in results}
+        assert len(pdf_ids) == 2
+        assert str(pdf_a) in pdf_ids
+        assert str(pdf_b) in pdf_ids
+
+    async def test_hybrid_all_falls_back_to_vector_only(self):
+        """Without query_text, should use pure vector with dedup."""
+        mock_db = AsyncMock()
+        pdf_id = uuid4()
+        rows = [
+            self._make_row_all(pdf_id, "Paper A", 1, "Content A", 0.90),
+            self._make_row_all(pdf_id, "Paper A", 3, "Content A2", 0.85),
+            self._make_row_all(uuid4(), "Paper B", 2, "Content B", 0.80),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter(rows)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_all(
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=5,
+            db=mock_db,
+        )
+
+        assert len(results) == 2
+        for r in results:
+            assert r.chunk_id is None
+
+    @staticmethod
+    def _make_hybrid_all_row(pdf_id, pdf_title, page, content, score):
+        row = MagicMock()
+        row.id = uuid4()
+        row.pdf_id = pdf_id
+        row.pdf_title = pdf_title
+        row.page_number = page
+        row.content = content
+        row.combined_score = score
+        return row
+
+    @staticmethod
+    def _make_row_all(pdf_id, pdf_title, page, content, score):
+        row = MagicMock()
+        row.pdf_id = pdf_id
+        row.pdf_title = pdf_title
+        row.page_number = page
+        row.content = content
+        row.score = score
+        return row
