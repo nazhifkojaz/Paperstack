@@ -5,6 +5,9 @@ Phase 2 improvements:
 - Section/heading boundary detection (2.2)
 - Heading context preservation (2.3)
 - Context-aware overlap (2.4)
+
+Phase 3 improvements:
+- Reference section handling (3.2)
 """
 
 import re
@@ -16,6 +19,13 @@ CHUNK_SIZE = (
     800  # characters (~200 words, ~160 tokens) — deprecated, use settings.CHUNK_SIZE
 )
 CHUNK_OVERLAP = 150  # characters — deprecated, use settings.CHUNK_OVERLAP
+
+_REFERENCE_HEADINGS = {
+    "references",
+    "bibliography",
+    "works cited",
+    "literature cited",
+}
 
 _ABBREVIATIONS = {
     "e.g",
@@ -47,6 +57,37 @@ _ABBREVIATIONS = {
 }
 
 _HEADING_RE = re.compile(r"^\[HEADING L(\d+)\]\s+(.+)$")
+
+
+def _is_reference_heading(text: str, heading_type: str | None = None) -> bool:
+    """Detect reference section heading.
+
+    If heading_type is provided (from 0.3/2.2 annotations), only check
+    annotated headings — this is more reliable than raw text matching.
+    """
+    if heading_type == "heading":
+        lower = text.strip().lower()
+        if lower in _REFERENCE_HEADINGS:
+            return True
+        return (
+            re.match(
+                r"^\d*\.?\s*(references|bibliography|works cited|literature cited)",
+                text.strip(),
+                re.IGNORECASE,
+            )
+            is not None
+        )
+    lower = text.strip().lower()
+    if lower in _REFERENCE_HEADINGS:
+        return True
+    return (
+        re.match(
+            r"^\d*\.?\s*(references|bibliography|works cited|literature cited)",
+            text.strip(),
+            re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 @dataclass
@@ -391,6 +432,23 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
     # Track paragraph list for overlap computation
     all_paras = paragraphs  # list of (start, end, text)
 
+    # Detect reference section start to skip bibliography content
+    in_references = False
+    reference_heading_offsets = {
+        offset
+        for offset, title, level in headings
+        if _is_reference_heading(title, "heading")
+    }
+    # Also check raw text for reference headings not caught by font analysis
+    for match in re.finditer(
+        r"(\n\n|^)("
+        + "|".join(re.escape(k) for k in _REFERENCE_HEADINGS)
+        + r")(\n\n|\n|$)",
+        full_text,
+        re.MULTILINE | re.IGNORECASE,
+    ):
+        reference_heading_offsets.add(match.start(2))
+
     chunks: list[Chunk] = []
     current_text = ""
     current_page = _get_page_for_offset(paragraphs[0][0], page_boundaries)
@@ -408,6 +466,16 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
         if is_heading:
             current_section_title = heading_text
             current_section_level = heading_level
+            continue
+
+        # Check if this paragraph is a reference section heading
+        if para_start in reference_heading_offsets or _is_reference_heading(
+            para_text, None
+        ):
+            in_references = True
+            continue
+
+        if in_references:
             continue
 
         separator = "\n\n" if current_text else ""
