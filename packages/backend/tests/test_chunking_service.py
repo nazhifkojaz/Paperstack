@@ -11,7 +11,9 @@ from app.services.chunking_service import (
     _get_page_for_offset,
     _get_section_at_offset,
     _is_heading_marker,
+    _is_reference_heading,
     _SECTION_KEYWORDS,
+    _REFERENCE_HEADINGS,
 )
 
 
@@ -317,3 +319,66 @@ def test_chunk_text_with_pages_heading_as_hard_boundary():
     # The second chunk should have "Introduction" as its section
     intro_chunks = [c for c in chunks if c.section_title == "Introduction"]
     assert len(intro_chunks) >= 1
+
+
+# --- _is_reference_heading (Phase 3.2) ---
+
+
+def test_is_reference_heading_exact_match():
+    for heading in _REFERENCE_HEADINGS:
+        assert _is_reference_heading(heading) is True
+
+
+def test_is_reference_heading_case_insensitive():
+    assert _is_reference_heading("References") is True
+    assert _is_reference_heading("REFERENCES") is True
+    assert _is_reference_heading("bibliography") is True
+
+
+def test_is_reference_heading_with_numbering():
+    assert _is_reference_heading("6. References") is True
+    assert _is_reference_heading("References.") is True
+
+
+def test_is_reference_heading_non_reference():
+    assert _is_reference_heading("Introduction") is False
+    assert _is_reference_heading("Methods") is False
+    assert _is_reference_heading("Results and Discussion") is False
+
+
+def test_is_reference_heading_with_heading_type():
+    assert _is_reference_heading("References", heading_type="heading") is True
+    assert _is_reference_heading("Bibliography", heading_type="heading") is True
+    assert _is_reference_heading("Methods", heading_type="heading") is False
+
+
+# --- Reference section skipping in chunking (Phase 3.2) ---
+
+
+def test_chunk_text_skips_reference_section():
+    """Content after a reference heading should not appear in any chunk."""
+    para = " ".join(f"This is sentence {i} with enough content." for i in range(15))
+    text = f"--- PAGE 1 ---\n\n{para}\n\nReferences\n\nSmith J. 2020. A paper title. Journal 1:1-10.\n\nJones K. 2021. Another paper title. Journal 2:20-30."
+    chunks = chunk_text_with_pages(text)
+    all_content = " ".join(c.content for c in chunks)
+    # The reference entries should not appear
+    assert "Smith J." not in all_content
+    assert "Jones K." not in all_content
+
+
+def test_chunk_text_skips_bibliography_section():
+    """Content after 'Bibliography' heading should not appear in any chunk."""
+    para = " ".join(f"This is sentence {i} with enough content." for i in range(15))
+    text = f"--- PAGE 1 ---\n\n{para}\n\nBibliography\n\nAuthor A. 2019. Some work. Publisher."
+    chunks = chunk_text_with_pages(text)
+    all_content = " ".join(c.content for c in chunks)
+    assert "Author A." not in all_content
+
+
+def test_chunk_text_includes_content_before_references():
+    """Content before reference section should still be chunked normally."""
+    intro = " ".join(f"This is introduction sentence {i}." for i in range(15))
+    text = f"--- PAGE 1 ---\n\nIntroduction\n\n{intro}\n\nReferences\n\nCitation here."
+    chunks = chunk_text_with_pages(text)
+    all_content = " ".join(c.content for c in chunks)
+    assert "Introduction" in all_content or "introduction" in all_content.lower()
