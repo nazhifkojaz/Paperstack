@@ -297,7 +297,7 @@ class VectorSearchService:
             rows = await db.execute(
                 sql_text("""
                     WITH vector_results AS (
-                        SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
+                        SELECT pc.id, pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
                                1 - (pc.embedding <=> CAST(:vec AS vector)) AS semantic_score
                         FROM pdf_chunks pc
                         JOIN pdfs p ON p.id = pc.pdf_id
@@ -306,7 +306,7 @@ class VectorSearchService:
                         LIMIT :limit2
                     ),
                     keyword_results AS (
-                        SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
+                        SELECT pc.id, pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
                                ts_rank(pc.search_vector, plainto_tsquery('english', :query)) AS keyword_score
                         FROM pdf_chunks pc
                         JOIN pdfs p ON p.id = pc.pdf_id
@@ -314,7 +314,8 @@ class VectorSearchService:
                           AND pc.search_vector @@ plainto_tsquery('english', :query)
                         LIMIT :limit
                     )
-                    SELECT COALESCE(v.pdf_id, k.pdf_id) as pdf_id,
+                    SELECT COALESCE(v.id, k.id) as id,
+                           COALESCE(v.pdf_id, k.pdf_id) as pdf_id,
                            COALESCE(v.pdf_title, k.pdf_title) as pdf_title,
                            COALESCE(v.page_number, k.page_number) as page_number,
                            COALESCE(v.end_page_number, k.end_page_number) as end_page_number,
@@ -337,7 +338,7 @@ class VectorSearchService:
         else:
             rows = await db.execute(
                 sql_text("""
-                    SELECT pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
+                    SELECT pc.id, pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
                            1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
                     FROM pdf_chunks pc
                     JOIN pdfs p ON p.id = pc.pdf_id
