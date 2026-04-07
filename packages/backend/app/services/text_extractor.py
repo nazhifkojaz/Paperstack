@@ -24,20 +24,20 @@ def extract_text_with_pages(pdf_file: Union[BinaryIO, BytesIO]) -> tuple[str, in
         tuple of (text_with_page_markers, total_pages, pages_analyzed_note)
         pages_analyzed_note is "all" or "1-N of M" if truncated.
     """
-    doc = pymupdf.open(stream=pdf_file.read(), filetype="pdf")
-    total_pages = len(doc)
-    parts: list[str] = []
+    with pymupdf.open(stream=pdf_file.read(), filetype="pdf") as doc:
+        total_pages = len(doc)
+        parts: list[str] = []
 
-    for page_idx in range(total_pages):
-        page = doc[page_idx]
-        page_text = _extract_page_in_reading_order(page)
-        parts.append(f"--- PAGE {page_idx + 1} ---\n{page_text}")
+        for page_idx in range(total_pages):
+            page = doc[page_idx]
+            page_text = _extract_page_in_reading_order(page)
+            parts.append(f"--- PAGE {page_idx + 1} ---\n{page_text}")
 
-    doc.close()
-
-    full_text = "\n\n".join(parts)
-    truncated_text, pages_note = _truncate_text(full_text, MAX_TEXT_LENGTH, total_pages)
-    return truncated_text, total_pages, pages_note
+        full_text = "\n\n".join(parts)
+        truncated_text, pages_note = _truncate_text(
+            full_text, MAX_TEXT_LENGTH, total_pages
+        )
+        return truncated_text, total_pages, pages_note
 
 
 def _extract_page_with_headings(page: pymupdf.Page) -> list[dict]:
