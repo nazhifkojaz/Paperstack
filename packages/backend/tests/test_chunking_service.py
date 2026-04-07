@@ -362,12 +362,6 @@ def test_is_reference_heading_non_reference():
     assert _is_reference_heading("Results and Discussion") is False
 
 
-def test_is_reference_heading_with_heading_type():
-    assert _is_reference_heading("References", heading_type="heading") is True
-    assert _is_reference_heading("Bibliography", heading_type="heading") is True
-    assert _is_reference_heading("Methods", heading_type="heading") is False
-
-
 # --- Reference section skipping in chunking (Phase 3.2) ---
 
 

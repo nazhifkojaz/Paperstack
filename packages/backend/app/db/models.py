@@ -4,6 +4,7 @@ import uuid
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Column,
     DateTime,
     ForeignKey,
     Integer,
@@ -12,7 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
 
@@ -402,6 +403,7 @@ class PdfChunk(Base):
     embedding: Mapped[Optional[Any]] = mapped_column(Vector(768))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     section_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    search_vector = Column(TSVECTOR, nullable=True)  # GENERATED column, managed by DB
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )

@@ -59,24 +59,8 @@ _ABBREVIATIONS = {
 _HEADING_RE = re.compile(r"^\[HEADING L(\d+)\]\s+(.+)$")
 
 
-def _is_reference_heading(text: str, heading_type: str | None = None) -> bool:
-    """Detect reference section heading.
-
-    If heading_type is provided (from 0.3/2.2 annotations), only check
-    annotated headings — this is more reliable than raw text matching.
-    """
-    if heading_type == "heading":
-        lower = text.strip().lower()
-        if lower in _REFERENCE_HEADINGS:
-            return True
-        return (
-            re.match(
-                r"^\d*\.?\s*(references|bibliography|works cited|literature cited)",
-                text.strip(),
-                re.IGNORECASE,
-            )
-            is not None
-        )
+def _is_reference_heading(text: str) -> bool:
+    """Detect reference section heading."""
     lower = text.strip().lower()
     if lower in _REFERENCE_HEADINGS:
         return True
@@ -436,9 +420,7 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
     # Detect reference section start to skip bibliography content
     in_references = False
     reference_heading_offsets = {
-        offset
-        for offset, title, level in headings
-        if _is_reference_heading(title, "heading")
+        offset for offset, title, level in headings if _is_reference_heading(title)
     }
     # Also check raw text for reference headings not caught by font analysis
     for match in re.finditer(
@@ -471,9 +453,7 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
             continue
 
         # Check if this paragraph is a reference section heading
-        if para_start in reference_heading_offsets or _is_reference_heading(
-            para_text, None
-        ):
+        if para_start in reference_heading_offsets or _is_reference_heading(para_text):
             in_references = True
             continue
 
