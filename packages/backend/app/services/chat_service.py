@@ -1,8 +1,20 @@
 """Chat service: builds RAG context and orchestrates streaming LLM calls."""
 
+import logging
 from typing import AsyncIterator
 
+import tiktoken
+
 from app.services.llm_service import LLMService, STREAM_PROVIDERS
+
+DEFAULT_CONTEXT_MAX_TOKENS = 4000
+
+logger = logging.getLogger(__name__)
+
+try:
+    _ENCODER = tiktoken.get_encoding("cl100k_base")
+except Exception:
+    _ENCODER = None
 
 SYSTEM_PROMPT = (
     "You are a research assistant helping a user understand academic papers. "
@@ -27,6 +39,26 @@ COLLECTION_SYSTEM_PROMPT = (
 CONTEXT_WINDOW = 10  # maximum number of past messages sent as conversation history
 
 
+def _count_tokens(text: str) -> int:
+    """Count tokens in text using tiktoken, with character fallback."""
+    if _ENCODER is not None:
+        return len(_ENCODER.encode(text))
+    return len(text) // 4
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate text to fit within max_tokens, appending a truncation marker."""
+    if _ENCODER is not None:
+        tokens = _ENCODER.encode(text)
+        if len(tokens) <= max_tokens:
+            return text
+        truncated_tokens = tokens[:max_tokens]
+        truncated_text = _ENCODER.decode(truncated_tokens)
+        return truncated_text + "\n[...truncated]"
+    remaining_chars = max_tokens * 4
+    return text[:remaining_chars] + "\n[...truncated]"
+
+
 class ChatService:
     """Chat service for building RAG context and streaming LLM replies.
 
@@ -41,18 +73,37 @@ class ChatService:
         """
         self._llm_service = llm_service or LLMService()
 
-    def build_context(self, chunks: list[dict]) -> str:
+    def build_context(
+        self, chunks: list[dict], max_tokens: int = DEFAULT_CONTEXT_MAX_TOKENS
+    ) -> str:
         """Format retrieved chunks into a context string for the LLM prompt.
 
         Each chunk dict must have 'page_number' and 'content' keys.
         Optional 'section_title' key adds section context to the header.
+
+        Respects a token budget (max_tokens). Chunks that would exceed the
+        budget are truncated with a marker; subsequent chunks are dropped.
         """
         parts = []
+        total_tokens = 0
+
         for c in chunks:
             header = f"[Page {c['page_number']}]"
             if c.get("section_title"):
                 header = f"[Page {c['page_number']} · {c['section_title']}]"
-            parts.append(f"{header}\n{c['content']}")
+            chunk_text = f"{header}\n{c['content']}"
+            chunk_tokens = _count_tokens(chunk_text)
+
+            if total_tokens + chunk_tokens > max_tokens:
+                remaining = max_tokens - total_tokens
+                if remaining > 50:
+                    truncated = _truncate_to_tokens(chunk_text, remaining)
+                    parts.append(truncated)
+                break
+
+            parts.append(chunk_text)
+            total_tokens += chunk_tokens
+
         return "\n\n---\n\n".join(parts)
 
     def build_messages(
