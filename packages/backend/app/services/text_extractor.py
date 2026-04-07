@@ -110,6 +110,7 @@ def _extract_page_with_headings(page: pymupdf.Page) -> list[dict]:
                     "level": heading_level,
                     "content": content,
                     "y": block["bbox"][1],
+                    "x": block["bbox"][0],
                 }
             )
         else:
@@ -119,6 +120,7 @@ def _extract_page_with_headings(page: pymupdf.Page) -> list[dict]:
                     "level": 0,
                     "content": content,
                     "y": block["bbox"][1],
+                    "x": block["bbox"][0],
                 }
             )
 
