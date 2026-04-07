@@ -32,6 +32,7 @@ class SearchResult:
         content: The chunk text content
         score: Cosine similarity score (0-1, higher is better)
     """
+
     chunk_id: str | None
     pdf_id: str | None
     pdf_title: str | None
@@ -50,6 +51,7 @@ class VectorSearchService:
         user_id: UUID | str,
         top_k: int,
         db: AsyncSession,
+        current_page: int | None = None,
     ) -> list[SearchResult]:
         """Search within a single PDF for semantically similar chunks.
 
@@ -59,6 +61,7 @@ class VectorSearchService:
             user_id: The user ID (for ownership check)
             top_k: Maximum number of results to return
             db: Database session
+            current_page: Optional current page for proximity boosting
 
         Returns:
             List of SearchResult ordered by similarity (highest first)
@@ -82,7 +85,7 @@ class VectorSearchService:
             },
         )
 
-        return [
+        results = [
             SearchResult(
                 chunk_id=str(r.id),
                 pdf_id=None,
@@ -93,6 +96,16 @@ class VectorSearchService:
             )
             for r in rows
         ]
+
+        if current_page is not None:
+            for result in results:
+                distance = abs(result.page_number - current_page)
+                proximity_boost = max(0, 0.1 * (1 - distance / 10))
+                result.score *= 1 + proximity_boost
+            results.sort(key=lambda r: r.score, reverse=True)
+            results = results[:top_k]
+
+        return results
 
     async def search_collection(
         self,
