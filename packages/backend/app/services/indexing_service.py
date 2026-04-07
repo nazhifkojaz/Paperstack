@@ -235,6 +235,8 @@ class IndexingService:
                         page_number=chunk.page_number,
                         content=chunk.content.replace("\x00", ""),
                         embedding=embedding,
+                        section_title=chunk.section_title,
+                        section_level=chunk.section_level,
                     )
                 )
 
