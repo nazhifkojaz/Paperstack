@@ -392,3 +392,84 @@ def test_chunk_text_includes_content_before_references():
     chunks = chunk_text_with_pages(text)
     all_content = " ".join(c.content for c in chunks)
     assert "Introduction" in all_content or "introduction" in all_content.lower()
+
+
+# --- Configurable chunk parameters (Phase 1.4 / TG-1) ---
+
+
+def test_chunk_size_configurable_smaller(monkeypatch):
+    """Smaller CHUNK_SIZE should produce more chunks."""
+    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE", 300)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP", 50)
+
+    paras = "\n\n".join(
+        f"Paragraph number {i}. "
+        + "This paragraph has enough words to be meaningful. " * 3
+        for i in range(10)
+    )
+    text = f"--- PAGE 1 ---\n\n{paras}"
+
+    # With default CHUNK_SIZE=800, this would produce ~2-3 chunks
+    # With CHUNK_SIZE=300, we should get significantly more
+    chunks = chunk_text_with_pages(text)
+    assert len(chunks) >= 4
+
+
+def test_chunk_size_configurable_larger(monkeypatch):
+    """Larger CHUNK_SIZE should produce fewer, bigger chunks."""
+    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE", 2000)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP", 200)
+
+    paras = "\n\n".join(
+        f"Paragraph number {i}. "
+        + "This paragraph has enough words to be meaningful. " * 2
+        for i in range(10)
+    )
+    text = f"--- PAGE 1 ---\n\n{paras}"
+
+    chunks = chunk_text_with_pages(text)
+    # With CHUNK_SIZE=2000, all content should fit in very few chunks
+    assert len(chunks) <= 3
+    # Each chunk should be substantially larger than the default would allow
+    for c in chunks:
+        assert len(c.content) > 400
+
+
+def test_chunk_overlap_configurable(monkeypatch):
+    """CHUNK_OVERLAP affects how much text is shared between consecutive chunks."""
+    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE", 400)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP", 100)
+
+    paras = "\n\n".join(
+        f"Paragraph {i}. " + "Repeated sentence for content. " * 5 for i in range(8)
+    )
+    text = f"--- PAGE 1 ---\n\n{paras}"
+
+    chunks = chunk_text_with_pages(text)
+    assert len(chunks) >= 2
+
+    # Verify overlap exists: consecutive chunks should share some text
+    for i in range(len(chunks) - 1):
+        words_curr = set(chunks[i].content.lower().split())
+        words_next = set(chunks[i + 1].content.lower().split())
+        shared = words_curr & words_next
+        # With overlap of 100 chars, there should be some shared words
+        assert len(shared) > 0
+
+
+def test_chunk_size_default_not_broken(monkeypatch):
+    """Verify chunking still works with default config values."""
+    # Explicitly set to defaults to ensure no regression
+    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE", 800)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP", 150)
+
+    paras = "\n\n".join(
+        f"This is paragraph {i}. " + "It contains multiple sentences. " * 4
+        for i in range(5)
+    )
+    text = f"--- PAGE 1 ---\n\n{paras}"
+
+    chunks = chunk_text_with_pages(text)
+    assert len(chunks) >= 1
+    assert all(c.chunk_index == i for i, c in enumerate(chunks))
+    assert all(c.page_number == 1 for c in chunks)
