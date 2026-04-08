@@ -567,3 +567,310 @@ class TestHybridSearchWeights:
         params = call_args[0][1]
         assert "sem_weight" not in params
         assert "kw_weight" not in params
+
+
+class TestErrorHandling:
+    """Negative / edge-case tests for error handling (TG-2).
+
+    The service has no internal try/except — exceptions from the DB layer
+    propagate to callers.  These tests verify that behavior so callers know
+    what to expect and future changes don't silently swallow errors.
+    """
+
+    # --- Database errors propagate -------------------------------------------------
+
+    async def test_db_error_propagates_search_pdf(self):
+        """DB errors in search_pdf should propagate (not be swallowed)."""
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(side_effect=Exception("connection lost"))
+
+        service = VectorSearchService()
+        with pytest.raises(Exception, match="connection lost"):
+            await service.search_pdf(
+                query_vector=[0.1] * 384,
+                pdf_id=uuid4(),
+                user_id=uuid4(),
+                top_k=3,
+                db=mock_db,
+            )
+
+    async def test_db_error_propagates_search_collection(self):
+        """DB errors in search_collection should propagate."""
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(side_effect=Exception("timeout"))
+
+        service = VectorSearchService()
+        with pytest.raises(Exception, match="timeout"):
+            await service.search_collection(
+                query_vector=[0.1] * 384,
+                collection_id=uuid4(),
+                user_id=uuid4(),
+                top_k=3,
+                db=mock_db,
+            )
+
+    async def test_db_error_propagates_search_all(self):
+        """DB errors in search_all should propagate."""
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(side_effect=Exception("deadlock"))
+
+        service = VectorSearchService()
+        with pytest.raises(Exception, match="deadlock"):
+            await service.search_all(
+                query_vector=[0.1] * 384,
+                user_id=uuid4(),
+                limit=3,
+                db=mock_db,
+            )
+
+    # --- Empty query vector --------------------------------------------------------
+
+    async def test_empty_vector_formats_as_empty_brackets(self):
+        """An empty query_vector should still produce a vec_str and hit the DB.
+
+        The resulting "[]" cast will fail in PostgreSQL, but the service layer
+        doesn't validate that — it just forwards.  This test documents the
+        current behaviour so we notice if it changes.
+        """
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[],
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+        )
+
+        assert results == []
+        # Verify the vec parameter that was sent to SQL
+        call_args = mock_db.execute.call_args
+        assert call_args[0][1]["vec"] == "[]"
+
+    # --- Non-UUID string identifiers -----------------------------------------------
+
+    async def test_string_user_id_forwarded_as_is(self):
+        """String (non-UUID) user_id should be forwarded to SQL without error."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id="not-a-uuid",
+            top_k=3,
+            db=mock_db,
+        )
+
+        assert results == []
+        params = mock_db.execute.call_args[0][1]
+        assert params["user_id"] == "not-a-uuid"
+
+    async def test_string_pdf_id_forwarded_as_is(self):
+        """String (non-UUID) pdf_id should be forwarded to SQL without error."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id="invalid-pdf-id",
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+        )
+
+        assert results == []
+        params = mock_db.execute.call_args[0][1]
+        assert params["pdf_id"] == "invalid-pdf-id"
+
+    # --- query_text edge cases -----------------------------------------------------
+
+    async def test_empty_query_text_uses_vector_path(self):
+        """Empty string query_text is falsy, so it should use the vector-only path."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="",
+        )
+
+        # Empty string is falsy — takes vector-only path (no "query" param)
+        params = mock_db.execute.call_args[0][1]
+        assert "query" not in params
+        assert results == []
+
+    async def test_special_characters_in_query_text(self):
+        """Special SQL characters in query_text should be passed as params (not injected)."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        malicious = "'; DROP TABLE pdf_chunks; --"
+        await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text=malicious,
+        )
+
+        params = mock_db.execute.call_args[0][1]
+        assert params["query"] == malicious
+
+    async def test_unicode_query_text(self):
+        """Unicode characters in query_text should pass through unchanged."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        unicode_query = "données de recherche 日本語"
+        await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text=unicode_query,
+        )
+
+        params = mock_db.execute.call_args[0][1]
+        assert params["query"] == unicode_query
+
+    # --- Vector formatting edge cases ----------------------------------------------
+
+    async def test_single_element_vector(self):
+        """A 1-element vector should format correctly."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        await service.search_pdf(
+            query_vector=[0.5],
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+        )
+
+        params = mock_db.execute.call_args[0][1]
+        assert params["vec"] == "[0.5]"
+
+    async def test_vector_with_negative_values(self):
+        """Vectors with negative values should format correctly."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        await service.search_pdf(
+            query_vector=[-0.3, 0.1, -0.9],
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+        )
+
+        params = mock_db.execute.call_args[0][1]
+        assert params["vec"] == "[-0.3,0.1,-0.9]"
+
+    # --- Empty result sets ---------------------------------------------------------
+
+    async def test_search_pdf_empty_results(self):
+        """search_pdf should return [] when DB returns no rows."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=5,
+            db=mock_db,
+        )
+
+        assert results == []
+
+    async def test_search_collection_empty_results(self):
+        """search_collection should return [] when DB returns no rows."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_collection(
+            query_vector=[0.1] * 384,
+            collection_id=uuid4(),
+            user_id=uuid4(),
+            top_k=5,
+            db=mock_db,
+        )
+
+        assert results == []
+
+    async def test_search_all_empty_results(self):
+        """search_all should return [] when DB returns no rows."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_all(
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=5,
+            db=mock_db,
+        )
+
+        assert results == []
+
+    # --- Proximity boost with empty results ----------------------------------------
+
+    async def test_proximity_boost_empty_results_no_error(self):
+        """Proximity boost on empty results should not crash."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        results = await service.search_pdf(
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=5,
+            db=mock_db,
+            current_page=1,
+        )
+
+        assert results == []
