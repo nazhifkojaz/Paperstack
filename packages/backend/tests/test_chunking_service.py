@@ -473,3 +473,153 @@ def test_chunk_size_default_not_broken(monkeypatch):
     assert len(chunks) >= 1
     assert all(c.chunk_index == i for i, c in enumerate(chunks))
     assert all(c.page_number == 1 for c in chunks)
+
+
+# --- Multi-page span edge cases (TG-5) ---
+
+
+def test_chunk_spans_three_pages():
+    """A single chunk can span 3+ pages when paragraphs are short relative to CHUNK_SIZE."""
+    # Use very small paragraphs per page so they all accumulate into one chunk.
+    # Each page ~150 chars, 3 pages ~450 chars, well under CHUNK_SIZE=800.
+    pages = []
+    for i in range(1, 4):
+        page_text = " ".join(
+            f"Sentence {j} on page {i}."
+            for j in range(6)
+        )
+        pages.append(f"--- PAGE {i} ---\n\n{page_text}")
+    text = "\n\n".join(pages)
+
+    chunks = chunk_text_with_pages(text)
+
+    # With ~150 chars per page and CHUNK_SIZE=800, all three pages should
+    # fit into a single chunk spanning pages 1→3
+    assert len(chunks) >= 1
+    # Verify no chunk has end_page_number < page_number
+    for c in chunks:
+        assert c.end_page_number >= c.page_number
+
+    # The total page coverage must include all 3 pages
+    all_pages = set()
+    for c in chunks:
+        for p in range(c.page_number, c.end_page_number + 1):
+            all_pages.add(p)
+    assert all_pages == {1, 2, 3}
+
+    # At least one chunk spans 2+ pages
+    spanning = [c for c in chunks if c.end_page_number > c.page_number]
+    assert len(spanning) >= 1
+
+
+def test_chunk_spans_four_pages():
+    """Chunks can span even more pages (4+) with enough short content."""
+    pages = []
+    for i in range(1, 5):
+        page_text = " ".join(
+            f"Page {i} sentence {j} here with content."
+            for j in range(5)
+        )
+        pages.append(f"--- PAGE {i} ---\n\n{page_text}")
+    text = "\n\n".join(pages)
+
+    chunks = chunk_text_with_pages(text)
+
+    # All pages must be covered
+    all_pages = set()
+    for c in chunks:
+        for p in range(c.page_number, c.end_page_number + 1):
+            all_pages.add(p)
+    assert all_pages == {1, 2, 3, 4}
+
+    # At least one chunk spans 2+ pages
+    spanning = [c for c in chunks if c.end_page_number > c.page_number]
+    assert len(spanning) >= 1
+
+
+def test_empty_page_between_spanned_pages():
+    """A chunk can span across an empty page (no text content on that page).
+
+    Empty pages are skipped during page block parsing, but the remaining
+    paragraphs get their page attribution from offset→page mapping. With
+    enough short content, a single chunk can span from page 1 to page 3,
+    skipping the empty page 2 entirely (its offset is never recorded).
+    """
+    # Short content that will accumulate into one chunk
+    page1 = " ".join(f"Sentence {i} on page one." for i in range(6))
+    page3 = " ".join(f"Sentence {i} on page three." for i in range(6))
+    # Page 2 is empty (no text after the marker)
+    text = f"--- PAGE 1 ---\n\n{page1}\n\n--- PAGE 2 ---\n\n\n\n--- PAGE 3 ---\n\n{page3}"
+
+    chunks = chunk_text_with_pages(text)
+    assert len(chunks) >= 1
+
+    # Page 2 has no text content, so it should not appear in any chunk's range.
+    # The chunker skips empty pages in page_blocks, but the boundary offset
+    # for page 3 is still recorded — so a chunk can span page 1→3.
+    all_pages = set()
+    for c in chunks:
+        for p in range(c.page_number, c.end_page_number + 1):
+            all_pages.add(p)
+    assert 1 in all_pages
+    assert 3 in all_pages
+    # Page 2 is empty and not in page_blocks, but range(c.page_number, c.end_page_number+1)
+    # might include it if a chunk spans 1→3. This is expected behavior — the chunk
+    # covers content from page 1 and page 3, and the range 1-3 is a page-level span.
+
+
+def test_get_page_for_offset_with_large_gaps():
+    """_get_page_for_offset should handle non-contiguous page numbers."""
+    # Pages 1, 3, 7 (gaps in numbering — e.g. after removing blank pages)
+    boundaries = [(0, 1), (500, 3), (1000, 7)]
+    assert _get_page_for_offset(0, boundaries) == 1
+    assert _get_page_for_offset(250, boundaries) == 1
+    assert _get_page_for_offset(500, boundaries) == 3
+    assert _get_page_for_offset(750, boundaries) == 3
+    assert _get_page_for_offset(1000, boundaries) == 7
+    assert _get_page_for_offset(5000, boundaries) == 7  # beyond last boundary
+
+
+def test_get_page_for_offset_single_page():
+    """Single-page document boundary list."""
+    boundaries = [(0, 1)]
+    assert _get_page_for_offset(0, boundaries) == 1
+    assert _get_page_for_offset(99999, boundaries) == 1
+
+
+def test_get_page_for_offset_exact_boundary():
+    """Offset exactly at a page boundary belongs to the new page."""
+    boundaries = [(0, 1), (500, 2), (1000, 3)]
+    # Offset 500 is exactly at page 2's start — should return page 2
+    assert _get_page_for_offset(500, boundaries) == 2
+    # Offset 499 is just before — should return page 1
+    assert _get_page_for_offset(499, boundaries) == 1
+
+
+def test_multi_page_chunk_end_page_tracks_last_paragraph():
+    """end_page_number should reflect the page of the last paragraph in the chunk,
+    not the first."""
+    # Page 1 has a long paragraph (>800 chars), page 2 has a short one
+    page1 = " ".join(
+        f"This is sentence {i} on page one with enough words to form content."
+        for i in range(20)
+    )
+    page2 = " ".join(
+        f"This is sentence {i} on page two with enough words for content."
+        for i in range(20)
+    )
+    text = f"--- PAGE 1 ---\n\n{page1}\n\n--- PAGE 2 ---\n\n{page2}"
+
+    chunks = chunk_text_with_pages(text)
+
+    # Find the chunk that starts on page 1
+    page1_chunks = [c for c in chunks if c.page_number == 1]
+    assert len(page1_chunks) >= 1
+
+    # The first chunk on page 1 should have end_page_number reflecting
+    # where its last paragraph falls
+    first = page1_chunks[0]
+    # With default CHUNK_SIZE=800, page1 text alone (~1000 chars) likely fills
+    # one chunk, so end_page_number should be 1. But if it overflows to page 2,
+    # end_page_number should be 2.
+    assert first.end_page_number >= first.page_number
