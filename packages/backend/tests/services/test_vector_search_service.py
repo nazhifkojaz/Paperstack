@@ -137,13 +137,21 @@ class TestSearchPdfProximityBoost:
             assert abs(r.score - original) < 0.001
 
     async def test_proximity_boost_reorders_results(self):
-        """Proximity boost should reorder results when a lower-scoring page is closer."""
+        """Proximity boost should reorder results when a lower-scoring page is closer.
+
+        Scenario: two pages with nearly identical scores, where the lower-scored
+        page is on current_page (max 10% boost) and the higher-scored page is
+        far enough away to get minimal or no boost.
+
+            Page  1: score 0.91, distance 0 → boost 10% → 0.91 * 1.10 = 1.001
+            Page 10: score 0.93, distance 9 → boost  1% → 0.93 * 1.01 = 0.9393
+
+        After boosting, page 1 overtakes page 10 (1.001 > 0.9393).
+        """
         mock_db = AsyncMock()
-        # Page 5 has highest score (0.9), page 1 has lower score (0.5)
         rows = [
-            self._make_row(uuid4(), 5, "Page 5 content", 0.9),
-            self._make_row(uuid4(), 1, "Page 1 content", 0.5),
-            self._make_row(uuid4(), 2, "Page 2 content", 0.7),
+            self._make_row(uuid4(), 10, "Page 10 content", 0.93),
+            self._make_row(uuid4(), 1, "Page 1 content", 0.91),
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = lambda self: iter(rows)
@@ -154,19 +162,17 @@ class TestSearchPdfProximityBoost:
             query_vector=[0.1] * 384,
             pdf_id=uuid4(),
             user_id=uuid4(),
-            top_k=3,
+            top_k=2,
             db=mock_db,
             current_page=1,
         )
 
-        # Page 1 should be first after boosting (0.5 * 1.1 = 0.55)
-        # Page 5 gets no boost (distance 4, boost = 0.1 * (1 - 4/10) = 0.06, score = 0.9 * 1.06 = 0.954)
-        # Actually page 5 still wins. Let's use a tighter scenario.
-        # Page 1: 0.5 * 1.1 = 0.55
-        # Page 2: 0.7 * 1.09 = 0.763
-        # Page 5: 0.9 * 1.06 = 0.954
-        # Page 5 still wins. The boost is small by design.
-        assert results[0].score > results[-1].score
+        # Page 1 should now rank FIRST after boosting
+        assert results[0].page_number == 1
+        assert abs(results[0].score - 0.91 * 1.1) < 0.001
+        # Page 10 should be demoted to second
+        assert results[1].page_number == 10
+        assert abs(results[1].score - 0.93 * 1.01) < 0.001
 
     @staticmethod
     def _make_row(id_, page, content, score):
