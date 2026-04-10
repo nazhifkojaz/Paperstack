@@ -541,6 +541,7 @@ class TestStreamMessageOpenRouterFallback:
 
         async def mock_stream_reply_openrouter(*args, **kwargs):
             raise LLMRateLimitError("openrouter")
+            yield  # noqa: unreachable — makes this an async generator
 
         async def mock_stream_reply_paid(*args, **kwargs):
             yield "Paid "
@@ -561,12 +562,11 @@ class TestStreamMessageOpenRouterFallback:
         mock_chat_instance.build_messages = MagicMock(
             return_value=("system prompt", [{"role": "user", "content": "test"}])
         )
-        # First call raises, second call succeeds
-        mock_chat_instance.stream_reply = AsyncMock(
-            side_effect=[
-                mock_stream_reply_openrouter(),
-                mock_stream_reply_paid(),
-            ]
+        # Must use MagicMock (not AsyncMock) so calls return async generators
+        # directly — the route does `async for token in stream_reply(...)`.
+        # Call the functions to create async generator objects.
+        mock_chat_instance.stream_reply = MagicMock(
+            side_effect=[mock_stream_reply_openrouter(), mock_stream_reply_paid()]
         )
 
         with patch(
@@ -646,6 +646,7 @@ class TestStreamMessageOpenRouterFallback:
 
         async def mock_stream_reply_openrouter(*args, **kwargs):
             raise LLMRateLimitError("openrouter")
+            yield  # noqa: unreachable — makes this an async generator
 
         mock_indexing = MagicMock()
         mock_indexing.get_or_create_status = AsyncMock(
@@ -662,7 +663,7 @@ class TestStreamMessageOpenRouterFallback:
         mock_chat_instance.build_messages = MagicMock(
             return_value=("system prompt", [{"role": "user", "content": "test"}])
         )
-        mock_chat_instance.stream_reply = AsyncMock(
+        mock_chat_instance.stream_reply = MagicMock(
             side_effect=[mock_stream_reply_openrouter()]
         )
 
@@ -779,6 +780,84 @@ class TestStreamMessageOpenRouterFallback:
 
                 assert response.status_code == 200
                 # Quota should NOT be decremented for free OpenRouter
+                mock_decrement.assert_not_called()
+
+    async def test_stream_user_own_key_skips_openrouter(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """When user has their own key, OpenRouter should never be tried."""
+        _setup_stream_mocks()
+
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        await db_session.commit()
+
+        conv_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"pdf_id": str(pdf.id)},
+            headers=auth_headers,
+        )
+        conv_id = conv_resp.json()["id"]
+
+        async def mock_stream_reply(*args, **kwargs):
+            yield "User key response."
+
+        mock_indexing = MagicMock()
+        mock_indexing.get_or_create_status = AsyncMock(
+            return_value=MagicMock(status="indexed")
+        )
+        mock_indexing.reset_if_stale = AsyncMock(return_value=False)
+
+        mock_embed_instance = MagicMock()
+        mock_embed_instance.embed_query = AsyncMock(return_value=[0.1, 0.2, 0.3])
+
+        mock_llm_instance = MagicMock()
+
+        mock_chat_instance = MagicMock()
+        mock_chat_instance.stream_reply = mock_stream_reply
+        mock_chat_instance.build_messages = MagicMock(
+            return_value=("system prompt", [{"role": "user", "content": "test"}])
+        )
+
+        with patch(
+            "app.api.routes.chat.api_key_service.resolve_for_chat",
+            new_callable=AsyncMock,
+        ) as mock_resolve, patch(
+            "app.api.routes.chat.api_key_service.decrement_quota",
+            new_callable=AsyncMock,
+            return_value=9,
+        ) as mock_decrement:
+            # User has their own OpenAI key (not in-house)
+            mock_resolve.return_value = MagicMock(
+                provider="openai",
+                api_key="user-own-key",
+                is_in_house=False,
+                quota_remaining=None,
+            )
+
+            with patch(
+                "app.api.routes.chat.EmbeddingService",
+                return_value=mock_embed_instance,
+            ), patch(
+                "app.api.routes.chat.LLMService",
+                return_value=mock_llm_instance,
+            ), patch(
+                "app.api.routes.chat.ChatService",
+                return_value=mock_chat_instance,
+            ), patch(
+                "app.api.routes.chat.IndexingService",
+                return_value=mock_indexing,
+            ):
+                response = await client.post(
+                    f"/v1/chat/conversations/{conv_id}/stream",
+                    json={"content": "What is this paper about?"},
+                    headers=auth_headers,
+                )
+
+                assert response.status_code == 200
+                body = response.text
+                assert "User key response." in body
+                assert '"provider_fallback": false' in body
+                # Own key — no quota decrement
                 mock_decrement.assert_not_called()
 
 
@@ -1150,4 +1229,76 @@ class TestExplainOpenRouterFallback:
             data = response.json()
             assert data["provider_fallback"] is False
             # Quota should NOT be decremented for free OpenRouter
+            mock_decrement.assert_not_called()
+
+    async def test_explain_user_own_key_skips_openrouter(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """When user has their own key for explain, OpenRouter is never tried."""
+        _setup_stream_mocks()
+
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="Explain User Key PDF",
+            filename="explain_userkey.pdf",
+            github_sha="sha_explain_userkey",
+        )
+        ann_set = await create_test_annotation_set(
+            db_session, pdf_id=pdf.id, user_id=test_user.id, name="User Key Set"
+        )
+        ann = await create_test_annotation(
+            db_session,
+            set_id=ann_set.id,
+            page_number=1,
+            type="highlight",
+            selected_text="test passage",
+        )
+        await db_session.commit()
+
+        mock_explain_result = MagicMock()
+        mock_explain_result.explanation = "Explained via user key."
+        mock_explain_result.note_content = "## Note\nExplained via user key."
+
+        with patch(
+            "app.api.routes.chat.api_key_service.resolve_for_explain",
+            new_callable=AsyncMock,
+        ) as mock_resolve, patch(
+            "app.api.routes.chat.api_key_service.decrement_quota",
+            new_callable=AsyncMock,
+            return_value=19,
+        ) as mock_decrement, patch(
+            "app.api.routes.chat.ExplainService"
+        ) as mock_explain_cls:
+            # User has own key — not in-house
+            mock_resolve.return_value = MagicMock(
+                provider="anthropic",
+                api_key="user-own-anthropic-key",
+                is_in_house=False,
+                quota_remaining=None,
+            )
+
+            mock_explain_svc = AsyncMock()
+            mock_explain_svc.explain_with_provider = AsyncMock(
+                return_value=mock_explain_result
+            )
+            mock_explain_cls.return_value = mock_explain_svc
+
+            response = await client.post(
+                "/v1/chat/explain",
+                json={
+                    "pdf_id": str(pdf.id),
+                    "annotation_id": str(ann.id),
+                    "selected_text": "test passage",
+                    "page_number": 1,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["explanation"] == "Explained via user key."
+            assert data["provider_fallback"] is False
+            assert data["explain_uses_remaining"] == -1  # unlimited for own key
+            # Own key — no quota decrement
             mock_decrement.assert_not_called()

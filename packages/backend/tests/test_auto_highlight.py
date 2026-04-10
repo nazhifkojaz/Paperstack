@@ -238,7 +238,7 @@ class TestAutoHighlightOpenRouterFallback:
                 return_value=mock_backend,
             ), patch(
                 "app.api.routes.auto_highlight.extract_text_with_pages",
-                return_value=("Paper text content", 5, 5),
+                return_value=("Paper text content", 5, "5"),
             ), patch(
                 "app.api.routes.auto_highlight.is_text_pdf",
                 return_value=True,
@@ -320,7 +320,7 @@ class TestAutoHighlightOpenRouterFallback:
                 return_value=mock_backend,
             ), patch(
                 "app.api.routes.auto_highlight.extract_text_with_pages",
-                return_value=("Paper text content", 5, 5),
+                return_value=("Paper text content", 5, "5"),
             ), patch(
                 "app.api.routes.auto_highlight.is_text_pdf",
                 return_value=True,
@@ -398,7 +398,7 @@ class TestAutoHighlightOpenRouterFallback:
                 return_value=mock_backend,
             ), patch(
                 "app.api.routes.auto_highlight.extract_text_with_pages",
-                return_value=("Paper text content", 5, 5),
+                return_value=("Paper text content", 5, "5"),
             ), patch(
                 "app.api.routes.auto_highlight.is_text_pdf",
                 return_value=True,
@@ -426,6 +426,84 @@ class TestAutoHighlightOpenRouterFallback:
                 data = resp.json()
                 assert data["provider_fallback"] is False
                 # Quota should NOT be decremented for free OpenRouter
+                mock_decrement.assert_not_called()
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    async def test_analyze_user_own_key_skips_openrouter(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ):
+        """When user has their own key, OpenRouter is never tried for auto-highlight."""
+        _init_http_clients()
+
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="Analyze User Key PDF",
+            filename="analyze_userkey.pdf",
+            github_sha="sha_analyze_userkey",
+        )
+        await db_session.commit()
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(b"%PDF-1.4 test content")
+            tmp_path = Path(tmp.name)
+
+        try:
+            mock_highlights = [
+                {
+                    "text": "User key finding",
+                    "page": 1,
+                    "category": "findings",
+                    "reason": "Found by user's model",
+                },
+            ]
+
+            mock_backend = AsyncMock()
+            mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
+
+            with patch(
+                "app.api.routes.auto_highlight.api_key_service.resolve_for_auto_highlight",
+                new_callable=AsyncMock,
+            ) as mock_resolve, patch(
+                "app.api.routes.auto_highlight.api_key_service.decrement_quota",
+                new_callable=AsyncMock,
+                return_value=4,
+            ) as mock_decrement, patch(
+                "app.services.storage.factory.get_storage_backend",
+                new_callable=AsyncMock,
+                return_value=mock_backend,
+            ), patch(
+                "app.api.routes.auto_highlight.extract_text_with_pages",
+                return_value=("Paper text content", 5, "5"),
+            ), patch(
+                "app.api.routes.auto_highlight.is_text_pdf",
+                return_value=True,
+            ), patch(
+                "app.api.routes.auto_highlight.LLMService",
+            ) as mock_llm_cls:
+                # User has their own key — not in-house
+                mock_resolve.return_value = MagicMock(
+                    provider="anthropic",
+                    api_key="user-own-key",
+                    is_in_house=False,
+                    quota_remaining=None,
+                )
+
+                mock_llm = MagicMock()
+                mock_llm.analyze_paper = AsyncMock(return_value=mock_highlights)
+                mock_llm_cls.return_value = mock_llm
+
+                resp = await client.post(
+                    "/v1/auto-highlight/analyze",
+                    json={"pdf_id": str(pdf.id), "categories": ["findings"]},
+                    headers=auth_headers,
+                )
+
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["provider_fallback"] is False
+                # Own key — no quota decrement
                 mock_decrement.assert_not_called()
         finally:
             tmp_path.unlink(missing_ok=True)
