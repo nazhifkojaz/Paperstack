@@ -201,11 +201,42 @@ async def analyze_paper(
                     detail="This PDF doesn't contain selectable text. Auto-highlight requires text-based PDFs.",
                 )
 
-            # 6. Call LLM
+            # 6. Call LLM (with OpenRouter fallback on 429)
             llm_svc = LLMService(http_client=llm_client)
-            highlights = await llm_svc.analyze_paper(
-                paper_text, sorted_categories, provider, api_key
-            )
+            provider_fallback = False
+
+            try:
+                highlights = await llm_svc.analyze_paper(
+                    paper_text, sorted_categories, provider, api_key
+                )
+            except LLMRateLimitError:
+                # Only retry if primary was OpenRouter
+                if provider != "openrouter":
+                    raise  # Let context manager handle → 429
+
+                logger.warning(
+                    "OpenRouter rate limited for auto-highlight, falling back for user %s",
+                    current_user.id,
+                )
+
+                try:
+                    paid_resolution = await api_key_service.resolve_paid_fallback(
+                        current_user,
+                        db,
+                        quota_field=QuotaType.FREE.value,
+                        feature_priority=api_key_service.AUTO_HIGHLIGHT_PRIORITY,
+                    )
+                except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
+                    raise HTTPException(status_code=402, detail=str(e))
+
+                provider = paid_resolution.provider
+                api_key = paid_resolution.api_key
+                is_in_house = True
+                provider_fallback = True
+
+                highlights = await llm_svc.analyze_paper(
+                    paper_text, sorted_categories, provider, api_key
+                )
 
             # 7. Create AnnotationSet
             annotation_set = AnnotationSet(
@@ -237,8 +268,8 @@ async def analyze_paper(
             pending_cache.llm_response = highlights
             pending_cache.annotation_set_id = annotation_set.id
 
-            # 10. Decrement quota if in-house
-            if is_in_house:
+            # 10. Decrement quota if in-house AND paid (not free OpenRouter)
+            if is_in_house and provider != "openrouter":
                 await api_key_service.decrement_quota(
                     str(current_user.id), QuotaType.FREE, db
                 )
@@ -250,6 +281,7 @@ async def analyze_paper(
                 from_cache=False,
                 highlights_count=len(highlights),
                 pages_analyzed=pages_analyzed,
+                provider_fallback=provider_fallback,
             )
     finally:
         if tmp_path:
