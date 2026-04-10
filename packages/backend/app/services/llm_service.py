@@ -7,6 +7,9 @@ import httpx
 
 from app.services.exceptions import LLMRateLimitError, LLMProviderError
 
+OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 CATEGORY_COLORS = {
     "findings": "#22c55e",
     "methods": "#3b82f6",
@@ -302,6 +305,47 @@ class LLMService:
             self._handle_http_error(exc, "anthropic")
         return resp.json()["content"][0]["text"]
 
+    async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        """Call OpenRouter API (OpenAI-compatible) and return text content."""
+        client = self._client or httpx.AsyncClient(timeout=120.0)
+        should_close = self._client is None
+
+        try:
+            if should_close:
+                async with client:
+                    resp = await client.post(
+                        f"{OPENROUTER_BASE_URL}/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json={
+                            "model": OPENROUTER_MODEL,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt},
+                            ],
+                            "temperature": 0.2,
+                        },
+                    )
+            else:
+                resp = await client.post(
+                    f"{OPENROUTER_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={
+                        "model": OPENROUTER_MODEL,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": 0.2,
+                    },
+                )
+        except httpx.TimeoutException:
+            raise LLMProviderError("openrouter", 0, "Request timed out.")
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            self._handle_http_error(exc, "openrouter")
+        return resp.json()["choices"][0]["message"]["content"]
+
     # --- Streaming methods for chat ---
 
     async def stream_openai(
@@ -533,6 +577,56 @@ class LLMService:
                             except (json.JSONDecodeError, KeyError, IndexError):
                                 continue
 
+    async def stream_openrouter(
+        self, system_prompt: str, messages: list[dict], api_key: str
+    ) -> AsyncIterator[str]:
+        """Stream tokens from OpenRouter (OpenAI-compatible SSE)."""
+        if self._client:
+            async with self._client.stream(
+                "POST",
+                f"{OPENROUTER_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": OPENROUTER_MODEL,
+                    "messages": [{"role": "system", "content": system_prompt}] + messages,
+                    "temperature": 0.3,
+                    "stream": True,
+                },
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            chunk = json.loads(line[6:])
+                            delta = chunk["choices"][0].get("delta", {})
+                            if "content" in delta and delta["content"]:
+                                yield delta["content"]
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
+        else:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{OPENROUTER_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={
+                        "model": OPENROUTER_MODEL,
+                        "messages": [{"role": "system", "content": system_prompt}] + messages,
+                        "temperature": 0.3,
+                        "stream": True,
+                    },
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                chunk = json.loads(line[6:])
+                                delta = chunk["choices"][0].get("delta", {})
+                                if "content" in delta and delta["content"]:
+                                    yield delta["content"]
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                continue
+
     async def analyze_paper(
         self,
         paper_text: str,
@@ -551,6 +645,8 @@ class LLMService:
             raw = await self.call_openai(system_prompt, user_prompt, api_key)
         elif provider == "anthropic":
             raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
+        elif provider == "openrouter":
+            raw = await self.call_openrouter(system_prompt, user_prompt, api_key)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -563,4 +659,5 @@ STREAM_PROVIDERS: dict[str, str] = {
     "anthropic": "stream_anthropic",
     "gemini": "stream_gemini",
     "glm": "stream_glm",
+    "openrouter": "stream_openrouter",
 }

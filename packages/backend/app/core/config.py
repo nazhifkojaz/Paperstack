@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # LLM Providers (in-house keys)
     GLM_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
+    OPENROUTER_API_KEY: str | None = None
 
     # Auto-highlight rate limits
     RATE_LIMIT_AUTO_HIGHLIGHT_ANALYZE: str = "3/minute"

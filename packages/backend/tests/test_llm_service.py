@@ -109,6 +109,18 @@ async def test_llm_service_analyze_paper_gemini():
 
 
 @pytest.mark.asyncio
+async def test_llm_service_analyze_paper_openrouter():
+    service = LLMService()
+    mock_response = json.dumps([
+        {"text": "OpenRouter finding", "page": 5, "category": "findings", "reason": "Via free model"},
+    ])
+    with patch.object(service, "call_openrouter", new=AsyncMock(return_value=mock_response)):
+        highlights = await service.analyze_paper("paper text", ["findings"], "openrouter", "fake-key")
+    assert len(highlights) == 1
+    assert highlights[0]["text"] == "OpenRouter finding"
+
+
+@pytest.mark.asyncio
 async def test_llm_service_unknown_provider():
     service = LLMService()
     with pytest.raises(ValueError, match="Unknown provider"):

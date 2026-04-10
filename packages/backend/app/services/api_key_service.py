@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 QuotaField = Literal["chat_uses_remaining", "explain_uses_remaining", "free_uses_remaining"]
-Provider = Literal["openai", "anthropic", "gemini", "glm"]
+Provider = Literal["openai", "anthropic", "gemini", "glm", "openrouter"]
 
 
 class QuotaType(Enum):
@@ -42,7 +42,7 @@ class ApiKeyResolution:
     """Result of API key resolution.
 
     Attributes:
-        provider: The LLM provider ('openai', 'anthropic', 'gemini', 'glm')
+        provider: The LLM provider ('openai', 'anthropic', 'gemini', 'glm', 'openrouter')
         api_key: The decrypted API key
         is_in_house: True if using in-house key (quota applies), False if user's own key
         quota_remaining: Remaining quota if in_house, None if unlimited (user's key)
@@ -62,7 +62,7 @@ class ApiKeyService:
     EXPLAIN_PRIORITY: list[Provider] = ["openai", "anthropic", "gemini", "glm"]
 
     # In-house provider priority (used when user has no key)
-    IN_HOUSE_PRIORITY: list[Provider] = ["gemini", "glm"]
+    IN_HOUSE_PRIORITY: list[Provider] = ["openrouter", "gemini", "glm"]
 
     async def resolve_for_chat(
         self,
@@ -146,6 +146,48 @@ class ApiKeyService:
             quota_field=QuotaType.FREE.value,
             provider_priority=self.AUTO_HIGHLIGHT_PRIORITY,
         )
+
+    async def resolve_paid_fallback(
+        self,
+        user: User,
+        db: AsyncSession,
+        quota_field: QuotaField,
+        feature_priority: list[Provider],
+    ) -> ApiKeyResolution:
+        """Resolve a paid in-house key, skipping OpenRouter.
+
+        Used when OpenRouter returns 429 and we need to fall back to paid keys.
+        Checks quota and returns the first available paid in-house provider.
+
+        Raises:
+            QuotaExhaustedError: If quota is exhausted
+            ApiKeyNotFoundError: If no paid provider is available
+        """
+        paid_priority = [p for p in feature_priority if p in self.IN_HOUSE_PRIORITY and p != "openrouter"]
+
+        quota_row = await self._get_or_create_quota(user.id, db, quota_field)
+        current_quota = getattr(quota_row, quota_field, 0)
+
+        if current_quota <= 0:
+            raise QuotaExhaustedError(quota_field, remaining=current_quota)
+
+        for provider in paid_priority:
+            api_key = getattr(settings, f"{provider.upper()}_API_KEY")
+            if api_key:
+                logger.info(
+                    "Using paid fallback %s key for user %s (%s uses remaining)",
+                    provider,
+                    user.id,
+                    current_quota,
+                )
+                return ApiKeyResolution(
+                    provider=provider,
+                    api_key=api_key,
+                    is_in_house=True,
+                    quota_remaining=current_quota,
+                )
+
+        raise ApiKeyNotFoundError(quota_field.replace("_", " "))
 
     async def _resolve_api_key(
         self,
