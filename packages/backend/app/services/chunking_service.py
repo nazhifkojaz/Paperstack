@@ -8,6 +8,9 @@ Phase 2 improvements:
 
 Phase 3 improvements:
 - Reference section handling (3.2)
+
+Phase 4 improvements:
+- List structure preservation (4.4)
 """
 
 import re
@@ -57,6 +60,18 @@ _ABBREVIATIONS = {
 }
 
 _HEADING_RE = re.compile(r"^\[HEADING L(\d+)\]\s+(.+)$")
+
+_LIST_ITEM_RE = re.compile(r"^[\s]*[-•*]\s|^\d+[.)]\s")
+
+
+def _is_list_item(text: str) -> bool:
+    """Check if a paragraph is a list item (bulleted or numbered)."""
+    return bool(_LIST_ITEM_RE.match(text.strip()))
+
+
+def _has_list_content(paragraphs: list[tuple[int, int, str]]) -> bool:
+    """Check if any of the paragraphs are list items."""
+    return any(_is_list_item(p[2]) for p in paragraphs)
 
 
 def _is_reference_heading(text: str) -> bool:
@@ -464,56 +479,73 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
         combined_len = len(current_text) + len(separator) + len(para_text)
 
         if current_text and combined_len > chunk_size:
-            stripped = current_text.strip()
-            if stripped and _is_quality_chunk(stripped):
-                chunks.append(
-                    Chunk(
-                        chunk_index=chunk_idx,
-                        page_number=chunk_start_page,
-                        end_page_number=current_page,
-                        content=stripped,
-                        section_title=current_section_title,
-                        section_level=current_section_level,
-                    )
-                )
-                chunk_idx += 1
+            # List preservation: allow list to extend past chunk_size
+            # to avoid splitting mid-list, up to 2x chunk_size.
+            in_list = (
+                _has_list_content(current_chunk_paras)
+                and _is_list_item(para_text)
+                and combined_len <= chunk_size * 2
+            )
 
-            # Paragraph-aware overlap: take the last N paragraphs that fit
-            # within the overlap budget, instead of raw character slicing.
-            overlap_budget = chunk_overlap
-            overlap_parts = []
-            for p_start, p_end, p_text in reversed(current_chunk_paras):
-                if len(p_text) + (len(overlap_parts) * 2) > overlap_budget:
-                    break
-                overlap_parts.insert(0, p_text)
-            if overlap_parts:
-                current_text = "\n\n".join(overlap_parts) + "\n\n" + para_text
-                chunk_start_page = _get_page_for_offset(
-                    current_chunk_paras[0][0], page_boundaries
-                )
-            else:
-                # Fallback: if no single paragraph fits, take the last few chars
-                # of the last paragraph at a sentence boundary
-                last_para = current_chunk_paras[-1][2] if current_chunk_paras else ""
-                if len(last_para) > chunk_overlap:
-                    overlap_start = _compute_overlap_start(
-                        last_para, len(last_para), chunk_overlap
+            if not in_list:
+                stripped = current_text.strip()
+                if stripped and _is_quality_chunk(stripped):
+                    chunks.append(
+                        Chunk(
+                            chunk_index=chunk_idx,
+                            page_number=chunk_start_page,
+                            end_page_number=current_page,
+                            content=stripped,
+                            section_title=current_section_title,
+                            section_level=current_section_level,
+                        )
                     )
-                    current_text = last_para[overlap_start:] + "\n\n" + para_text
+                    chunk_idx += 1
+
+                # Paragraph-aware overlap: take the last N paragraphs that fit
+                # within the overlap budget, instead of raw character slicing.
+                overlap_budget = chunk_overlap
+                overlap_parts = []
+                for p_start, p_end, p_text in reversed(current_chunk_paras):
+                    if len(p_text) + (len(overlap_parts) * 2) > overlap_budget:
+                        break
+                    overlap_parts.insert(0, p_text)
+                if overlap_parts:
+                    current_text = "\n\n".join(overlap_parts) + "\n\n" + para_text
                     chunk_start_page = _get_page_for_offset(
-                        current_chunk_paras[-1][0], page_boundaries
+                        current_chunk_paras[0][0], page_boundaries
                     )
                 else:
-                    current_text = last_para + "\n\n" + para_text
-                    chunk_start_page = _get_page_for_offset(
-                        current_chunk_paras[-1][0], page_boundaries
-                    )
+                    # Fallback: if no single paragraph fits, take the last few chars
+                    # of the last paragraph at a sentence boundary
+                    last_para = current_chunk_paras[-1][2] if current_chunk_paras else ""
+                    if len(last_para) > chunk_overlap:
+                        overlap_start = _compute_overlap_start(
+                            last_para, len(last_para), chunk_overlap
+                        )
+                        current_text = last_para[overlap_start:] + "\n\n" + para_text
+                        chunk_start_page = _get_page_for_offset(
+                            current_chunk_paras[-1][0], page_boundaries
+                        )
+                    else:
+                        current_text = last_para + "\n\n" + para_text
+                        chunk_start_page = _get_page_for_offset(
+                            current_chunk_paras[-1][0], page_boundaries
+                        )
 
-            current_page = para_page
-            current_chunk_paras = [(para_start, para_end, para_text)]
-            if section_title:
-                current_section_title = section_title
-                current_section_level = section_level
+                current_page = para_page
+                current_chunk_paras = [(para_start, para_end, para_text)]
+                if section_title:
+                    current_section_title = section_title
+                    current_section_level = section_level
+            else:
+                # Extend: add list item to current chunk despite exceeding size
+                current_text = current_text + separator + para_text
+                current_chunk_paras.append((para_start, para_end, para_text))
+                current_page = para_page
+                if section_title:
+                    current_section_title = section_title
+                    current_section_level = section_level
         else:
             current_text = current_text + separator + para_text
             current_chunk_paras.append((para_start, para_end, para_text))

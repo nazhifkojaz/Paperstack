@@ -12,6 +12,8 @@ from app.services.chunking_service import (
     _get_section_at_offset,
     _is_heading_marker,
     _is_reference_heading,
+    _is_list_item,
+    _has_list_content,
     _SECTION_KEYWORDS,
     _REFERENCE_HEADINGS,
 )
@@ -623,3 +625,117 @@ def test_multi_page_chunk_end_page_tracks_last_paragraph():
     # one chunk, so end_page_number should be 1. But if it overflows to page 2,
     # end_page_number should be 2.
     assert first.end_page_number >= first.page_number
+
+
+# --- List structure preservation (Phase 4.4) ---
+
+
+def test_is_list_item_bulleted():
+    assert _is_list_item("- First item") is True
+    assert _is_list_item("• Second item") is True
+    assert _is_list_item("* Third item") is True
+    assert _is_list_item("  - Indented bullet") is True
+
+
+def test_is_list_item_numbered():
+    assert _is_list_item("1. First step") is True
+    assert _is_list_item("2) Second step") is True
+    assert _is_list_item("10. Tenth step") is True
+
+
+def test_is_list_item_not_list():
+    assert _is_list_item("This is a regular paragraph.") is False
+    assert _is_list_item("-5 is a negative number.") is False
+    assert _is_list_item("") is False
+
+
+def test_has_list_content():
+    paras = [(0, 5, "- item one"), (6, 12, "- item two"), (13, 30, "regular text")]
+    assert _has_list_content(paras) is True
+
+
+def test_has_list_content_no_lists():
+    paras = [(0, 10, "regular text"), (11, 20, "more text")]
+    assert _has_list_content(paras) is False
+
+
+def test_list_preservation_keeps_list_intact():
+    """List items that exceed CHUNK_SIZE should stay in one chunk (up to 2x)."""
+    # Each list item ~120 chars, 10 items = ~1200 chars > CHUNK_SIZE(800) but < 2x
+    items = []
+    for i in range(10):
+        items.append(
+            f"- Finding number {i}: this is a detailed list item with enough content to be meaningful."
+        )
+    text = "--- PAGE 1 ---\n\n" + "\n\n".join(items)
+    chunks = chunk_text_with_pages(text)
+
+    # All list items should be in a single chunk (not split mid-list)
+    assert len(chunks) >= 1
+    # Every list item should appear in some chunk
+    all_content = " ".join(c.content for c in chunks)
+    for i in range(10):
+        assert f"Finding number {i}" in all_content
+
+    # The list should be in a single chunk, not split
+    list_chunks = [c for c in chunks if "- Finding number" in c.content]
+    assert len(list_chunks) == 1, f"List was split across {len(list_chunks)} chunks"
+
+
+def test_list_preservation_respects_2x_limit():
+    """List exceeding 2x CHUNK_SIZE should still be split."""
+    # Each item ~100 chars, 25 items = ~2500 chars > CHUNK_SIZE * 2 (1600)
+    items = []
+    for i in range(25):
+        items.append(
+            f"{i + 1}. This is a very detailed list item number {i} that adds content."
+        )
+    text = "--- PAGE 1 ---\n\n" + "\n\n".join(items)
+    chunks = chunk_text_with_pages(text)
+
+    # List is too large to keep in one chunk — must split
+    assert len(chunks) >= 2
+    all_content = " ".join(c.content for c in chunks)
+    for i in range(25):
+        assert f"item number {i}" in all_content
+
+
+def test_list_preservation_mixed_content():
+    """List followed by regular text should split at the list boundary."""
+    items = []
+    for i in range(6):
+        items.append(
+            f"- List item number {i} with enough content to be meaningful here."
+        )
+    regular = " ".join(
+        f"This is regular paragraph text sentence {i}. " for i in range(20)
+    )
+    text = "--- PAGE 1 ---\n\n" + "\n\n".join(items) + "\n\n" + regular
+    chunks = chunk_text_with_pages(text)
+
+    # Should have at least 2 chunks — list content and regular content
+    assert len(chunks) >= 2
+    all_content = " ".join(c.content for c in chunks)
+    assert "List item number" in all_content
+    assert "regular paragraph" in all_content
+
+
+def test_list_preservation_at_chunk_boundary():
+    """When accumulated text is exactly at chunk_size, list items still extend."""
+    # Build text that fills close to 800 chars, then add list items
+    prefix = "X" * 700 + ". This is a prefix paragraph that fills most of the chunk size."
+    items = []
+    for i in range(5):
+        items.append(f"- List item {i} that provides additional details.")
+    text = "--- PAGE 1 ---\n\n" + prefix + "\n\n" + "\n\n".join(items)
+    chunks = chunk_text_with_pages(text)
+
+    # The list items should stay with the prefix in one chunk
+    # (total ~700 + 5*45 = 925, under 2x = 1600)
+    assert len(chunks) >= 1
+    # List items should appear in the same chunk as the prefix
+    list_in_prefix_chunk = any(
+        "List item" in c.content and "prefix paragraph" in c.content
+        for c in chunks
+    )
+    assert list_in_prefix_chunk, "List items should extend the chunk past chunk_size"
