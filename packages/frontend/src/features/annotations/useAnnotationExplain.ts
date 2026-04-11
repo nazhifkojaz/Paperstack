@@ -28,6 +28,8 @@ export interface UseAnnotationExplainReturn {
     explain: (annotation: Annotation, pdfId: string) => void;
     /** Clear explanation state */
     clearExplain: () => void;
+    /** Remaining explain uses (null before first call, -1 for unlimited/own-key users) */
+    explainUsesRemaining: number | null;
 }
 
 /**
@@ -45,6 +47,7 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
 
     const [explainAnnotationId, setExplainAnnotationId] = useState<string | null>(null);
     const [explainStatusMessage, setExplainStatusMessage] = useState<string>('');
+    const [explainUsesRemaining, setExplainUsesRemaining] = useState<number | null>(null);
 
     const explain = useCallback((annotation: Annotation, pdfId: string) => {
         if (!annotation.selected_text) {
@@ -64,6 +67,13 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
             },
             {
                 onSuccess: (result) => {
+                    setExplainUsesRemaining(result.explain_uses_remaining);
+
+                    if (result.provider_fallback) {
+                        toast.info('Free tier was busy — used backup model for this explanation.');
+                        queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
+                    }
+
                     // Optimistically update cache so NotePopover sees the new note_content immediately
                     queryClient.setQueryData(
                         ['annotations', annotation.set_id],
@@ -106,5 +116,6 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
         statusMessage: explainStatusMessage,
         explain,
         clearExplain,
+        explainUsesRemaining,
     };
 }

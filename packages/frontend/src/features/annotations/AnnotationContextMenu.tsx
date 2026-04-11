@@ -16,6 +16,7 @@ interface AnnotationContextMenuProps {
   onClose: () => void
   onEditNote: (annotationId: string) => void
   onExplainThis?: (annotationId: string) => void
+  explainUsesRemaining?: number | null
 }
 
 export const AnnotationContextMenu = ({
@@ -24,6 +25,7 @@ export const AnnotationContextMenu = ({
   onClose,
   onEditNote,
   onExplainThis,
+  explainUsesRemaining,
 }: AnnotationContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null)
   const { mutate: updateAnnotation } = useUpdateAnnotation()
@@ -155,6 +157,13 @@ export const AnnotationContextMenu = ({
           </svg>
           Explain This
         </button>
+      )}
+      {annotation.type === 'highlight' && annotation.selected_text && onExplainThis
+        && explainUsesRemaining !== null && explainUsesRemaining !== undefined
+        && explainUsesRemaining >= 0 && (
+        <p className="px-4 pb-1 text-[11px] text-gray-500">
+          {explainUsesRemaining} explain use{explainUsesRemaining !== 1 ? 's' : ''} remaining
+        </p>
       )}
 
       {/* Change Color */}

@@ -344,6 +344,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                         onClose={() => { setContextMenu(null); setSelectedAnnotationId(null); }}
                         onEditNote={(id) => setEditingNoteId(id)}
                         onExplainThis={handleExplainThis}
+                        explainUsesRemaining={annotationExplain.explainUsesRemaining}
                     />
                 );
             })()}
