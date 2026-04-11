@@ -31,6 +31,9 @@ class ContextChunkResponse(BaseModel):
     snippet: str
     pdf_id: Optional[str] = None
     pdf_title: Optional[str] = None
+    end_page_number: Optional[int] = None
+    section_title: Optional[str] = None
+    section_level: Optional[int] = None
 
 
 class MessageResponse(BaseModel):

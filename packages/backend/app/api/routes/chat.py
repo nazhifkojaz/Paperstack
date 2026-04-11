@@ -144,7 +144,10 @@ async def get_messages(
                 {
                     "chunk_id": c["chunk_id"],
                     "page_number": c["page_number"],
+                    "end_page_number": c.get("end_page_number"),
                     "snippet": c["snippet"],
+                    "section_title": c.get("section_title"),
+                    "section_level": c.get("section_level"),
                     **(
                         {"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]}
                         if c.get("pdf_id")
@@ -374,7 +377,10 @@ async def stream_message(
         {
             "chunk_id": c.chunk_id,
             "page_number": c.page_number,
+            "end_page_number": c.end_page_number,
             "snippet": c.content[:200],
+            "section_title": c.section_title,
+            "section_level": c.section_level,
             **({"pdf_id": c.pdf_id, "pdf_title": c.pdf_title} if c.pdf_id else {}),
         }
         for c in top_chunks
@@ -450,7 +456,10 @@ async def stream_message(
                     {
                         "chunk_id": c["chunk_id"],
                         "page_number": c["page_number"],
+                        "end_page_number": c.get("end_page_number"),
                         "snippet": c["snippet"],
+                        "section_title": c.get("section_title"),
+                        "section_level": c.get("section_level"),
                         **(
                             {"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]}
                             if c.get("pdf_id")
