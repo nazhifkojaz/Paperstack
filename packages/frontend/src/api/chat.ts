@@ -20,6 +20,9 @@ export interface ContextChunk {
     snippet: string;
     pdf_id?: string;
     pdf_title?: string;
+    end_page_number?: number;
+    section_title?: string;
+    section_level?: number;
 }
 
 export interface ChatMessage {
@@ -55,6 +58,7 @@ export interface ExplainResponse {
     explanation: string;
     note_content: string;
     explain_uses_remaining: number;
+    provider_fallback?: boolean;
 }
 
 // --- Hooks ---

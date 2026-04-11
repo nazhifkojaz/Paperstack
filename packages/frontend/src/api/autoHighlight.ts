@@ -13,6 +13,7 @@ export interface AutoHighlightResponse {
     from_cache: boolean;
     highlights_count: number;
     pages_analyzed: string;
+    provider_fallback?: boolean;
 }
 
 export interface CacheEntry {
