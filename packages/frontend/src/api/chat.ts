@@ -143,7 +143,8 @@ export async function streamChat(params: {
     conversationId: string;
     message: string;
     onToken: (token: string) => void;
-    onDone: (messageId: string, chunks: ContextChunk[]) => void;
+    onDone: (messageId: string, chunks: ContextChunk[], providerFallback: boolean) => void;
+    onNotice?: (message: string) => void;
     onError: (err: Error) => void;
     signal?: AbortSignal;
 }): Promise<void> {
@@ -190,8 +191,13 @@ export async function streamChat(params: {
                     params.onError(new Error(data.error));
                     return;
                 }
+                if (data.notice) params.onNotice?.(data.notice);
                 if (data.token) params.onToken(data.token);
-                if (data.done) params.onDone(data.message_id, data.context_chunks ?? []);
+                if (data.done) params.onDone(
+                    data.message_id,
+                    data.context_chunks ?? [],
+                    data.provider_fallback ?? false,
+                );
             } catch {
                 // malformed SSE line — skip
             }

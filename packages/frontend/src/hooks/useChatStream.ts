@@ -117,9 +117,13 @@ export function useChatStream({
                 conversationId,
                 message,
                 signal: abortController.signal,
+                onNotice: (msg) => toast.info(msg),
                 onToken: (token) => { appendToken(token); accumulatedContent += token; },
-                onDone: (messageId, chunks) => {
+                onDone: (messageId, chunks, providerFallback) => {
                     finalizeStreaming(messageId, chunks);
+                    if (providerFallback) {
+                        queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
+                    }
                     // Optimistically add the assistant reply to the history cache immediately.
                     // This prevents it from disappearing when startStreaming() replaces
                     // streamingMessage on the next send before the invalidation refetch completes.
