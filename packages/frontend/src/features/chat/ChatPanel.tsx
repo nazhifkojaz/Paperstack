@@ -218,6 +218,7 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
                         isSending={isSending}
                         emptyMessage="Ask a question about this paper."
                         onChunkClick={(chunk) => setCurrentPage(chunk.page_number)}
+                        onPageClick={(page) => setCurrentPage(page)}
                     />
                     <div ref={bottomRef} />
                 </ScrollArea>

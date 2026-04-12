@@ -10,10 +10,12 @@
  * />
  */
 
+import { useMemo } from 'react';
 import { Loader2 } from 'lucide-react';
-import Markdown from 'react-markdown';
+import Markdown, { defaultUrlTransform } from 'react-markdown';
 import { Badge } from '@/components/ui/badge';
 import { type ContextChunk } from '@/api/chat';
+import { createPageRefPlugin } from '@/lib/remarkPageRefs';
 
 export interface ChatMessageProps {
     id: string;
@@ -29,6 +31,7 @@ export interface ChatMessageListProps {
     isSending?: boolean;
     onChunkClick?: (chunk: ContextChunk) => void;
     onChunkClickUrl?: (chunk: ContextChunk) => void;
+    onPageClick?: (page: number) => void;
 }
 
 /**
@@ -40,6 +43,7 @@ export function ChatMessageList({
     isSending = false,
     onChunkClick,
     onChunkClickUrl,
+    onPageClick,
 }: ChatMessageListProps) {
     if (messages.length === 0 && !isSending) {
         return (
@@ -57,6 +61,7 @@ export function ChatMessageList({
                     message={msg}
                     onChunkClick={onChunkClick}
                     onChunkClickUrl={onChunkClickUrl}
+                    onPageClick={onPageClick}
                 />
             ))}
         </div>
@@ -67,10 +72,45 @@ interface MessageBubbleProps {
     message: ChatMessageProps;
     onChunkClick?: (chunk: ContextChunk) => void;
     onChunkClickUrl?: (chunk: ContextChunk) => void;
+    onPageClick?: (page: number) => void;
 }
 
-function MessageBubble({ message, onChunkClick, onChunkClickUrl }: MessageBubbleProps) {
+function MessageBubble({ message, onChunkClick, onChunkClickUrl, onPageClick }: MessageBubbleProps) {
     const isUser = message.role === 'user';
+
+    const remarkPlugins = useMemo(
+        () => onPageClick ? [createPageRefPlugin()] : [],
+        [onPageClick]
+    );
+
+    const markdownComponents = useMemo(() => {
+        if (!onPageClick) return undefined;
+        return {
+            a: ({ href, children, ...props }: React.ComponentPropsWithoutRef<'a'>) => {
+                if (href?.startsWith('page://')) {
+                    const page = parseInt(href.slice(7), 10);
+                    if (!isNaN(page)) {
+                        return (
+                            <button
+                                className="inline text-primary underline underline-offset-2
+                                           hover:opacity-80 cursor-pointer bg-transparent
+                                           border-none p-0 font-inherit text-inherit"
+                                onClick={() => onPageClick(page)}
+                            >
+                                {children}
+                            </button>
+                        );
+                    }
+                }
+                return <a href={href} {...props}>{children}</a>;
+            },
+        };
+    }, [onPageClick]);
+
+    const urlTransform = useMemo(
+        () => (url: string) => url.startsWith('page://') ? url : defaultUrlTransform(url),
+        []
+    );
 
     return (
         <div className={`flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
@@ -87,7 +127,13 @@ function MessageBubble({ message, onChunkClick, onChunkClickUrl }: MessageBubble
                         ? <span className="whitespace-pre-wrap">{message.content}</span>
                         : (
                             <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0">
-                                <Markdown>{message.content}</Markdown>
+                                <Markdown
+                                    remarkPlugins={remarkPlugins}
+                                    components={markdownComponents}
+                                    urlTransform={urlTransform}
+                                >
+                                    {message.content}
+                                </Markdown>
                             </div>
                         )
                 }
@@ -102,9 +148,14 @@ function MessageBubble({ message, onChunkClick, onChunkClickUrl }: MessageBubble
                     {message.context_chunks.map((chunk) => {
                         // Determine label and click behavior based on available data
                         const hasPdfInfo = !!chunk.pdf_id && !!chunk.pdf_title;
+                        const startPage = chunk.page_number;
+                        const endPage = chunk.end_page_number;
+                        const pageLabel = endPage && endPage > startPage
+                            ? `p.${startPage}-${endPage}`
+                            : `p.${startPage}`;
                         const label = hasPdfInfo
-                            ? `${chunk.pdf_title!.length > 18 ? chunk.pdf_title!.slice(0, 18) + '…' : chunk.pdf_title} · p.${chunk.page_number}`
-                            : `p.${chunk.page_number}`;
+                            ? `${chunk.pdf_title!.length > 18 ? chunk.pdf_title!.slice(0, 18) + '…' : chunk.pdf_title} · ${pageLabel}`
+                            : pageLabel;
 
                         const handleClick = () => {
                             if (onChunkClickUrl && hasPdfInfo) {
