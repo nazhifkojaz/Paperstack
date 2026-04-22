@@ -6,9 +6,7 @@
 import '@testing-library/jest-dom'
 import { vi } from 'vitest'
 
-// =============================================================================
 // IntersectionObserver Mock
-// =============================================================================
 
 class MockIntersectionObserver implements IntersectionObserver {
   readonly root: Element | Document | null = null
@@ -24,9 +22,7 @@ class MockIntersectionObserver implements IntersectionObserver {
 
 global.IntersectionObserver = MockIntersectionObserver as unknown as typeof IntersectionObserver
 
-// =============================================================================
 // ResizeObserver Mock
-// =============================================================================
 
 class MockResizeObserver implements ResizeObserver {
   constructor() {}
@@ -37,9 +33,7 @@ class MockResizeObserver implements ResizeObserver {
 
 global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver
 
-// =============================================================================
 // Clipboard API Mock
-// =============================================================================
 
 Object.assign(navigator, {
   clipboard: {
@@ -48,9 +42,7 @@ Object.assign(navigator, {
   },
 })
 
-// =============================================================================
 // LocalStorage Mock
-// =============================================================================
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {}
@@ -79,9 +71,7 @@ Object.defineProperty(window, 'localStorage', {
   value: localStorageMock,
 })
 
-// =============================================================================
 // Window.matchMedia Mock
-// =============================================================================
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
@@ -97,9 +87,7 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 })
 
-// =============================================================================
 // URL.createObjectURL Mock
-// =============================================================================
 
 global.URL.createObjectURL = vi.fn(() => 'mock-url')
 global.URL.revokeObjectURL = vi.fn()

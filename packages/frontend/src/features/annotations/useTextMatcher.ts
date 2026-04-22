@@ -10,7 +10,7 @@ interface ResolvedAnnotation extends Annotation {
     _unmatched?: boolean;
 }
 
-// ─── Module-level state ──────────────────────────────────────────────────────
+// Module-level state
 
 /**
  * Tracks annotation IDs that have already been patched to the server.
@@ -28,7 +28,7 @@ const _globalPatchedIds = new Set<string>();
  */
 const _globalUnmatchedIds = new Set<string>();
 
-// ─── Hook ────────────────────────────────────────────────────────────────────
+// Hook
 
 /**
  * Resolves auto-highlight annotations that have empty rects by searching
@@ -196,7 +196,7 @@ export function useTextMatcher(
     });
 }
 
-// ─── Text normalization ──────────────────────────────────────────────────────
+// Text normalization
 
 /**
  * Simple normalization for the search text (needle).
@@ -294,7 +294,7 @@ export function buildNormMap(fullText: string): { norm: string; toOrig: number[]
     return { norm: chars.join(''), toOrig };
 }
 
-// ─── Matching ────────────────────────────────────────────────────────────────
+// Matching
 
 /**
  * Core matching function. Returns rects or empty array.

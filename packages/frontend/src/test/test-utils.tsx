@@ -7,9 +7,7 @@ import { ReactElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 
-// =============================================================================
 // Custom Render Function
-// =============================================================================
 
 interface CustomRenderOptions extends Omit<RenderOptions, 'wrapper'> {
   queryClient?: QueryClient
@@ -61,9 +59,7 @@ function renderWithProviders(
   }
 }
 
-// =============================================================================
 // Mock Data Generators
-// =============================================================================
 
 export function createMockAnnotation(overrides: Partial<import('@/api/annotations').Annotation> = {}) {
   const annotation: import('@/api/annotations').Annotation = {
@@ -81,9 +77,7 @@ export function createMockAnnotation(overrides: Partial<import('@/api/annotation
   return { ...annotation, ...overrides }
 }
 
-// =============================================================================
 // Re-exports
-// =============================================================================
 
 /**
  * Re-export everything from testing-library.

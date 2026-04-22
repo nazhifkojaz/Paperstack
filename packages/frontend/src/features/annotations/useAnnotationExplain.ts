@@ -11,36 +11,19 @@ interface Annotation {
 }
 
 interface UseAnnotationExplainOptions {
-    /** Called when explanation completes successfully */
     onSuccess?: (explanation: string, noteContent: string, annotationId: string) => void;
-    /** Called when explanation fails */
     onError?: (error: string) => void;
 }
 
 interface UseAnnotationExplainReturn {
-    /** Whether an explanation is currently in progress */
     isExplaining: boolean;
-    /** The ID of the annotation currently being explained */
     explainingId: string | null;
-    /** Status message to display during explanation */
     statusMessage: string;
-    /** Start an explanation for the given annotation */
     explain: (annotation: Annotation, pdfId: string) => void;
-    /** Clear explanation state */
     clearExplain: () => void;
-    /** Remaining explain uses (null before first call, -1 for unlimited/own-key users) */
     explainUsesRemaining: number | null;
 }
 
-/**
- * Hook for managing AI annotation explanation workflow.
- *
- * Handles:
- * - API call to explain endpoint
- * - Optimistic cache updates for immediate UI feedback
- * - Loading/error states
- * - Toast notifications for errors
- */
 export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}): UseAnnotationExplainReturn {
     const { mutate: explainAnnotation } = useExplainAnnotation();
     const queryClient = useQueryClient();

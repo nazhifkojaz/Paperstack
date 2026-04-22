@@ -20,7 +20,6 @@ interface AnnotationOverlayProps {
 }
 
 export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, className = '' }: AnnotationOverlayProps) => {
-    // Store integration
     const isDrawingRect = useAnnotationStore(s => s.isDrawingRect);
     const selectedSetId = useAnnotationStore(s => s.selectedSetId);
     const selectedAnnotationId = useAnnotationStore(s => s.selectedAnnotationId);
@@ -29,7 +28,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
     const setContextMenu = useAnnotationStore(s => s.setContextMenu);
     const setIsDrawingRect = useAnnotationStore(s => s.setIsDrawingRect);
 
-    // Context: single query subscription hoisted to ViewerPage
     const { visibleSetIds, annotationsByPage } = useAnnotationsContext();
     const { mutate: createAnnotation } = useCreateAnnotation();
 
@@ -41,7 +39,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         return [...own, ...prev, ...next];
     }, [annotationsByPage, pageNumber]);
 
-    // Refs and local state
     const containerRef = useRef<HTMLDivElement>(null);
     const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
     const [containerDims, setContainerDims] = useState<{ width: number; height: number } | null>(null);
@@ -57,7 +54,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         return () => observer.disconnect();
     }, []);
 
-    // Custom hooks
     const rectCreate = useRectCreate({
         containerRef,
         isDrawingRect,
@@ -76,12 +72,10 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
 
     const annotationExplain = useAnnotationExplain({
         onSuccess: (_explanation, _noteContent, annotationId) => {
-            // Open the note popover to show the explanation
             setEditingNoteId(annotationId);
         },
     });
 
-    // Annotation drag for move/resize
     const {
         isDragging,
         previewRect: dragPreviewRect,
@@ -93,12 +87,10 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
     // Resolve empty-rect auto-highlight annotations via TextLayer DOM matching
     const resolvedAnnotations = useTextMatcher(matcherAnnotations, pageNumber, textLayerHandle);
 
-    // Filter annotations for this page
     const pageAnnotations = useMemo(() => {
         return resolvedAnnotations.filter(a => a.page_number === pageNumber);
     }, [resolvedAnnotations, pageNumber]);
 
-    // Handler for explain feature
     const handleExplainThis = (annotationId: string) => {
         const ann = pageAnnotations.find(a => a.id === annotationId);
         if (!ann) return;
@@ -135,7 +127,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                     const strokeColor = isSelected ? '#3b82f6' : (ann.color || '#FFFF00');
                     const strokeWidth = isSelected ? 3 : 2;
 
-                    // Compute effective rects during drag (preview or actual)
                     const effectiveRects = (isDragging && selectedAnnotationId === ann.id)
                         ? (dragPreviewRects || (dragPreviewRect ? [dragPreviewRect] : ann.rects))
                         : ann.rects;

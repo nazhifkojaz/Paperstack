@@ -11,7 +11,7 @@
  * for proportional offsets within partially-selected spans.
  */
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// Types
 
 /** PDF text item with position/width data from page.getTextContent() */
 export interface PdfTextItem {
@@ -34,7 +34,7 @@ export type Rect = { x: number; y: number; w: number; h: number };
 /** A DOM Text node with its character range in the concatenated fullText */
 export type TextNode = { node: Text; start: number; end: number };
 
-// ─── Canvas measurement ─────────────────────────────────────────────────────
+// Canvas measurement
 
 let _measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
@@ -42,7 +42,7 @@ function getMeasureCtx(): CanvasRenderingContext2D {
     return _measureCtx;
 }
 
-// ─── DOM helpers ────────────────────────────────────────────────────────────
+// DOM helpers
 
 /**
  * Walk the TextLayer DOM and build a concatenated fullText string with a
@@ -88,7 +88,7 @@ export function collectTextNodes(container: HTMLDivElement): {
     return { textNodes, fullText };
 }
 
-// ─── Rect computation ───────────────────────────────────────────────────────
+// Rect computation
 
 /**
  * Convert a character range in fullText to normalized 0-1 rects.

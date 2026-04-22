@@ -58,7 +58,6 @@ export function ViewerPage() {
         [allSets, visibleSetIds, annotationsByPage],
     );
 
-    // Register global keyboard shortcuts
     useKeyboardShortcuts();
     useGlobalSelectionClear();
 
@@ -69,13 +68,11 @@ export function ViewerPage() {
     const { data: pdfMetadata, isLoading: isLoadingMetadata } = usePdf(id!);
     const { blob, sourceUrl, isLoading: isLoadingContent, error, isLinked } = usePdfSource(pdfMetadata);
 
-    // Reset store on mount/unmount
     useEffect(() => {
         reset();
         return () => reset();
     }, [reset]);
 
-    // Load document when content is available
     useEffect(() => {
         if (isLinked && !sourceUrl) return;
         if (!isLinked && !blob) return;
@@ -84,16 +81,13 @@ export function ViewerPage() {
 
         const loadPdf = async () => {
             try {
-                // Clear previous error at start of new load attempt
                 if (isMounted) setLoadError(null);
                 let doc: PDFDocumentProxy;
 
                 if (isLinked && sourceUrl) {
-                    // Load directly from URL
                     const loadingTask = pdfjsLib.getDocument({ url: sourceUrl });
                     doc = await loadingTask.promise;
                 } else if (blob) {
-                    // Load from blob (stored PDF)
                     const arrayBuffer = await blob.arrayBuffer();
                     const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
                     doc = await loadingTask.promise;
@@ -124,10 +118,8 @@ export function ViewerPage() {
         return Array.from({ length: totalPages }, (_, i) => i + 1);
     }, [totalPages]);
 
-    // Preload page dimensions when PDF document loads
     usePdfPageDimensions({ pdfDocument, enabled: !!pdfDocument });
 
-    // Scroll listener for toolbar navigation
     useEffect(() => {
         const el = document.getElementById(`pdf-page-${currentPage}`);
         if (el) {
