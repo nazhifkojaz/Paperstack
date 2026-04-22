@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:5173"
 
     # Rate Limiting
-    RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_AUTH_OAUTH: str = "10/minute"
     RATE_LIMIT_AUTH_REFRESH: str = "20/minute"
     RATE_LIMIT_AUTH_ME: str = "60/minute"

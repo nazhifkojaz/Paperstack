@@ -12,7 +12,7 @@ from app.db.engine import SessionLocal
 from app.db.models import User
 
 reusable_oauth2 = OAuth2PasswordBearer(
-    tokenUrl="/v1/auth/login"  # Not used for GitHub OAuth directly but good for OpenAPI docs
+    tokenUrl="/v1/auth/github/login"  # Used for OpenAPI docs; actual auth is OAuth flow
 )
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
