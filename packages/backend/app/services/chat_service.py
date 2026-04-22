@@ -40,14 +40,12 @@ CONTEXT_WINDOW = 10  # maximum number of past messages sent as conversation hist
 
 
 def _count_tokens(text: str) -> int:
-    """Count tokens in text using tiktoken, with character fallback."""
     if _ENCODER is not None:
         return len(_ENCODER.encode(text))
     return len(text) // 4
 
 
 def _truncate_to_tokens(text: str, max_tokens: int) -> str:
-    """Truncate text to fit within max_tokens, appending a truncation marker."""
     if _ENCODER is not None:
         tokens = _ENCODER.encode(text)
         if len(tokens) <= max_tokens:
@@ -98,20 +96,12 @@ class ChatService:
     """
 
     def __init__(self, llm_service: LLMService | None = None):
-        """Initialize chat service with optional LLM service.
-
-        Args:
-            llm_service: LLMService instance for streaming. If None, uses default.
-        """
         self._llm_service = llm_service or LLMService()
 
     def build_context(
         self, chunks: list[dict], max_tokens: int = DEFAULT_CONTEXT_MAX_TOKENS
     ) -> str:
         """Format retrieved chunks into a context string for the LLM prompt.
-
-        Each chunk dict must have 'page_number' and 'content' keys.
-        Optional 'section_title' key adds section context to the header.
 
         Respects a token budget (max_tokens). Chunks that would exceed the
         budget are truncated with a marker; subsequent chunks are dropped.
@@ -121,7 +111,6 @@ class ChatService:
         total_tokens = 0
 
         for c in deduped:
-            # Format page label with span support
             end_page = c.get("end_page_number")
             if end_page and end_page > c["page_number"]:
                 page_label = f"Pages {c['page_number']}-{end_page}"
@@ -154,15 +143,8 @@ class ChatService:
     ) -> tuple[str, list[dict]]:
         """Build system prompt and message list for the LLM.
 
-        Returns (system_prompt_with_context, messages).
         The system prompt embeds the retrieved context so every provider
         receives it the same way regardless of their message format.
-
-        Args:
-            context: formatted output of build_context()
-            history: list of {"role": "user"|"assistant", "content": str} dicts
-            user_message: the current user question
-            base_prompt: override the default SYSTEM_PROMPT (e.g. COLLECTION_SYSTEM_PROMPT)
         """
         system = (
             (base_prompt or SYSTEM_PROMPT)
@@ -170,7 +152,6 @@ class ChatService:
             + context
         )
         msgs: list[dict] = []
-        # Cap history to last CONTEXT_WINDOW messages
         for h in history[-CONTEXT_WINDOW:]:
             msgs.append({"role": h["role"], "content": h["content"]})
         msgs.append({"role": "user", "content": user_message})
@@ -183,17 +164,6 @@ class ChatService:
         provider: str,
         api_key: str,
     ) -> AsyncIterator[str]:
-        """Stream tokens from the chosen LLM provider.
-
-        Args:
-            system_prompt: built by build_messages()
-            messages: built by build_messages()
-            provider: one of 'openai', 'anthropic', 'gemini', 'glm'
-            api_key: the user's (or in-house) API key for the provider
-
-        Yields:
-            text tokens as they arrive from the provider
-        """
         method_name = STREAM_PROVIDERS.get(provider)
         if not method_name:
             raise ValueError(
