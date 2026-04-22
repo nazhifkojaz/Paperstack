@@ -65,6 +65,7 @@ docs/
 
 # Scratch/experiment folders
 experiment_pdf/
+prompt_experiment_results.json
 
 # Editor/tool configs
 .opencode/
