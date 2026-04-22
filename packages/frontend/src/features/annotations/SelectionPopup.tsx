@@ -22,7 +22,7 @@ export const SelectionPopup = ({
     onDismiss,
 }: SelectionPopupProps) => {
     const { pdfId = '' } = useParams<{ pdfId: string }>();
-    const { selectedSetId } = useAnnotationStore();
+    const selectedSetId = useAnnotationStore(s => s.selectedSetId);
     const { data: sets } = useAnnotationSets(pdfId);
     const { mutate: createAnnotation } = useCreateAnnotation();
 

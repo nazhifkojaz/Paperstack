@@ -19,13 +19,18 @@ import { toast } from 'sonner';
 export const ViewerToolbar = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
     const [isExporting, setIsExporting] = useState(false);
-    const {
-        currentPage, totalPages, zoom,
-        setCurrentPage, setZoom, setRotation
-    } = usePdfViewerStore();
+    const currentPage = usePdfViewerStore(s => s.currentPage);
+    const totalPages = usePdfViewerStore(s => s.totalPages);
+    const zoom = usePdfViewerStore(s => s.zoom);
+    const setCurrentPage = usePdfViewerStore(s => s.setCurrentPage);
+    const setZoom = usePdfViewerStore(s => s.setZoom);
+    const setRotation = usePdfViewerStore(s => s.setRotation);
     const { isCitationPanelOpen, toggleCitationPanel } = useCitationStore();
     const { isChatPanelOpen, toggleChatPanel } = useChatStore();
-    const { isDrawingRect, setIsDrawingRect, isAnnotationSidebarOpen, toggleAnnotationSidebar } = useAnnotationStore();
+    const isDrawingRect = useAnnotationStore(s => s.isDrawingRect);
+    const isAnnotationSidebarOpen = useAnnotationStore(s => s.isAnnotationSidebarOpen);
+    const setIsDrawingRect = useAnnotationStore(s => s.setIsDrawingRect);
+    const toggleAnnotationSidebar = useAnnotationStore(s => s.toggleAnnotationSidebar);
 
     const handlePageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const page = parseInt(e.target.value, 10);

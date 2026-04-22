@@ -30,7 +30,7 @@ export const AnnotationContextMenu = ({
   const menuRef = useRef<HTMLDivElement>(null)
   const { mutate: updateAnnotation } = useUpdateAnnotation()
   const { mutate: deleteAnnotation } = useDeleteAnnotation()
-  const { setSelectedAnnotationId } = useAnnotationStore()
+  const setSelectedAnnotationId = useAnnotationStore(s => s.setSelectedAnnotationId)
 
   // Calculate clamped position to keep menu within viewport
   const menuPosition = (() => {

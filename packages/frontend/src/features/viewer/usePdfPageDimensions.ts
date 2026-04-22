@@ -16,7 +16,8 @@ export function usePdfPageDimensions({
     pdfDocument,
     enabled = true,
 }: UsePdfPageDimensionsOptions): void {
-    const { setPageDimensionsBulk, clearPageDimensions } = usePdfViewerStore();
+    const setPageDimensionsBulk = usePdfViewerStore(s => s.setPageDimensionsBulk);
+    const clearPageDimensions = usePdfViewerStore(s => s.clearPageDimensions);
     const isCancelledRef = useRef(false);
 
     useEffect(() => {
