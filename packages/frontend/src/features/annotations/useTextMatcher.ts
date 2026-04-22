@@ -23,6 +23,14 @@ export interface ResolvedAnnotation extends Annotation {
  */
 const _globalPatchedIds = new Set<string>();
 
+/**
+ * Tracks annotation IDs that were tried and could not be located in the PDF.
+ * Module-level gate: once an annotation is permanently unmatched, we never
+ * re-walk the TextLayer DOM for it, preventing the freeze on pages where
+ * auto-highlight annotations could not be resolved.
+ */
+const _globalUnmatchedIds = new Set<string>();
+
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 /**
@@ -50,7 +58,7 @@ export function useTextMatcher(
         Map<string, { rects: Rect[]; page: number }>
     >(new Map());
     const [unmatchedIds, setUnmatchedIds] = useState<Set<string>>(new Set());
-    const updateAnnotation = useUpdateAnnotation();
+    const { mutate: patchAnnotation } = useUpdateAnnotation();
 
     useEffect(() => {
         if (!textLayerHandle?.current) return;
@@ -64,7 +72,8 @@ export function useTextMatcher(
                 a.rects.length === 0 &&
                 a.selected_text &&
                 a.page_number === pageNumber &&
-                !_globalPatchedIds.has(a.id),
+                !_globalPatchedIds.has(a.id) &&
+                !_globalUnmatchedIds.has(a.id),
         );
 
         // Neighbor annotations (page +/-1) — only tried as fallback with stricter threshold
@@ -73,7 +82,8 @@ export function useTextMatcher(
                 a.rects.length === 0 &&
                 a.selected_text &&
                 Math.abs(a.page_number - pageNumber) === 1 &&
-                !_globalPatchedIds.has(a.id),
+                !_globalPatchedIds.has(a.id) &&
+                !_globalUnmatchedIds.has(a.id),
         );
 
         if (ownPageAnns.length === 0 && neighborAnns.length === 0) return;
@@ -145,7 +155,12 @@ export function useTextMatcher(
                 if (ann && ann.page_number !== entry.page) {
                     patchData.page_number = entry.page;
                 }
-                updateAnnotation.mutate({ id: annId, data: patchData });
+                patchAnnotation({ id: annId, data: patchData });
+            }
+
+            // Gate future effect runs: never re-walk the DOM for permanently unmatched IDs
+            for (const id of newUnmatched) {
+                _globalUnmatchedIds.add(id);
             }
 
             // Update unmatched tracking — prune IDs that were resolved
@@ -164,7 +179,7 @@ export function useTextMatcher(
         });
 
         return () => { cancelled = true; };
-    }, [annotations, pageNumber, textLayerHandle, updateAnnotation]);
+    }, [annotations, pageNumber, textLayerHandle, patchAnnotation]);
 
     return annotations.map(ann => {
         if (ann.rects.length > 0) return ann;
