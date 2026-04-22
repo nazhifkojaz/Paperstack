@@ -1,5 +1,5 @@
 from typing import Any, List
-from uuid import UUID, uuid4
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +43,6 @@ async def create_annotation_set(
         raise HTTPException(status_code=404, detail="PDF not found")
         
     db_set = AnnotationSet(
-        id=uuid4(),  # Generate ID in Python for SQLite compatibility
         pdf_id=set_in.pdf_id,
         user_id=current_user.id,
         name=set_in.name,
@@ -124,7 +123,6 @@ async def create_annotation(
         raise HTTPException(status_code=404, detail="Annotation set not found")
         
     db_ann = Annotation(
-        id=uuid4(),  # Generate ID in Python for SQLite compatibility
         set_id=ann_in.set_id,
         page_number=ann_in.page_number,
         type=ann_in.type,
