@@ -45,7 +45,7 @@ Thumbs.db
 npm-debug.log*
 
 # Alembic
-packages/backend/alembic/versions/*.py
+# (versions are now tracked in git for migration sharing)
 
 # Frontend build cache
 .eslintcache
@@ -65,6 +65,7 @@ docs/
 
 # Scratch/experiment folders
 experiment_pdf/
+prompt_experiment_results.json
 
 # Editor/tool configs
 .opencode/

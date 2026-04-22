@@ -2,7 +2,6 @@
 
 
 class LLMRateLimitError(Exception):
-    """Raised when an LLM provider returns 429 Too Many Requests."""
 
     def __init__(self, provider: str):
         self.provider = provider
@@ -12,7 +11,6 @@ class LLMRateLimitError(Exception):
 
 
 class LLMProviderError(Exception):
-    """Raised when an LLM provider returns an unexpected HTTP error."""
 
     def __init__(self, provider: str, status_code: int, detail: str = ""):
         self.provider = provider
@@ -25,7 +23,6 @@ class LLMProviderError(Exception):
 
 
 class EmbeddingError(Exception):
-    """Raised when the embedding service fails."""
 
     def __init__(self, message: str):
         self.message = message
@@ -33,19 +30,15 @@ class EmbeddingError(Exception):
 
 
 class IndexingError(Exception):
-    """Raised when PDF indexing fails."""
 
     def __init__(self, message: str):
         self.message = message
         super().__init__(message)
 
 
-# ============================================================================
 # API Key Service Exceptions
-# ============================================================================
 
 class ApiKeyNotFoundError(Exception):
-    """Raised when no API key is available and quota is exhausted."""
 
     def __init__(self, quota_type: str = "general"):
         self.quota_type = quota_type
@@ -56,7 +49,6 @@ class ApiKeyNotFoundError(Exception):
 
 
 class QuotaExhaustedError(Exception):
-    """Raised when specific quota type is depleted."""
 
     def __init__(self, quota_type: str, remaining: int = 0):
         self.quota_type = quota_type
@@ -67,17 +59,13 @@ class QuotaExhaustedError(Exception):
         )
 
 
-# ============================================================================
 # PDF Download Service Exceptions
-# ============================================================================
 
 class PdfDownloadError(Exception):
-    """Base exception for PDF download failures."""
     pass
 
 
 class GithubApiError(PdfDownloadError):
-    """Raised when GitHub API returns an error."""
 
     def __init__(self, status_code: int, detail: str):
         self.status_code = status_code
@@ -86,7 +74,6 @@ class GithubApiError(PdfDownloadError):
 
 
 class ExternalUrlError(PdfDownloadError):
-    """Raised when external URL download fails."""
 
     def __init__(self, url: str, status_code: int | None = None, detail: str = ""):
         self.url = url
@@ -97,12 +84,10 @@ class ExternalUrlError(PdfDownloadError):
 
 
 class InvalidPdfSourceError(PdfDownloadError):
-    """Raised when source configuration is invalid."""
     pass
 
 
 class GoogleDriveError(PdfDownloadError):
-    """Raised when the Google Drive API returns an error."""
 
     def __init__(self, status_code: int | None = None, detail: str = ""):
         self.status_code = status_code
@@ -111,22 +96,17 @@ class GoogleDriveError(PdfDownloadError):
         super().__init__(f"Google Drive API error{status_msg}{detail_msg}")
 
 
-# ============================================================================
 # Indexing Service Exceptions
-# ============================================================================
 
 class TextExtractionError(IndexingError):
-    """Raised when PDF text extraction fails."""
     pass
 
 
 class ChunkingError(IndexingError):
-    """Raised when PDF chunking fails."""
     pass
 
 
 class IndexInProgressError(IndexingError):
-    """Raised when indexing is actively in progress (not stale)."""
 
     def __init__(self, pdf_id: str, updated_at):
         self.pdf_id = pdf_id

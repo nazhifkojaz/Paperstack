@@ -1,4 +1,4 @@
-# Test configuration for SQLite compatibility (optional)
+# Test configuration for SQLite compatibility (used by CI)
 
 import datetime
 import uuid as uuid_module

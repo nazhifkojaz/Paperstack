@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Search, Plus } from 'lucide-react';
+import { FileText, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface EmptyStateProps {
@@ -31,26 +31,5 @@ export function EmptyState({
                 </Button>
             )}
         </div>
-    );
-}
-
-export function LibraryEmptyState({ onUpload }: { onUpload: () => void }) {
-    return (
-        <EmptyState
-            title="No PDFs yet"
-            description="Upload your first PDF to start organizing and annotating your research library."
-            actionLabel="Upload PDF"
-            onAction={onUpload}
-        />
-    );
-}
-
-export function SearchEmptyState({ query }: { query: string }) {
-    return (
-        <EmptyState
-            icon={<Search className="w-8 h-8" />}
-            title="No results found"
-            description={`We couldn't find anything matching "${query}". Try a different search term or clear filters.`}
-        />
     );
 }

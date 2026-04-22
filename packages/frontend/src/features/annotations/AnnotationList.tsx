@@ -88,7 +88,7 @@ interface SetAnnotationListProps {
 }
 
 export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, groupBy }) => {
-  const { selectedAnnotationId } = useAnnotationStore()
+  const selectedAnnotationId = useAnnotationStore(s => s.selectedAnnotationId)
   const { data: annotations = [], isLoading } = useAnnotations(setId)
   const setCurrentPage = usePdfViewerStore((state) => state.setCurrentPage)
   const setSelectedAnnotationId = useAnnotationStore((state) => state.setSelectedAnnotationId)

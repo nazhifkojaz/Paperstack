@@ -7,9 +7,7 @@ import { ReactElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 
-// =============================================================================
 // Custom Render Function
-// =============================================================================
 
 interface CustomRenderOptions extends Omit<RenderOptions, 'wrapper'> {
   queryClient?: QueryClient
@@ -61,40 +59,7 @@ function renderWithProviders(
   }
 }
 
-// =============================================================================
-// Zustand Store Testing Helpers
-// =============================================================================
-
-/**
- * Reset a Zustand store to its initial state.
- *
- * @param store - The Zustand store to reset
- */
-export function resetStore<T extends { getState: () => unknown; setState: (state: Partial<T>) => void }>(
-  store: T
-) {
-  store.setState({} as Partial<T>)
-}
-
-// =============================================================================
 // Mock Data Generators
-// =============================================================================
-
-export function createMockPdf(overrides = {}) {
-  return {
-    id: 'pdf-1',
-    user_id: 'user-1',
-    title: 'Test PDF',
-    filename: 'test.pdf',
-    file_size: 12345,
-    page_count: 10,
-    uploaded_at: '2026-03-09T00:00:00Z',
-    updated_at: '2026-03-09T00:00:00Z',
-    doi: null,
-    isbn: null,
-    ...overrides,
-  }
-}
 
 export function createMockAnnotation(overrides: Partial<import('@/api/annotations').Annotation> = {}) {
   const annotation: import('@/api/annotations').Annotation = {
@@ -112,67 +77,7 @@ export function createMockAnnotation(overrides: Partial<import('@/api/annotation
   return { ...annotation, ...overrides }
 }
 
-export function createMockAnnotationSet(overrides = {}) {
-  return {
-    id: 'set-1',
-    pdf_id: 'pdf-1',
-    name: 'Default',
-    color: '#FFFF00',
-    created_at: '2026-03-09T00:00:00Z',
-    annotations: [],
-    ...overrides,
-  }
-}
-
-export function createMockCitation(overrides = {}) {
-  return {
-    id: 'cit-1',
-    pdf_id: 'pdf-1',
-    bibtex: '@article{test2024}',
-    doi: '10.1234/test',
-    title: 'Test Paper',
-    authors: 'Test Author',
-    year: 2024,
-    source: 'manual',
-    ...overrides,
-  }
-}
-
-export function createMockUser(overrides = {}) {
-  return {
-    id: 'user-1',
-    email: 'test@example.com',
-    display_name: 'Test User',
-    avatar_url: 'https://example.com/avatar.png',
-    storage_provider: 'github' as const,
-    ...overrides,
-  }
-}
-
-export function createMockCollection(overrides = {}) {
-  return {
-    id: 'col-1',
-    name: 'Research',
-    parent_id: null,
-    position: 0,
-    pdf_count: 0,
-    ...overrides,
-  }
-}
-
-export function createMockTag(overrides = {}) {
-  return {
-    id: 'tag-1',
-    name: 'Important',
-    color: '#FF0000',
-    pdf_count: 0,
-    ...overrides,
-  }
-}
-
-// =============================================================================
 // Re-exports
-// =============================================================================
 
 /**
  * Re-export everything from testing-library.

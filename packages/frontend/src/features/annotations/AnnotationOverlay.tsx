@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { StickyNote } from 'lucide-react';
 import { useAnnotationStore } from '@/stores/annotationStore';
-import { useAnnotationSets, useMultiSetAnnotations, useCreateAnnotation } from '@/api/annotations';
+import { useCreateAnnotation } from '@/api/annotations';
+import { useAnnotationsContext } from './AnnotationsContext';
 import type { TextLayerHandle } from '@/features/viewer/TextLayer';
 import { useTextMatcher } from './useTextMatcher';
 import { useRectCreate, type Rect } from './useRectCreate';
@@ -19,19 +20,25 @@ interface AnnotationOverlayProps {
 }
 
 export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, className = '' }: AnnotationOverlayProps) => {
-    // Store integration
-    const { isDrawingRect, selectedSetId, hiddenSetIds, selectedAnnotationId, setSelectedAnnotationId, contextMenu, setContextMenu, setIsDrawingRect } = useAnnotationStore();
+    const isDrawingRect = useAnnotationStore(s => s.isDrawingRect);
+    const selectedSetId = useAnnotationStore(s => s.selectedSetId);
+    const selectedAnnotationId = useAnnotationStore(s => s.selectedAnnotationId);
+    const contextMenu = useAnnotationStore(s => s.contextMenu);
+    const setSelectedAnnotationId = useAnnotationStore(s => s.setSelectedAnnotationId);
+    const setContextMenu = useAnnotationStore(s => s.setContextMenu);
+    const setIsDrawingRect = useAnnotationStore(s => s.setIsDrawingRect);
 
-    // Data fetching
-    const { data: allSets } = useAnnotationSets(pdfId);
-    const visibleSetIds = useMemo(
-        () => (allSets ?? []).filter(s => !hiddenSetIds.has(s.id)).map(s => s.id),
-        [allSets, hiddenSetIds],
-    );
-    const { data: annotations } = useMultiSetAnnotations(visibleSetIds);
+    const { visibleSetIds, annotationsByPage } = useAnnotationsContext();
     const { mutate: createAnnotation } = useCreateAnnotation();
 
-    // Refs and local state
+    // Build text-matcher input: own page + immediate neighbors (for fallback matching)
+    const matcherAnnotations = useMemo(() => {
+        const own = annotationsByPage.get(pageNumber) ?? [];
+        const prev = annotationsByPage.get(pageNumber - 1) ?? [];
+        const next = annotationsByPage.get(pageNumber + 1) ?? [];
+        return [...own, ...prev, ...next];
+    }, [annotationsByPage, pageNumber]);
+
     const containerRef = useRef<HTMLDivElement>(null);
     const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
     const [containerDims, setContainerDims] = useState<{ width: number; height: number } | null>(null);
@@ -47,7 +54,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         return () => observer.disconnect();
     }, []);
 
-    // Custom hooks
     const rectCreate = useRectCreate({
         containerRef,
         isDrawingRect,
@@ -66,12 +72,10 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
 
     const annotationExplain = useAnnotationExplain({
         onSuccess: (_explanation, _noteContent, annotationId) => {
-            // Open the note popover to show the explanation
             setEditingNoteId(annotationId);
         },
     });
 
-    // Annotation drag for move/resize
     const {
         isDragging,
         previewRect: dragPreviewRect,
@@ -80,30 +84,13 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         startMove,
     } = useAnnotationDrag(containerRef as React.RefObject<HTMLDivElement>);
 
-    // Clear annotation selection on scroll so the toolbar doesn't linger
-    useEffect(() => {
-        const handleScroll = () => setSelectedAnnotationId(null);
-        document.addEventListener('scroll', handleScroll, true);
-        return () => document.removeEventListener('scroll', handleScroll, true);
-    }, [setSelectedAnnotationId]);
-
-    // Clear annotation selection when clicking anywhere outside an annotation
-    // (annotation <g> elements call e.stopPropagation() so they won't trigger this)
-    useEffect(() => {
-        const handleClick = () => setSelectedAnnotationId(null);
-        document.addEventListener('click', handleClick);
-        return () => document.removeEventListener('click', handleClick);
-    }, [setSelectedAnnotationId]);
-
     // Resolve empty-rect auto-highlight annotations via TextLayer DOM matching
-    const resolvedAnnotations = useTextMatcher(annotations, pageNumber, textLayerHandle);
+    const resolvedAnnotations = useTextMatcher(matcherAnnotations, pageNumber, textLayerHandle);
 
-    // Filter annotations for this page
     const pageAnnotations = useMemo(() => {
         return resolvedAnnotations.filter(a => a.page_number === pageNumber);
     }, [resolvedAnnotations, pageNumber]);
 
-    // Handler for explain feature
     const handleExplainThis = (annotationId: string) => {
         const ann = pageAnnotations.find(a => a.id === annotationId);
         if (!ann) return;
@@ -140,7 +127,6 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                     const strokeColor = isSelected ? '#3b82f6' : (ann.color || '#FFFF00');
                     const strokeWidth = isSelected ? 3 : 2;
 
-                    // Compute effective rects during drag (preview or actual)
                     const effectiveRects = (isDragging && selectedAnnotationId === ann.id)
                         ? (dragPreviewRects || (dragPreviewRect ? [dragPreviewRect] : ann.rects))
                         : ann.rects;
@@ -344,6 +330,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
                         onClose={() => { setContextMenu(null); setSelectedAnnotationId(null); }}
                         onEditNote={(id) => setEditingNoteId(id)}
                         onExplainThis={handleExplainThis}
+                        explainUsesRemaining={annotationExplain.explainUsesRemaining}
                     />
                 );
             })()}

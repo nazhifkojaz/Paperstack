@@ -18,18 +18,14 @@ from pypdf import PdfReader
 logger = logging.getLogger(__name__)
 
 
-# ────────────────────────────────────────────────────────────
 # Exceptions
-# ────────────────────────────────────────────────────────────
 
 class CitationNotFoundError(Exception):
     """Raised when a citation (DOI/ISBN) is not found in external services."""
     pass
 
 
-# ────────────────────────────────────────────────────────────
 # Helpers
-# ────────────────────────────────────────────────────────────
 
 DOI_REGEX = re.compile(
     r"\b(10\.\d{4,9}/[-._;()/:A-Z0-9]+)\b",
@@ -382,10 +378,10 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
     Full pipeline: try to find a DOI, fall back to embedded metadata,
     then look up CrossRef and return a complete citation dict.
     """
-    # 1. Embedded metadata (fast, synchronous)
+    # Embedded metadata (fast, synchronous)
     meta = extract_pdf_metadata(pdf_bytes)
 
-    # 2. Determine DOI — prefer hint, then embedded, then text scan
+    # Determine DOI — prefer hint, then embedded, then text scan
     doi = doi_hint or meta.get("doi") or extract_doi_from_text(pdf_bytes)
 
     # Normalize: strip URL prefixes like https://doi.org/
@@ -418,7 +414,7 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
             )
             # Fall through to next strategy
 
-    # 3. No DOI — try Semantic Scholar title search
+    # No DOI — try Semantic Scholar title search
     if meta.get("title"):
         s2_result = await search_semantic_scholar(meta["title"], meta.get("authors"))
         if s2_result:
@@ -466,7 +462,7 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
                 "source": "semantic_scholar",
             }
 
-    # 4. No DOI, no S2 match — build citation from embedded metadata only
+    # No DOI, no S2 match — build citation from embedded metadata only
     title = meta.get("title") or "Unknown Title"
     authors = meta.get("authors") or "Unknown Author"
     year = meta.get("year")
@@ -482,9 +478,7 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
     }
 
 
-# ────────────────────────────────────────────────────────────
 # BibTeX helpers
-# ────────────────────────────────────────────────────────────
 
 def _generate_minimal_bibtex(doi: str) -> str:
     """Fallback BibTeX when CrossRef is unreachable."""

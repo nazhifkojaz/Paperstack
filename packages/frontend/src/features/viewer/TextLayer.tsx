@@ -32,7 +32,8 @@ interface TextLayerProps {
 
 export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProxy, className = '' }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const { zoom, rotation } = usePdfViewerStore();
+    const zoom = usePdfViewerStore(s => s.zoom);
+    const rotation = usePdfViewerStore(s => s.rotation);
     const [selectionState, setSelectionState] = useState<SelectionState | null>(null);
     const textLayerRef = useRef<HTMLDivElement>(null);
     const textLayerInstanceRef = useRef<PdfjsTextLayer | null>(null);

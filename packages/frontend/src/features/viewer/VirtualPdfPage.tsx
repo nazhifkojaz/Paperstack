@@ -12,7 +12,9 @@ interface VirtualPdfPageProps {
 export const VirtualPdfPage = ({ pdfDocument, pageNumber, pdfId }: VirtualPdfPageProps) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [isVisible, setIsVisible] = useState(false);
-    const { setCurrentPage, getScaledDimensions } = usePdfViewerStore();
+    const setCurrentPage = usePdfViewerStore(s => s.setCurrentPage);
+    const zoom = usePdfViewerStore(s => s.zoom);
+    const dimensions = usePdfViewerStore(s => s.pageDimensions.get(pageNumber));
 
     useEffect(() => {
         const observer = new IntersectionObserver(
@@ -41,10 +43,8 @@ export const VirtualPdfPage = ({ pdfDocument, pageNumber, pdfId }: VirtualPdfPag
         return () => observer.disconnect();
     }, [pageNumber, setCurrentPage]);
 
-    // Get scaled dimensions from store, fall back to defaults
-    const scaledDimensions = getScaledDimensions(pageNumber);
-    const placeholderWidth = scaledDimensions?.width ?? 600;
-    const placeholderHeight = scaledDimensions?.height ?? 800;
+    const placeholderWidth = dimensions ? dimensions.baseWidth * zoom : 600;
+    const placeholderHeight = dimensions ? dimensions.baseHeight * zoom : 800;
 
     return (
         <div

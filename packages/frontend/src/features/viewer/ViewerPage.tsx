@@ -3,17 +3,26 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { pdfjsLib } from '@/lib/pdfjs';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { usePdfViewerStore } from '@/stores/pdfViewerStore';
+import { useAnnotationStore } from '@/stores/annotationStore';
 import { usePdf } from '@/api/pdfs';
+import { useAnnotationSets, useMultiSetAnnotations } from '@/api/annotations';
+import type { Annotation, AnnotationSet } from '@/api/annotations';
 import { usePdfSource } from './usePdfSource';
 import { usePdfPageDimensions } from './usePdfPageDimensions';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { useGlobalSelectionClear } from '../annotations/useGlobalSelectionClear';
+import { AnnotationsContext } from '../annotations/AnnotationsContext';
 import { ViewerToolbar } from './ViewerToolbar';
 import { VirtualPdfPage } from './VirtualPdfPage';
+import { FpsCounter } from './FpsCounter';
 import { AnnotationSidebar } from '../annotations/AnnotationSidebar';
 import { CitationPanel } from '../citations/CitationPanel';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Loader2, ArrowLeft, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+
+const EMPTY_SETS: AnnotationSet[] = [];
+const EMPTY_ANNOTATIONS: Annotation[] = [];
 
 export function ViewerPage() {
     const { pdfId: id } = useParams<{ pdfId: string }>();
@@ -21,21 +30,49 @@ export function ViewerPage() {
     const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
 
-    const { currentPage, totalPages, setTotalPages, reset } = usePdfViewerStore();
+    const currentPage = usePdfViewerStore(s => s.currentPage);
+    const totalPages = usePdfViewerStore(s => s.totalPages);
+    const setTotalPages = usePdfViewerStore(s => s.setTotalPages);
+    const reset = usePdfViewerStore(s => s.reset);
 
-    // Register global keyboard shortcuts
+    // Annotations: single subscription point for all AnnotationOverlay instances
+    const hiddenSetIds = useAnnotationStore(s => s.hiddenSetIds);
+    const { data: rawSets } = useAnnotationSets(id ?? '');
+    const allSets: AnnotationSet[] = rawSets ?? EMPTY_SETS;
+    const visibleSetIds = useMemo(
+        () => allSets.filter(s => !hiddenSetIds.has(s.id)).map(s => s.id),
+        [allSets, hiddenSetIds],
+    );
+    const { data: allAnnotations = EMPTY_ANNOTATIONS } = useMultiSetAnnotations(visibleSetIds);
+    const annotationsByPage = useMemo(() => {
+        const map = new Map<number, Annotation[]>();
+        for (const ann of allAnnotations) {
+            let list = map.get(ann.page_number);
+            if (!list) { list = []; map.set(ann.page_number, list); }
+            list.push(ann);
+        }
+        return map;
+    }, [allAnnotations]);
+    const annotationsCtxValue = useMemo(
+        () => ({ allSets, visibleSetIds, annotationsByPage }),
+        [allSets, visibleSetIds, annotationsByPage],
+    );
+
     useKeyboardShortcuts();
+    useGlobalSelectionClear();
+
+    // Dev-only FPS counter: show in dev mode, or when `?fps=1` is in the URL
+    const showFps = import.meta.env.DEV ||
+        new URLSearchParams(window.location.search).get('fps') === '1';
 
     const { data: pdfMetadata, isLoading: isLoadingMetadata } = usePdf(id!);
     const { blob, sourceUrl, isLoading: isLoadingContent, error, isLinked } = usePdfSource(pdfMetadata);
 
-    // Reset store on mount/unmount
     useEffect(() => {
         reset();
         return () => reset();
     }, [reset]);
 
-    // Load document when content is available
     useEffect(() => {
         if (isLinked && !sourceUrl) return;
         if (!isLinked && !blob) return;
@@ -44,16 +81,13 @@ export function ViewerPage() {
 
         const loadPdf = async () => {
             try {
-                // Clear previous error at start of new load attempt
                 if (isMounted) setLoadError(null);
                 let doc: PDFDocumentProxy;
 
                 if (isLinked && sourceUrl) {
-                    // Load directly from URL
                     const loadingTask = pdfjsLib.getDocument({ url: sourceUrl });
                     doc = await loadingTask.promise;
                 } else if (blob) {
-                    // Load from blob (stored PDF)
                     const arrayBuffer = await blob.arrayBuffer();
                     const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
                     doc = await loadingTask.promise;
@@ -84,10 +118,8 @@ export function ViewerPage() {
         return Array.from({ length: totalPages }, (_, i) => i + 1);
     }, [totalPages]);
 
-    // Preload page dimensions when PDF document loads
     usePdfPageDimensions({ pdfDocument, enabled: !!pdfDocument });
 
-    // Scroll listener for toolbar navigation
     useEffect(() => {
         const el = document.getElementById(`pdf-page-${currentPage}`);
         if (el) {
@@ -162,16 +194,18 @@ export function ViewerPage() {
 
                     <div className="flex-1 overflow-auto relative block p-4 md:p-8 custom-scrollbar bg-neutral-100 dark:bg-neutral-900 border-x border-b">
                         {pdfDocument && totalPages > 0 ? (
-                            <div className="flex flex-col w-full max-w-5xl mx-auto transition-all">
-                                {pages.map((pageNum) => (
-                                    <VirtualPdfPage
-                                        key={pageNum}
-                                        pdfDocument={pdfDocument}
-                                        pageNumber={pageNum}
-                                        pdfId={id!}
-                                    />
-                                ))}
-                            </div>
+                            <AnnotationsContext.Provider value={annotationsCtxValue}>
+                                <div className="flex flex-col w-full max-w-5xl mx-auto transition-all">
+                                    {pages.map((pageNum) => (
+                                        <VirtualPdfPage
+                                            key={pageNum}
+                                            pdfDocument={pdfDocument}
+                                            pageNumber={pageNum}
+                                            pdfId={id!}
+                                        />
+                                    ))}
+                                </div>
+                            </AnnotationsContext.Provider>
                         ) : (
                             <div className="flex items-center justify-center h-full">
                                 <Loader2 className="h-8 w-8 animate-spin text-primary/50" />
@@ -183,6 +217,8 @@ export function ViewerPage() {
                 <CitationPanel />
                 <ChatPanel pdfId={id!} />
             </div>
+
+            {showFps && <FpsCounter />}
         </div>
     );
 }

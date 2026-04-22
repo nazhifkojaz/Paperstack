@@ -31,6 +31,9 @@ class ContextChunkResponse(BaseModel):
     snippet: str
     pdf_id: Optional[str] = None
     pdf_title: Optional[str] = None
+    end_page_number: Optional[int] = None
+    section_title: Optional[str] = None
+    section_level: Optional[int] = None
 
 
 class MessageResponse(BaseModel):
@@ -68,3 +71,4 @@ class ExplainResponse(BaseModel):
     explanation: str
     note_content: str
     explain_uses_remaining: int
+    provider_fallback: bool = False

@@ -67,7 +67,6 @@ async def _cleanup_pending_cache_on_error(db: AsyncSession, cache_id: uuid.UUID)
     try:
         yield
     except HTTPException:
-        # Known HTTP errors - clean up and re-raise
         await db.rollback()
         await db.execute(
             delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
@@ -75,7 +74,6 @@ async def _cleanup_pending_cache_on_error(db: AsyncSession, cache_id: uuid.UUID)
         await db.commit()
         raise
     except LLMRateLimitError as e:
-        # Rate limit errors - clean up and return 429
         await db.rollback()
         await db.execute(
             delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
@@ -83,7 +81,6 @@ async def _cleanup_pending_cache_on_error(db: AsyncSession, cache_id: uuid.UUID)
         await db.commit()
         raise HTTPException(status_code=429, detail=str(e))
     except LLMProviderError as e:
-        # Provider errors - clean up and return 502
         await db.rollback()
         await db.execute(
             delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
@@ -91,7 +88,6 @@ async def _cleanup_pending_cache_on_error(db: AsyncSession, cache_id: uuid.UUID)
         await db.commit()
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        # Unexpected errors - clean up and return 500
         await db.rollback()
         await db.execute(
             delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
@@ -112,7 +108,7 @@ async def analyze_paper(
     """Analyze a paper with LLM and create auto-highlight annotations."""
     sorted_categories = sorted(data.categories)
 
-    # 1. Check cache
+    # Check cache
     cache_result = await db.execute(
         select(AutoHighlightCache).where(
             AutoHighlightCache.pdf_id == data.pdf_id,
@@ -137,7 +133,6 @@ async def analyze_paper(
                 highlights_count=count,
             )
 
-    # 2. Resolve API key using service
     try:
         resolution = await api_key_service.resolve_for_auto_highlight(current_user, db)
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
@@ -150,7 +145,7 @@ async def analyze_paper(
         provider, is_in_house, current_user.id,
     )
 
-    # 3. Create pending cache entry (atomic dedup)
+    # Create pending cache entry (atomic dedup)
     try:
         pending_cache = AutoHighlightCache(
             pdf_id=data.pdf_id,
@@ -168,7 +163,6 @@ async def analyze_paper(
     tmp_path: Path | None = None
     try:
         async with _cleanup_pending_cache_on_error(db, pending_cache.id):
-            # 4. Fetch PDF from GitHub or URL using download service
             pdf_result = await db.execute(
                 select(Pdf).where(Pdf.id == data.pdf_id, Pdf.user_id == current_user.id)
             )
@@ -191,7 +185,6 @@ async def analyze_paper(
                 file_id = pdf_row.drive_file_id or pdf_row.github_sha
                 tmp_path = await backend.download_to_tempfile(file_id, pdf_row.filename)
 
-            # 5. Extract text
             with open(tmp_path, "rb") as f:
                 paper_text, total_pages, pages_analyzed = extract_text_with_pages(f)
 
@@ -201,13 +194,43 @@ async def analyze_paper(
                     detail="This PDF doesn't contain selectable text. Auto-highlight requires text-based PDFs.",
                 )
 
-            # 6. Call LLM
+            # Call LLM (with OpenRouter fallback on 429)
             llm_svc = LLMService(http_client=llm_client)
-            highlights = await llm_svc.analyze_paper(
-                paper_text, sorted_categories, provider, api_key
-            )
+            provider_fallback = False
 
-            # 7. Create AnnotationSet
+            try:
+                highlights = await llm_svc.analyze_paper(
+                    paper_text, sorted_categories, provider, api_key
+                )
+            except LLMRateLimitError:
+                # Only retry if primary was OpenRouter
+                if provider != "openrouter":
+                    raise  # Let context manager handle → 429
+
+                logger.warning(
+                    "OpenRouter rate limited for auto-highlight, falling back for user %s",
+                    current_user.id,
+                )
+
+                try:
+                    paid_resolution = await api_key_service.resolve_paid_fallback(
+                        current_user,
+                        db,
+                        quota_field=QuotaType.FREE.value,
+                        feature_priority=api_key_service.AUTO_HIGHLIGHT_PRIORITY,
+                    )
+                except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
+                    raise HTTPException(status_code=402, detail=str(e))
+
+                provider = paid_resolution.provider
+                api_key = paid_resolution.api_key
+                is_in_house = True
+                provider_fallback = True
+
+                highlights = await llm_svc.analyze_paper(
+                    paper_text, sorted_categories, provider, api_key
+                )
+
             annotation_set = AnnotationSet(
                 pdf_id=data.pdf_id,
                 user_id=current_user.id,
@@ -218,7 +241,6 @@ async def analyze_paper(
             db.add(annotation_set)
             await db.flush()
 
-            # 8. Create Annotations
             for h in highlights:
                 ann = Annotation(
                     set_id=annotation_set.id,
@@ -232,13 +254,12 @@ async def analyze_paper(
                 )
                 db.add(ann)
 
-            # 9. Update cache
             pending_cache.status = "complete"
             pending_cache.llm_response = highlights
             pending_cache.annotation_set_id = annotation_set.id
 
-            # 10. Decrement quota if in-house
-            if is_in_house:
+            # Decrement quota if in-house AND paid (not free OpenRouter)
+            if is_in_house and provider != "openrouter":
                 await api_key_service.decrement_quota(
                     str(current_user.id), QuotaType.FREE, db
                 )
@@ -250,6 +271,7 @@ async def analyze_paper(
                 from_cache=False,
                 highlights_count=len(highlights),
                 pages_analyzed=pages_analyzed,
+                provider_fallback=provider_fallback,
             )
     finally:
         if tmp_path:
@@ -310,14 +332,12 @@ async def get_quota(
     current_user: User = Depends(get_current_user),
 ):
     """Get current usage quota and API key status."""
-    # Get quota
     quota_result = await db.execute(
         select(UserUsageQuota).where(UserUsageQuota.user_id == current_user.id)
     )
     quota_row = quota_result.scalar_one_or_none()
     free_remaining = quota_row.free_uses_remaining if quota_row else 5
 
-    # Get user's stored providers
     keys_result = await db.execute(
         select(UserApiKey.provider).where(UserApiKey.user_id == current_user.id)
     )

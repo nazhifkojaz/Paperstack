@@ -21,7 +21,7 @@ const PROVIDERS = [
     {
         id: 'github' as const,
         label: 'GitHub',
-        description: 'PDFs stored in a private pdfbuddy-library repository.',
+        description: 'PDFs stored in a private paperstack-library repository.',
     },
 ]
 

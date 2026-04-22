@@ -20,6 +20,9 @@ export interface ContextChunk {
     snippet: string;
     pdf_id?: string;
     pdf_title?: string;
+    end_page_number?: number;
+    section_title?: string;
+    section_level?: number;
 }
 
 export interface ChatMessage {
@@ -30,7 +33,7 @@ export interface ChatMessage {
     created_at: string;
 }
 
-export interface SemanticSearchRequest {
+interface SemanticSearchRequest {
     query: string;
     collection_id?: string;
     limit?: number;
@@ -44,17 +47,18 @@ export interface SemanticSearchResult {
     score: number;
 }
 
-export interface ExplainRequest {
+interface ExplainRequest {
     pdf_id: string;
     annotation_id: string;
     selected_text: string;
     page_number: number;
 }
 
-export interface ExplainResponse {
+interface ExplainResponse {
     explanation: string;
     note_content: string;
     explain_uses_remaining: number;
+    provider_fallback?: boolean;
 }
 
 // --- Hooks ---
@@ -139,7 +143,8 @@ export async function streamChat(params: {
     conversationId: string;
     message: string;
     onToken: (token: string) => void;
-    onDone: (messageId: string, chunks: ContextChunk[]) => void;
+    onDone: (messageId: string, chunks: ContextChunk[], providerFallback: boolean) => void;
+    onNotice?: (message: string) => void;
     onError: (err: Error) => void;
     signal?: AbortSignal;
 }): Promise<void> {
@@ -186,8 +191,13 @@ export async function streamChat(params: {
                     params.onError(new Error(data.error));
                     return;
                 }
+                if (data.notice) params.onNotice?.(data.notice);
                 if (data.token) params.onToken(data.token);
-                if (data.done) params.onDone(data.message_id, data.context_chunks ?? []);
+                if (data.done) params.onDone(
+                    data.message_id,
+                    data.context_chunks ?? [],
+                    data.provider_fallback ?? false,
+                );
             } catch {
                 // malformed SSE line — skip
             }

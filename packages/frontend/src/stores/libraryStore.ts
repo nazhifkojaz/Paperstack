@@ -7,7 +7,7 @@ interface LibraryState {
     sortOption: string;
     isDeepSearch: boolean;
 
-    // Selection state
+    // Selection
     isSelectionMode: boolean;
     selectedPdfIds: Set<string>;
 
@@ -19,7 +19,7 @@ interface LibraryState {
     setDeepSearch: (v: boolean) => void;
     resetFilters: () => void;
 
-    // Selection actions
+    // Selection
     setSelectionMode: (active: boolean) => void;
     togglePdfSelection: (pdfId: string) => void;
     selectAllVisible: (pdfIds: string[]) => void;
@@ -33,7 +33,7 @@ export const useLibraryStore = create<LibraryState>((set) => ({
     sortOption: '-uploaded_at',
     isDeepSearch: false,
 
-    // Selection state defaults
+    // Selection
     isSelectionMode: false,
     selectedPdfIds: new Set(),
 
@@ -49,7 +49,7 @@ export const useLibraryStore = create<LibraryState>((set) => ({
         isDeepSearch: false,
     }),
 
-    // Selection actions
+    // Selection
     setSelectionMode: (active) => set({
         isSelectionMode: active,
         selectedPdfIds: new Set(),

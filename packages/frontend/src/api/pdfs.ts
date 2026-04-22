@@ -17,7 +17,7 @@ export interface Pdf {
     updated_at: string;
 }
 
-export interface PdfListParams {
+interface PdfListParams {
     collection_id?: string | null;
     tag_id?: string | null;
     q?: string;
@@ -26,7 +26,7 @@ export interface PdfListParams {
     per_page?: number;
 }
 
-export interface PdfLinkPayload {
+interface PdfLinkPayload {
     title: string;
     source_url: string;
     project_ids?: string[];

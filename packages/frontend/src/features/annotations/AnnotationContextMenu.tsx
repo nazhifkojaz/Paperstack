@@ -16,6 +16,7 @@ interface AnnotationContextMenuProps {
   onClose: () => void
   onEditNote: (annotationId: string) => void
   onExplainThis?: (annotationId: string) => void
+  explainUsesRemaining?: number | null
 }
 
 export const AnnotationContextMenu = ({
@@ -24,13 +25,13 @@ export const AnnotationContextMenu = ({
   onClose,
   onEditNote,
   onExplainThis,
+  explainUsesRemaining,
 }: AnnotationContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null)
   const { mutate: updateAnnotation } = useUpdateAnnotation()
   const { mutate: deleteAnnotation } = useDeleteAnnotation()
-  const { setSelectedAnnotationId } = useAnnotationStore()
+  const setSelectedAnnotationId = useAnnotationStore(s => s.setSelectedAnnotationId)
 
-  // Calculate clamped position to keep menu within viewport
   const menuPosition = (() => {
     const MENU_WIDTH = 180
     const MENU_HEIGHT = annotation.type === 'highlight' && annotation.selected_text ? 220 : annotation.type === 'highlight' ? 180 : 140
@@ -39,7 +40,6 @@ export const AnnotationContextMenu = ({
     let x = position.x
     let y = position.y
 
-    // Clamp horizontally
     if (x + MENU_WIDTH > window.innerWidth - PADDING) {
       x = window.innerWidth - MENU_WIDTH - PADDING
     }
@@ -47,7 +47,6 @@ export const AnnotationContextMenu = ({
       x = PADDING
     }
 
-    // Clamp vertically
     if (y + MENU_HEIGHT > window.innerHeight - PADDING) {
       y = window.innerHeight - MENU_HEIGHT - PADDING
     }
@@ -58,7 +57,6 @@ export const AnnotationContextMenu = ({
     return { x, y }
   })()
 
-  // Handle click outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -155,6 +153,13 @@ export const AnnotationContextMenu = ({
           </svg>
           Explain This
         </button>
+      )}
+      {annotation.type === 'highlight' && annotation.selected_text && onExplainThis
+        && explainUsesRemaining !== null && explainUsesRemaining !== undefined
+        && explainUsesRemaining >= 0 && (
+        <p className="px-4 pb-1 text-[11px] text-gray-500">
+          {explainUsesRemaining} explain use{explainUsesRemaining !== 1 ? 's' : ''} remaining
+        </p>
       )}
 
       {/* Change Color */}

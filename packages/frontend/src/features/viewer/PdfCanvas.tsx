@@ -15,7 +15,8 @@ export const PdfCanvas = ({ pdfDocument, pageNumber, pdfId, className = '' }: Pd
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const textLayerHandleRef = useRef<TextLayerHandle>(null);
-    const { zoom, rotation } = usePdfViewerStore();
+    const zoom = usePdfViewerStore(s => s.zoom);
+    const rotation = usePdfViewerStore(s => s.rotation);
     const [pageProxy, setPageProxy] = useState<PDFPageProxy | null>(null);
     const renderTaskRef = useRef<{ cancel: () => void } | null>(null);
 
@@ -51,24 +52,18 @@ export const PdfCanvas = ({ pdfDocument, pageNumber, pdfId, className = '' }: Pd
         const context = canvas.getContext('2d');
         if (!context) return;
 
-        // Use higher scale for better resolution on high-DPI screens
         const DPR = window.devicePixelRatio || 1;
 
-        // Apply zoom
         const viewport = pageProxy.getViewport({ scale: zoom, rotation });
 
-        // Set actual size in memory (scaled for HiDPI)
         canvas.width = viewport.width * DPR;
         canvas.height = viewport.height * DPR;
 
-        // Set display size
         canvas.style.width = `${viewport.width}px`;
         canvas.style.height = `${viewport.height}px`;
 
-        // Scale context to match HiDPI
         context.scale(DPR, DPR);
 
-        // Cancel any ongoing render task
         if (renderTaskRef.current) {
             renderTaskRef.current.cancel();
         }

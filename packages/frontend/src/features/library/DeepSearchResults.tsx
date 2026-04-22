@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2, SearchX } from 'lucide-react';
 import type { SemanticSearchResult } from '@/api/chat';
 
-export interface DeepSearchResultsProps {
+interface DeepSearchResultsProps {
     results: SemanticSearchResult[];
     isLoading: boolean;
     query: string;

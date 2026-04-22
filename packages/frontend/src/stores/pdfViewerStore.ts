@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export interface PageDimensions {
+interface PageDimensions {
     baseWidth: number;
     baseHeight: number;
 }
@@ -11,7 +11,7 @@ interface PdfViewerState {
     zoom: number;
     rotation: number;
 
-    // Page dimension caching
+    // Dimensions
     pageDimensions: Map<number, PageDimensions>;
     isDimensionsLoading: boolean;
 
@@ -22,7 +22,7 @@ interface PdfViewerState {
     setRotation: (rotation: number | ((prev: number) => number)) => void;
     reset: () => void;
 
-    // Page dimension actions
+    // Dimensions
     setPageDimensions: (pageNum: number, dimensions: PageDimensions) => void;
     setPageDimensionsBulk: (dimensions: Map<number, PageDimensions>) => void;
     getScaledDimensions: (pageNum: number) => { width: number; height: number } | null;
@@ -54,7 +54,7 @@ export const usePdfViewerStore = create<PdfViewerState>((set, get) => ({
 
     reset: () => set(initialState),
 
-    // Page dimension actions
+    // Dimensions
     setPageDimensions: (pageNum, dimensions) => set((state) => ({
         pageDimensions: new Map(state.pageDimensions).set(pageNum, dimensions),
     })),

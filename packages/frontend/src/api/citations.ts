@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, apiFetchBlob } from './client';
 import { downloadBlob } from '@/lib/download-utils';
 
-export interface Citation {
+interface Citation {
     id: string;
     pdf_id: string;
     user_id: string;
@@ -27,7 +27,7 @@ export interface CitationUpdate {
     source?: string;
 }
 
-// ─── Queries ─────────────────────────────────────────────────────────────────
+// Queries
 
 export const useCitation = (pdfId: string) =>
     useQuery<Citation>({
@@ -37,7 +37,7 @@ export const useCitation = (pdfId: string) =>
         retry: false, // 404 is expected when no citation exists yet
     });
 
-// ─── Mutations ────────────────────────────────────────────────────────────────
+// Mutations
 
 export const useAutoExtractCitation = (pdfId: string) => {
     const qc = useQueryClient();
@@ -56,7 +56,6 @@ export const useUpdateCitation = (pdfId: string) => {
         mutationFn: (data) =>
             apiFetch(`/pdfs/${pdfId}/citation`, {
                 method: 'PUT',
-                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify(data),
             }),
         onSuccess: () => {
@@ -65,14 +64,14 @@ export const useUpdateCitation = (pdfId: string) => {
     });
 };
 
-// ─── Bulk Operations ────────────────────────────────────────────────────────────
+// Bulk Operations
 
-export interface BulkExportRequest {
+interface BulkExportRequest {
     pdf_ids: string[];
     format?: 'bibtex' | 'json';
 }
 
-export interface ValidateResponse {
+interface ValidateResponse {
     has_citation: string[];
     missing: string[];
 }
@@ -82,7 +81,6 @@ export const useValidateCitations = () => {
         mutationFn: async (pdfIds) => {
             return apiFetch<ValidateResponse>('/citations/validate', {
                 method: 'POST',
-                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify({ pdf_ids: pdfIds }),
             });
         },

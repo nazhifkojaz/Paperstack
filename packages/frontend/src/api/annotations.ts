@@ -28,7 +28,7 @@ export interface Annotation {
     updated_at: string;
 }
 
-// --- Queries ---
+// Queries
 
 export const useAnnotationSets = (pdfId: string) => {
     return useQuery({
@@ -55,19 +55,27 @@ export const useMultiSetAnnotations = (setIds: string[]) => {
         })),
     });
 
-    // Memoize to prevent re-computation on every render
-    const allAnnotations = useMemo(() => {
-        return queries
-            .filter(q => q.isSuccess && q.data)
-            .flatMap(q => q.data!);
-    }, [queries]);
+    // Produce a stable flat list that only rebuilds when a query's data actually changes.
+    // useMemo with variable-length deps is illegal (hook deps must be constant-length),
+    // so we fingerprint via dataUpdatedAt timestamps — TanStack Query only increments
+    // these when the fetched data changes, giving us a single stable string dep.
+    const fingerprint = queries.map(q => q.dataUpdatedAt).join(',');
+    const allAnnotations = useMemo(
+        () => queries
+            .filter(q => q.isSuccess && Array.isArray(q.data))
+            .flatMap(q => q.data!),
+        // fingerprint captures when any query's data changes; the queries array
+        // itself is a new reference every render so it cannot be used as a dep.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [fingerprint],
+    );
 
     const isLoading = queries.some(q => q.isLoading);
 
     return { data: allAnnotations, isLoading };
 };
 
-// --- Mutations ---
+// Mutations
 
 export const useCreateAnnotationSet = () => {
     const queryClient = useQueryClient();
@@ -76,17 +84,6 @@ export const useCreateAnnotationSet = () => {
             apiFetch('/annotations/sets', { method: 'POST', body: JSON.stringify(data) }),
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['annotation_sets', variables.pdf_id] });
-        },
-    });
-};
-
-export const useUpdateAnnotationSet = () => {
-    const queryClient = useQueryClient();
-    return useMutation({
-        mutationFn: ({ id, data }: { id: string; data: Partial<AnnotationSet> }): Promise<AnnotationSet> =>
-            apiFetch(`/annotations/sets/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['annotation_sets'] });
         },
     });
 };

@@ -17,12 +17,13 @@ import { AutoHighlightButton } from './AutoHighlightButton';
 
 export const AnnotationSidebar = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
-    const {
-        selectedSetId, setSelectedSetId,
-        isAnnotationSidebarOpen,
-        sidebarGroupBy, setSidebarGroupBy,
-        toggleSetVisibility, isSetVisible,
-    } = useAnnotationStore();
+    const selectedSetId = useAnnotationStore(s => s.selectedSetId);
+    const isAnnotationSidebarOpen = useAnnotationStore(s => s.isAnnotationSidebarOpen);
+    const sidebarGroupBy = useAnnotationStore(s => s.sidebarGroupBy);
+    const setSelectedSetId = useAnnotationStore(s => s.setSelectedSetId);
+    const setSidebarGroupBy = useAnnotationStore(s => s.setSidebarGroupBy);
+    const toggleSetVisibility = useAnnotationStore(s => s.toggleSetVisibility);
+    const isSetVisible = useAnnotationStore(s => s.isSetVisible);
 
     const { data: annotationSets, isLoading } = useAnnotationSets(pdfId || '');
     const { mutate: createSet, isPending: isCreatingSet } = useCreateAnnotationSet();

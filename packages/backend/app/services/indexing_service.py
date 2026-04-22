@@ -30,7 +30,7 @@ from app.services.exceptions import (
 )
 from app.services.pdf_download_service import PdfDownloadService, PdfSource
 from app.services.storage.factory import get_storage_backend
-from app.services.text_extractor import extract_text_with_pages
+from app.services.text_extractor import extract_text_with_pages, validate_extraction
 
 
 logger = logging.getLogger(__name__)
@@ -42,14 +42,6 @@ STALE_INDEXING_MINUTES = 10
 
 @dataclass
 class IndexResult:
-    """Result of an indexing operation.
-
-    Attributes:
-        status: Final status ('indexed' or 'failed')
-        chunk_count: Number of chunks created (if indexed)
-        error_message: Error message (if failed)
-        indexed_at: Timestamp when indexing completed (if indexed)
-    """
     status: str
     chunk_count: Optional[int]
     error_message: Optional[str]
@@ -64,12 +56,6 @@ class IndexingService:
         download_service: PdfDownloadService,
         embedding_service: Optional[EmbeddingService] = None,
     ):
-        """Initialize the indexing service.
-
-        Args:
-            download_service: Service for downloading PDFs
-            embedding_service: Optional EmbeddingService for embeddings
-        """
         self.download_service = download_service
         self._embedding_service = embedding_service or EmbeddingService()
 
@@ -79,16 +65,7 @@ class IndexingService:
         user_id: str,
         db: AsyncSession,
     ) -> PdfIndexStatus:
-        """Get existing index status or create default 'not_indexed'.
-
-        Args:
-            pdf_id: The PDF's ID
-            user_id: The user's ID
-            db: Database session
-
-        Returns:
-            PdfIndexStatus row (created if missing)
-        """
+        """Get existing index status or create default 'not_indexed'."""
         result = await db.execute(
             select(PdfIndexStatus).where(
                 PdfIndexStatus.pdf_id == pdf_id,
@@ -114,19 +91,7 @@ class IndexingService:
         db: AsyncSession,
         stale_minutes: int = STALE_INDEXING_MINUTES,
     ) -> bool:
-        """Reset status to 'not_indexed' if stale.
-
-        Args:
-            index_status: The PdfIndexStatus row to check/reset
-            db: Database session
-            stale_minutes: Minutes before considering indexing "stale"
-
-        Returns:
-            True if was reset, False if still active
-
-        Raises:
-            IndexInProgressError: If actively indexing (not stale)
-        """
+        """Reset status to 'not_indexed' if stale. Raises IndexInProgressError if actively indexing."""
         if index_status.status != "indexing":
             return False
 
@@ -156,49 +121,47 @@ class IndexingService:
         index_status: PdfIndexStatus,
         db: AsyncSession,
     ) -> IndexResult:
-        """Full indexing workflow: download → extract → chunk → embed.
-
-        Args:
-            pdf_row: The Pdf row to index
-            user: The user who owns the PDF
-            index_status: The PdfIndexStatus row (will be updated)
-            db: Database session
-
-        Returns:
-            IndexResult with final status
-
-        Raises:
-            TextExtractionError: If text extraction fails
-            ChunkingError: If chunking fails
-            EmbeddingError: If embedding fails
-            IndexingError: For other indexing failures
-        """
+        """Full indexing workflow: download → extract → chunk → embed."""
         index_status.status = "indexing"
         index_status.updated_at = datetime.now(timezone.utc)
         await db.flush()
 
         tmp_path: Path | None = None
         try:
-            # 1. Download PDF
             tmp_path = await self._download_pdf(pdf_row, user, db)
 
-            # 2. Extract text
             with open(tmp_path, "rb") as f:
-                text_with_pages, _total_pages, _pages_analyzed = extract_text_with_pages(f)
+                text_with_pages, _total_pages, _pages_analyzed = (
+                    extract_text_with_pages(f)
+                )
 
             if not text_with_pages.strip():
-                raise TextExtractionError("PDF has no extractable text (may be image-only).")
+                raise TextExtractionError(
+                    "PDF has no extractable text (may be image-only)."
+                )
 
-            # 3. Chunk text
+            quality = validate_extraction(text_with_pages)
+            if not quality.is_usable:
+                raise TextExtractionError(
+                    f"Extracted text quality too low (score: {quality.score:.1f}). "
+                    f"Issues: {'; '.join(quality.warnings)}. "
+                    f"This PDF may be image-only or have an unsupported layout."
+                )
+            if quality.warnings:
+                logger.warning(
+                    "Extraction quality warnings for PDF %s: %s",
+                    pdf_row.id,
+                    quality.warnings,
+                )
+
             chunks = chunk_text_with_pages(text_with_pages)
             if not chunks:
                 raise ChunkingError("No chunks produced from PDF text.")
 
-            # 4. Generate embeddings
             texts = [c.content for c in chunks]
             embeddings = await self._embedding_service.embed_texts(texts)
 
-            # 5. Delete stale chunks and insert new ones
+            # Delete stale chunks and insert new ones
             await db.execute(
                 delete(PdfChunk).where(
                     PdfChunk.pdf_id == pdf_row.id,
@@ -207,16 +170,20 @@ class IndexingService:
             )
 
             for chunk, embedding in zip(chunks, embeddings):
-                db.add(PdfChunk(
-                    pdf_id=pdf_row.id,
-                    user_id=user.id,
-                    chunk_index=chunk.chunk_index,
-                    page_number=chunk.page_number,
-                    content=chunk.content.replace('\x00', ''),
-                    embedding=embedding,
-                ))
+                db.add(
+                    PdfChunk(
+                        pdf_id=pdf_row.id,
+                        user_id=user.id,
+                        chunk_index=chunk.chunk_index,
+                        page_number=chunk.page_number,
+                        end_page_number=chunk.end_page_number,
+                        content=chunk.content.replace("\x00", ""),
+                        embedding=embedding,
+                        section_title=chunk.section_title,
+                        section_level=chunk.section_level,
+                    )
+                )
 
-            # 6. Update status to indexed
             now = datetime.now(timezone.utc)
             index_status.status = "indexed"
             index_status.chunk_count = len(chunks)
@@ -270,22 +237,13 @@ class IndexingService:
         user: User,
         db: AsyncSession,
     ) -> Path:
-        """Download PDF from appropriate source.
-
-        Args:
-            pdf_row: The Pdf row
-            user: The user who owns the PDF
-            db: Database session (used to resolve storage backend credentials)
-
-        Returns:
-            Path to downloaded temp file
-
-        Raises:
-            IndexingError: If download fails
-        """
         try:
             # Case 1: URL-linked PDF (no stored content)
-            if pdf_row.source_url and not pdf_row.github_sha and not pdf_row.drive_file_id:
+            if (
+                pdf_row.source_url
+                and not pdf_row.github_sha
+                and not pdf_row.drive_file_id
+            ):
                 result = await self.download_service.download_to_tempfile(
                     source=PdfSource.EXTERNAL_URL,
                     external_url=pdf_row.source_url,
@@ -309,36 +267,20 @@ class IndexingService:
     ) -> PdfIndexStatus:
         """Ensure PDF is indexed, triggering lazy index if needed.
 
-        This is the main entry point for chat/explain features.
+        Main entry point for chat/explain features.
         Handles stale checks, failed retries, and in-progress waits.
-
-        Args:
-            pdf_row: The Pdf row
-            user: The user who owns the PDF
-            index_status: The PdfIndexStatus row (will be updated)
-            db: Database session
-
-        Returns:
-            Updated PdfIndexStatus (should be 'indexed' on success)
-
-        Raises:
-            IndexInProgressError: If actively indexing (not stale)
-            IndexingError: If indexing fails
         """
-        # 1. Check if already indexed
         if index_status.status == "indexed":
             return index_status
 
-        # 2. Handle stale indexing
         await self.reset_if_stale(index_status, db)
 
-        # 3. Handle failed indexing - reset to retry
+        # Handle failed indexing - reset to retry
         if index_status.status == "failed":
             index_status.status = "not_indexed"
             index_status.error_message = None
             await db.flush()
 
-        # 4. Trigger indexing if needed
         if index_status.status == "not_indexed":
             await self.index_pdf(pdf_row, user, index_status, db)
 
@@ -352,14 +294,6 @@ _indexing_service_instance: Optional[IndexingService] = None
 
 
 def get_indexing_service(download_service: PdfDownloadService) -> IndexingService:
-    """Get or create the indexing service singleton.
-
-    Args:
-        download_service: The PDF download service
-
-    Returns:
-        IndexingService instance
-    """
     global _indexing_service_instance
     if _indexing_service_instance is None:
         _indexing_service_instance = IndexingService(download_service)

@@ -73,7 +73,6 @@ export const NotePopover = ({ annotation, containerDims, onClose, isExplaining, 
         }
     };
 
-    // Compute position from normalized coordinates with edge handling
     if (!containerDims || !annotation.rects[0]) return null;
 
     const rect = annotation.rects[0];

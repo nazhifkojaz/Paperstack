@@ -54,6 +54,9 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId }: Props) =>
                     ? `Loaded ${result.highlights_count} highlights from cache`
                     : `Found ${result.highlights_count} highlights`
             );
+            if (result.provider_fallback) {
+                toast.info('Free tier was busy — used backup model for this analysis.');
+            }
             onOpenChange(false);
         } catch (error) {
             const detail = error instanceof ApiError

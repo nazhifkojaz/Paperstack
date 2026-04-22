@@ -3,48 +3,34 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useExplainAnnotation } from '@/api/chat';
 
-export interface Annotation {
+interface Annotation {
     id: string;
     set_id: string;
     selected_text?: string | null;
     page_number: number;
 }
 
-export interface UseAnnotationExplainOptions {
-    /** Called when explanation completes successfully */
+interface UseAnnotationExplainOptions {
     onSuccess?: (explanation: string, noteContent: string, annotationId: string) => void;
-    /** Called when explanation fails */
     onError?: (error: string) => void;
 }
 
-export interface UseAnnotationExplainReturn {
-    /** Whether an explanation is currently in progress */
+interface UseAnnotationExplainReturn {
     isExplaining: boolean;
-    /** The ID of the annotation currently being explained */
     explainingId: string | null;
-    /** Status message to display during explanation */
     statusMessage: string;
-    /** Start an explanation for the given annotation */
     explain: (annotation: Annotation, pdfId: string) => void;
-    /** Clear explanation state */
     clearExplain: () => void;
+    explainUsesRemaining: number | null;
 }
 
-/**
- * Hook for managing AI annotation explanation workflow.
- *
- * Handles:
- * - API call to explain endpoint
- * - Optimistic cache updates for immediate UI feedback
- * - Loading/error states
- * - Toast notifications for errors
- */
 export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}): UseAnnotationExplainReturn {
     const { mutate: explainAnnotation } = useExplainAnnotation();
     const queryClient = useQueryClient();
 
     const [explainAnnotationId, setExplainAnnotationId] = useState<string | null>(null);
     const [explainStatusMessage, setExplainStatusMessage] = useState<string>('');
+    const [explainUsesRemaining, setExplainUsesRemaining] = useState<number | null>(null);
 
     const explain = useCallback((annotation: Annotation, pdfId: string) => {
         if (!annotation.selected_text) {
@@ -64,6 +50,13 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
             },
             {
                 onSuccess: (result) => {
+                    setExplainUsesRemaining(result.explain_uses_remaining);
+
+                    if (result.provider_fallback) {
+                        toast.info('Free tier was busy — used backup model for this explanation.');
+                        queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
+                    }
+
                     // Optimistically update cache so NotePopover sees the new note_content immediately
                     queryClient.setQueryData(
                         ['annotations', annotation.set_id],
@@ -106,5 +99,6 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
         statusMessage: explainStatusMessage,
         explain,
         clearExplain,
+        explainUsesRemaining,
     };
 }

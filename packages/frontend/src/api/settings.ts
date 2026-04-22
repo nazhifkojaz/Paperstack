@@ -8,7 +8,7 @@ export async function updateStorageProvider(provider: 'github' | 'google'): Prom
     })
 }
 
-export interface ConnectedAccount {
+interface ConnectedAccount {
     provider: string
     display_name: string
 }

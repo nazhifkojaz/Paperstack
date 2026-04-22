@@ -22,18 +22,3 @@ export function getHostname(url: string): string {
     return url;
   }
 }
-
-/**
- * Checks if a string is a valid URL.
- *
- * @param str - The string to validate
- * @returns true if the string is a valid URL, false otherwise
- */
-export function isValidUrl(str: string): boolean {
-  try {
-    new URL(str);
-    return true;
-  } catch {
-    return false;
-  }
-}

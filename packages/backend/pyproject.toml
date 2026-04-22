@@ -13,12 +13,14 @@ dependencies = [
     "pydantic-settings>=2.13.1",
     "slowapi>=0.1.9",
     "pypdf>=6.7.5",
+    "PyMuPDF>=1.25.0",
     "python-jose[cryptography]>=3.5.0",
     "python-multipart>=0.0.22",
     "reportlab>=4.4.10",
     "sqlalchemy[asyncio]>=2.0.47",
     "uvicorn>=0.41.0",
     "pgvector>=0.3.6",
+    "tiktoken>=0.7.0",
 ]
 
 [project.optional-dependencies]

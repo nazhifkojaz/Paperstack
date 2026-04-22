@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 
-export interface ConfirmDialogProps {
+interface ConfirmDialogProps {
     open: boolean;
     title: string;
     description: React.ReactNode;
