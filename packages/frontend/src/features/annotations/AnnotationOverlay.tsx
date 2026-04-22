@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { StickyNote } from 'lucide-react';
 import { useAnnotationStore } from '@/stores/annotationStore';
-import { useAnnotationSets, useMultiSetAnnotations, useCreateAnnotation } from '@/api/annotations';
+import { useCreateAnnotation } from '@/api/annotations';
+import { useAnnotationsContext } from './AnnotationsContext';
 import type { TextLayerHandle } from '@/features/viewer/TextLayer';
 import { useTextMatcher } from './useTextMatcher';
 import { useRectCreate, type Rect } from './useRectCreate';
@@ -20,16 +21,25 @@ interface AnnotationOverlayProps {
 
 export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, className = '' }: AnnotationOverlayProps) => {
     // Store integration
-    const { isDrawingRect, selectedSetId, hiddenSetIds, selectedAnnotationId, setSelectedAnnotationId, contextMenu, setContextMenu, setIsDrawingRect } = useAnnotationStore();
+    const isDrawingRect = useAnnotationStore(s => s.isDrawingRect);
+    const selectedSetId = useAnnotationStore(s => s.selectedSetId);
+    const selectedAnnotationId = useAnnotationStore(s => s.selectedAnnotationId);
+    const contextMenu = useAnnotationStore(s => s.contextMenu);
+    const setSelectedAnnotationId = useAnnotationStore(s => s.setSelectedAnnotationId);
+    const setContextMenu = useAnnotationStore(s => s.setContextMenu);
+    const setIsDrawingRect = useAnnotationStore(s => s.setIsDrawingRect);
 
-    // Data fetching
-    const { data: allSets } = useAnnotationSets(pdfId);
-    const visibleSetIds = useMemo(
-        () => (allSets ?? []).filter(s => !hiddenSetIds.has(s.id)).map(s => s.id),
-        [allSets, hiddenSetIds],
-    );
-    const { data: annotations } = useMultiSetAnnotations(visibleSetIds);
+    // Context: single query subscription hoisted to ViewerPage
+    const { visibleSetIds, annotationsByPage } = useAnnotationsContext();
     const { mutate: createAnnotation } = useCreateAnnotation();
+
+    // Build text-matcher input: own page + immediate neighbors (for fallback matching)
+    const matcherAnnotations = useMemo(() => {
+        const own = annotationsByPage.get(pageNumber) ?? [];
+        const prev = annotationsByPage.get(pageNumber - 1) ?? [];
+        const next = annotationsByPage.get(pageNumber + 1) ?? [];
+        return [...own, ...prev, ...next];
+    }, [annotationsByPage, pageNumber]);
 
     // Refs and local state
     const containerRef = useRef<HTMLDivElement>(null);
@@ -80,23 +90,8 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
         startMove,
     } = useAnnotationDrag(containerRef as React.RefObject<HTMLDivElement>);
 
-    // Clear annotation selection on scroll so the toolbar doesn't linger
-    useEffect(() => {
-        const handleScroll = () => setSelectedAnnotationId(null);
-        document.addEventListener('scroll', handleScroll, true);
-        return () => document.removeEventListener('scroll', handleScroll, true);
-    }, [setSelectedAnnotationId]);
-
-    // Clear annotation selection when clicking anywhere outside an annotation
-    // (annotation <g> elements call e.stopPropagation() so they won't trigger this)
-    useEffect(() => {
-        const handleClick = () => setSelectedAnnotationId(null);
-        document.addEventListener('click', handleClick);
-        return () => document.removeEventListener('click', handleClick);
-    }, [setSelectedAnnotationId]);
-
     // Resolve empty-rect auto-highlight annotations via TextLayer DOM matching
-    const resolvedAnnotations = useTextMatcher(annotations, pageNumber, textLayerHandle);
+    const resolvedAnnotations = useTextMatcher(matcherAnnotations, pageNumber, textLayerHandle);
 
     // Filter annotations for this page
     const pageAnnotations = useMemo(() => {
