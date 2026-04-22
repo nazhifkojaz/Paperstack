@@ -202,7 +202,3 @@ class ChatService:
         stream_method = getattr(self._llm_service, method_name)
         async for token in stream_method(system_prompt, messages, api_key):
             yield token
-
-
-# Default singleton for backward compatibility (will be replaced with DI)
-chat_service = ChatService()

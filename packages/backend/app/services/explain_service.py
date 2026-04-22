@@ -187,7 +187,3 @@ class ExplainService:
             context_chunks=context_chunks_payload,
             note_content=new_block,
         )
-
-
-# Singleton instance for use in routes (will be replaced with DI in routes)
-explain_service = ExplainService()
