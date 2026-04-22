@@ -130,14 +130,6 @@ export const ViewerToolbar = () => {
                 >
                     <RotateCw className="h-4 w-4" />
                 </Button>
-                {/* TODO: Re-implement Fit Page functionality when ready */}
-                {/* <Button variant="ghost" size="icon" title="Fit Page" disabled>
-                    <Maximize className="h-4 w-4" />
-                </Button> */}
-                {/* TODO: Re-implement Fit Width functionality when ready */}
-                {/* <Button variant="ghost" size="icon" title="Fit Width" disabled>
-                    <Layout className="h-4 w-4" />
-                </Button> */}
                 <Button
                     variant={isDrawingRect ? 'default' : 'ghost'}
                     size="icon"
