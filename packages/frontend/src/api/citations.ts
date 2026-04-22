@@ -27,7 +27,7 @@ export interface CitationUpdate {
     source?: string;
 }
 
-// ─── Queries ─────────────────────────────────────────────────────────────────
+// Queries
 
 export const useCitation = (pdfId: string) =>
     useQuery<Citation>({
@@ -37,7 +37,7 @@ export const useCitation = (pdfId: string) =>
         retry: false, // 404 is expected when no citation exists yet
     });
 
-// ─── Mutations ────────────────────────────────────────────────────────────────
+// Mutations
 
 export const useAutoExtractCitation = (pdfId: string) => {
     const qc = useQueryClient();
@@ -56,7 +56,6 @@ export const useUpdateCitation = (pdfId: string) => {
         mutationFn: (data) =>
             apiFetch(`/pdfs/${pdfId}/citation`, {
                 method: 'PUT',
-                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify(data),
             }),
         onSuccess: () => {
@@ -65,7 +64,7 @@ export const useUpdateCitation = (pdfId: string) => {
     });
 };
 
-// ─── Bulk Operations ────────────────────────────────────────────────────────────
+// Bulk Operations
 
 interface BulkExportRequest {
     pdf_ids: string[];
@@ -82,7 +81,6 @@ export const useValidateCitations = () => {
         mutationFn: async (pdfIds) => {
             return apiFetch<ValidateResponse>('/citations/validate', {
                 method: 'POST',
-                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify({ pdf_ids: pdfIds }),
             });
         },

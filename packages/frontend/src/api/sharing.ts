@@ -43,7 +43,7 @@ interface SharedAnnotationsResponse {
     pdf_title: string;
 }
 
-// ─── Queries ─────────────────────────────────────────────────────────────────
+// Queries
 
 export const useSharesForSet = (setId: string) =>
     useQuery<Share[]>({
@@ -61,7 +61,7 @@ export const useSharedAnnotations = (token: string) =>
         retry: false,
     });
 
-// ─── Mutations ────────────────────────────────────────────────────────────────
+// Mutations
 
 export const useCreateShare = (setId: string) => {
     const qc = useQueryClient();
@@ -69,7 +69,6 @@ export const useCreateShare = (setId: string) => {
         mutationFn: (data) =>
             apiFetch(`/annotation-sets/${setId}/share`, {
                 method: 'POST',
-                // Content-Type header auto-added by apiFetch
                 body: JSON.stringify(data),
             }),
         onSuccess: () => qc.invalidateQueries({ queryKey: ['shares', setId] }),

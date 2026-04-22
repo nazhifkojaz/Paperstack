@@ -12,10 +12,6 @@ class ApiError extends Error {
     }
 }
 
-/**
- * Parses an error response body into a structured error.
- * Returns default values if the response is not JSON or parsing fails.
- */
 async function parseErrorBody(res: Response): Promise<{ detail: string; code: string }> {
     try {
         const err = await res.json()
@@ -28,10 +24,6 @@ async function parseErrorBody(res: Response): Promise<{ detail: string; code: st
     }
 }
 
-/**
- * Handles 401 unauthorized responses by attempting to refresh the access token.
- * Returns true if refresh succeeded, false if it failed (triggers logout).
- */
 async function handleUnauthorized(): Promise<boolean> {
     const { refreshToken, setAuth, user, logout } = useAuthStore.getState()
     if (!refreshToken) {
@@ -62,28 +54,17 @@ async function handleUnauthorized(): Promise<boolean> {
     }
 }
 
-/**
- * Higher-order function that wraps an API call with 401 refresh logic.
- * If the call returns 401, attempts refresh once and retries.
- *
- * @param fetchFn - The fetch function to execute
- * @param retry - Whether this is a retry attempt (prevents infinite loops)
- * @returns The parsed response or throws ApiError
- */
 async function withAuthRefresh<T>(
     fetchFn: () => Promise<Response>,
     retry = true,
 ): Promise<Response> {
     const res = await fetchFn()
 
-    // Handle 401 with refresh token flow
     if (res.status === 401 && retry) {
         const refreshed = await handleUnauthorized()
         if (refreshed) {
-            // Retry the request with new token
             return withAuthRefresh<T>(fetchFn, false)
         } else {
-            // Refresh failed - logout and redirect
             window.location.href = `${BASE_URL}/login`
             throw new ApiError(401, 'unauthorized', 'Session expired. Please log in again.')
         }
@@ -96,6 +77,7 @@ export async function apiFetch<T>(
     path: string,
     options: RequestInit & { authRequired?: boolean } = {},
 ): Promise<T> {
+    // Content-Type: application/json is auto-added unless body is FormData.
     const { accessToken } = useAuthStore.getState()
     const { authRequired = true, ...fetchOptions } = options
 
@@ -118,7 +100,6 @@ export async function apiFetch<T>(
         throw new ApiError(res.status, code, detail)
     }
 
-    // Handle empty responses (204 No Content)
     if (res.status === 204) return undefined as T
 
     return res.json() as Promise<T>
