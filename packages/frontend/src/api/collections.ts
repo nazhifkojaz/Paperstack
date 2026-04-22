@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 
-export interface Collection {
+interface Collection {
     id: string;
     user_id: string;
     name: string;
@@ -27,37 +27,6 @@ export const useCreateCollection = () => {
             return apiFetch('/collections', {
                 method: 'POST',
                 body: JSON.stringify(data),
-            });
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['collections'] });
-        },
-    });
-};
-
-export const useUpdateCollection = () => {
-    const queryClient = useQueryClient();
-
-    return useMutation({
-        mutationFn: async ({ id, data }: { id: string; data: Partial<Collection> }): Promise<Collection> => {
-            return apiFetch(`/collections/${id}`, {
-                method: 'PATCH',
-                body: JSON.stringify(data),
-            });
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['collections'] });
-        },
-    });
-};
-
-export const useDeleteCollection = () => {
-    const queryClient = useQueryClient();
-
-    return useMutation({
-        mutationFn: async (id: string): Promise<void> => {
-            await apiFetch(`/collections/${id}`, {
-                method: 'DELETE',
             });
         },
         onSuccess: () => {

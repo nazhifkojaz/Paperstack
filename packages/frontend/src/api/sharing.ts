@@ -12,12 +12,12 @@ export interface Share {
     created_at: string;
 }
 
-export interface ShareCreate {
+interface ShareCreate {
     shared_with_github_login?: string;
     permission?: 'view' | 'comment';
 }
 
-export interface AnnotationData {
+interface AnnotationData {
     id: string;
     set_id: string;
     page_number: number;
@@ -28,7 +28,7 @@ export interface AnnotationData {
     color?: string | null;
 }
 
-export interface SharedAnnotationsResponse {
+interface SharedAnnotationsResponse {
     shared_by_login: string;
     shared_by_avatar: string | null;
     permission: string;
@@ -50,12 +50,6 @@ export const useSharesForSet = (setId: string) =>
         queryKey: ['shares', setId],
         queryFn: () => apiFetch(`/annotation-sets/${setId}/shares`),
         enabled: !!setId,
-    });
-
-export const useSharedWithMe = () =>
-    useQuery<Share[]>({
-        queryKey: ['shared-with-me'],
-        queryFn: () => apiFetch('/shared/with-me'),
     });
 
 /** Public — no auth required. Used on /shared/:token page. */

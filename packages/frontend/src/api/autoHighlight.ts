@@ -3,12 +3,12 @@ import { apiFetch } from './client';
 
 // --- Types ---
 
-export interface AutoHighlightRequest {
+interface AutoHighlightRequest {
     pdf_id: string;
     categories: string[];
 }
 
-export interface AutoHighlightResponse {
+interface AutoHighlightResponse {
     annotation_set_id: string;
     from_cache: boolean;
     highlights_count: number;
@@ -16,25 +16,18 @@ export interface AutoHighlightResponse {
     provider_fallback?: boolean;
 }
 
-export interface CacheEntry {
-    id: string;
-    categories: string[];
-    created_at: string;
-    annotation_set_id: string | null;
-}
-
-export interface QuotaInfo {
+interface QuotaInfo {
     free_uses_remaining: number;
     has_own_key: boolean;
     providers: string[];
 }
 
-export interface ApiKeyCreate {
+interface ApiKeyCreate {
     provider: 'glm' | 'gemini';
     api_key: string;
 }
 
-export interface ApiKeyResponse {
+interface ApiKeyResponse {
     provider: string;
     key_preview: string;
     created_at: string;
@@ -46,14 +39,6 @@ export const useAutoHighlightQuota = () => {
     return useQuery({
         queryKey: ['auto-highlight-quota'],
         queryFn: (): Promise<QuotaInfo> => apiFetch('/auto-highlight/quota'),
-    });
-};
-
-export const useAutoHighlightCache = (pdfId: string) => {
-    return useQuery({
-        queryKey: ['auto-highlight-cache', pdfId],
-        queryFn: (): Promise<CacheEntry[]> => apiFetch(`/auto-highlight/cache/${pdfId}`),
-        enabled: !!pdfId,
     });
 };
 
@@ -69,18 +54,6 @@ export const useAnalyzePaper = () => {
             queryClient.invalidateQueries({ queryKey: ['annotation_sets', variables.pdf_id] });
             queryClient.invalidateQueries({ queryKey: ['auto-highlight-cache', variables.pdf_id] });
             queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
-        },
-    });
-};
-
-export const useDeleteCache = () => {
-    const queryClient = useQueryClient();
-    return useMutation({
-        mutationFn: (cacheId: string): Promise<void> =>
-            apiFetch(`/auto-highlight/cache/${cacheId}`, { method: 'DELETE' }),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['annotation_sets'] });
-            queryClient.invalidateQueries({ queryKey: ['auto-highlight-cache'] });
         },
     });
 };

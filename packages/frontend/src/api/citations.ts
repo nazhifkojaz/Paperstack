@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, apiFetchBlob } from './client';
 import { downloadBlob } from '@/lib/download-utils';
 
-export interface Citation {
+interface Citation {
     id: string;
     pdf_id: string;
     user_id: string;
@@ -67,12 +67,12 @@ export const useUpdateCitation = (pdfId: string) => {
 
 // ─── Bulk Operations ────────────────────────────────────────────────────────────
 
-export interface BulkExportRequest {
+interface BulkExportRequest {
     pdf_ids: string[];
     format?: 'bibtex' | 'json';
 }
 
-export interface ValidateResponse {
+interface ValidateResponse {
     has_citation: string[];
     missing: string[];
 }

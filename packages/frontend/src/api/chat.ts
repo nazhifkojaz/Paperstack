@@ -33,7 +33,7 @@ export interface ChatMessage {
     created_at: string;
 }
 
-export interface SemanticSearchRequest {
+interface SemanticSearchRequest {
     query: string;
     collection_id?: string;
     limit?: number;
@@ -47,14 +47,14 @@ export interface SemanticSearchResult {
     score: number;
 }
 
-export interface ExplainRequest {
+interface ExplainRequest {
     pdf_id: string;
     annotation_id: string;
     selected_text: string;
     page_number: number;
 }
 
-export interface ExplainResponse {
+interface ExplainResponse {
     explanation: string;
     note_content: string;
     explain_uses_remaining: number;

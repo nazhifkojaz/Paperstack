@@ -29,23 +29,3 @@ export function downloadBlob(blob: Blob, filename: string): void {
   document.body.removeChild(anchor);
   window.URL.revokeObjectURL(url);
 }
-
-/**
- * Utility to download a data URL as a file.
- * Useful for canvas exports or base64-encoded content.
- *
- * @param dataUrl - The data URL (e.g., "data:application/pdf;base64,...")
- * @param filename - The filename to save as
- *
- * @example
- * const canvas = document.querySelector('canvas');
- * downloadDataUrl(canvas.toDataURL('image/png'), 'screenshot.png');
- */
-export function downloadDataUrl(dataUrl: string, filename: string): void {
-  const anchor = document.createElement('a');
-  anchor.href = dataUrl;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-}

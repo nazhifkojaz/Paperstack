@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { usePdfViewerStore } from '@/stores/pdfViewerStore';
 
-export interface UsePdfPageDimensionsOptions {
+interface UsePdfPageDimensionsOptions {
     pdfDocument: PDFDocumentProxy | null;
     enabled?: boolean;
 }

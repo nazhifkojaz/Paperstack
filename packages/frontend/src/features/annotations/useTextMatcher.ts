@@ -5,10 +5,7 @@ import type { TextLayerHandle } from '@/features/viewer/TextLayer';
 import { collectTextNodes, rangeToRects } from '@/features/viewer/pdfTextUtils';
 import type { PdfRectData, Rect, TextNode } from '@/features/viewer/pdfTextUtils';
 
-// Re-export types that other modules depend on
-export type { Rect, TextNode } from '@/features/viewer/pdfTextUtils';
-
-export interface ResolvedAnnotation extends Annotation {
+interface ResolvedAnnotation extends Annotation {
     _resolved?: boolean;
     _unmatched?: boolean;
 }
@@ -307,7 +304,7 @@ export function buildNormMap(fullText: string): { norm: string; toOrig: number[]
  *   use 0.75 for neighbor-page fallback.
  * @param pdfData - optional PDF coordinate data for precise rect computation
  */
-export function findTextInDom(
+function findTextInDom(
     textNodes: TextNode[],
     fullText: string,
     searchText: string,

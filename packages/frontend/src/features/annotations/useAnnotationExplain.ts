@@ -3,21 +3,21 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useExplainAnnotation } from '@/api/chat';
 
-export interface Annotation {
+interface Annotation {
     id: string;
     set_id: string;
     selected_text?: string | null;
     page_number: number;
 }
 
-export interface UseAnnotationExplainOptions {
+interface UseAnnotationExplainOptions {
     /** Called when explanation completes successfully */
     onSuccess?: (explanation: string, noteContent: string, annotationId: string) => void;
     /** Called when explanation fails */
     onError?: (error: string) => void;
 }
 
-export interface UseAnnotationExplainReturn {
+interface UseAnnotationExplainReturn {
     /** Whether an explanation is currently in progress */
     isExplaining: boolean;
     /** The ID of the annotation currently being explained */

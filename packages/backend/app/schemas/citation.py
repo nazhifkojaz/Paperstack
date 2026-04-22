@@ -12,9 +12,6 @@ class CitationBase(BaseModel):
     csl_json: Optional[Any] = None
     source: Optional[str] = 'manual'
 
-class CitationCreate(CitationBase):
-    pass
-
 class CitationUpdate(BaseModel):
     doi: Optional[str] = None
     title: Optional[str] = None

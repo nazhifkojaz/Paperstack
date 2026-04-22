@@ -7,7 +7,7 @@ export interface Rect {
     h: number;
 }
 
-export interface UseRectCreateOptions {
+interface UseRectCreateOptions {
     containerRef: RefObject<HTMLDivElement | null>;
     isDrawingRect: boolean;
     selectedSetId: string | null;
@@ -15,7 +15,7 @@ export interface UseRectCreateOptions {
     onDrawingEnd?: () => void;
 }
 
-export interface UseRectCreateReturn {
+interface UseRectCreateReturn {
     /** Preview rect while dragging */
     previewRect: Rect | null;
     /** Mouse down handler */

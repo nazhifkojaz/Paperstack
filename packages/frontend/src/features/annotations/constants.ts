@@ -7,7 +7,7 @@
  * A preset color for annotation highlighting.
  * Each color has a hex value and a human-readable label.
  */
-export interface AnnotationColor {
+interface AnnotationColor {
   /** Hex color code (e.g., "#EF4444") */
   color: string;
   /** Human-readable label for accessibility and tooltips */
@@ -33,31 +33,4 @@ export const ANNOTATION_COLORS: readonly AnnotationColor[] = [
   { color: '#00FFFF', label: 'Cyan' },
 ] as const;
 
-/**
- * Type guard to check if a string is a valid annotation color.
- *
- * @param color - The color string to validate
- * @returns true if the color is in the ANNOTATION_COLORS palette
- *
- * @example
- * if (isValidAnnotationColor(userColor)) {
- *   updateAnnotation({ color: userColor });
- * }
- */
-export function isValidAnnotationColor(color: string): color is AnnotationColor['color'] {
-  return ANNOTATION_COLORS.some(c => c.color === color);
-}
 
-/**
- * Gets the label for a given color hex value.
- * Returns undefined if the color is not in the palette.
- *
- * @param color - The color hex to look up
- * @returns The label for the color, or undefined if not found
- *
- * @example
- * const label = getColorLabel('#EF4444'); // 'Red'
- */
-export function getColorLabel(color: string): string | undefined {
-  return ANNOTATION_COLORS.find(c => c.color === color)?.label;
-}

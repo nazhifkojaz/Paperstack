@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export interface PageDimensions {
+interface PageDimensions {
     baseWidth: number;
     baseHeight: number;
 }

@@ -25,7 +25,7 @@ export interface ChatMessageProps {
     isStreaming?: boolean;
 }
 
-export interface ChatMessageListProps {
+interface ChatMessageListProps {
     messages: ChatMessageProps[];
     emptyMessage?: string;
     isSending?: boolean;

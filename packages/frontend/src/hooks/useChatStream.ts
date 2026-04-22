@@ -13,7 +13,7 @@ import { toast } from 'sonner';
 import { streamChat, type ContextChunk, type ChatMessage } from '@/api/chat';
 import { useChatStore } from '@/stores/chatStore';
 
-export interface StreamingMessage {
+interface StreamingMessage {
     id: string;
     role: 'assistant';
     content: string;
@@ -21,7 +21,7 @@ export interface StreamingMessage {
     isStreaming: boolean;
 }
 
-export interface UseChatStreamOptions {
+interface UseChatStreamOptions {
     /** The active conversation ID to send messages to */
     conversationId: string | null;
     /** Query keys to invalidate after streaming completes */
@@ -32,7 +32,7 @@ export interface UseChatStreamOptions {
     onError?: (error: string, isQuotaError: boolean, isIndexError: boolean) => void;
 }
 
-export interface UseChatStreamReturn {
+interface UseChatStreamReturn {
     // Input state
     input: string;
     setInput: (value: string) => void;

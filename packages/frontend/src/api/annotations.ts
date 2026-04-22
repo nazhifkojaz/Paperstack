@@ -88,17 +88,6 @@ export const useCreateAnnotationSet = () => {
     });
 };
 
-export const useUpdateAnnotationSet = () => {
-    const queryClient = useQueryClient();
-    return useMutation({
-        mutationFn: ({ id, data }: { id: string; data: Partial<AnnotationSet> }): Promise<AnnotationSet> =>
-            apiFetch(`/annotations/sets/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['annotation_sets'] });
-        },
-    });
-};
-
 export const useDeleteAnnotationSet = () => {
     const queryClient = useQueryClient();
     return useMutation({
