@@ -12,7 +12,7 @@ from app.schemas.annotation import (
 
 router = APIRouter()
 
-# --- Annotation Sets ---
+# Annotation Sets
 
 @router.get("/sets", response_model=List[AnnotationSetResponse])
 async def list_annotation_sets(
@@ -89,7 +89,7 @@ async def delete_annotation_set(
     await db.delete(db_set)
     await db.commit()
 
-# --- Annotations ---
+# Annotations
 
 @router.get("/sets/{set_id}/items", response_model=List[AnnotationResponse])
 async def list_annotations(

@@ -19,9 +19,7 @@ router = APIRouter(tags=["sharing"])
 public_router = APIRouter(tags=["sharing"])
 
 
-# ────────────────────────────────────────────────────────────
 # Authenticated routes
-# ────────────────────────────────────────────────────────────
 
 @router.post("/annotation-sets/{set_id}/share", response_model=ShareResponse)
 async def create_share(
@@ -138,9 +136,7 @@ async def revoke_share(
     await db.commit()
 
 
-# ────────────────────────────────────────────────────────────
 # Permission helpers
-# ────────────────────────────────────────────────────────────
 
 def _filter_annotations_by_permission(annotations: List[Annotation], permission: str) -> List[AnnotationData]:
     return [
@@ -158,9 +154,7 @@ def _filter_annotations_by_permission(annotations: List[Annotation], permission:
     ]
 
 
-# ────────────────────────────────────────────────────────────
 # Public routes — no auth required
-# ────────────────────────────────────────────────────────────
 
 @public_router.get("/shared/annotations/{token}", response_model=SharedAnnotationsResponse)
 async def get_shared_annotations(token: str, db: AsyncSession = Depends(get_db)):

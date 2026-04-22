@@ -3,7 +3,7 @@ from typing import Any, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
-# --- Annotation Sets ---
+# Annotation Sets
 
 class AnnotationSetBase(BaseModel):
     name: str = Field(..., max_length=255)
@@ -27,7 +27,7 @@ class AnnotationSetResponse(AnnotationSetBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-# --- Annotations ---
+# Annotations
 
 class AnnotationBase(BaseModel):
     page_number: int

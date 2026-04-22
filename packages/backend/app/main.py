@@ -18,10 +18,8 @@ async def lifespan(app: FastAPI):
 
     Initializes shared resources on startup and cleans up on shutdown.
     """
-    # Startup: Initialize HTTP clients for connection pooling
     HTTPClientState.init_http_clients(app)
     yield
-    # Shutdown: Close HTTP clients gracefully
     await HTTPClientState.close_http_clients(app)
 
 
@@ -31,10 +29,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Set up rate limiter
 app.state.limiter = limiter
 
-# Set up CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.FRONTEND_URL],
@@ -43,10 +39,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Set up security headers
 app.add_middleware(SecurityHeadersMiddleware)
 
-# Register rate limit exception handler
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 @app.get("/health")

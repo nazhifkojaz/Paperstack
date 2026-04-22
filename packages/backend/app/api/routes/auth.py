@@ -16,9 +16,7 @@ from app.middleware.rate_limit import limiter
 router = APIRouter()
 
 
-# ---------------------------------------------------------------------------
 # Shared upsert helper — called by both OAuth callbacks
-# ---------------------------------------------------------------------------
 
 
 async def _upsert_oauth_user(
@@ -41,7 +39,6 @@ async def _upsert_oauth_user(
     2. If not found, look up User by email — link a new UserOAuthAccount to it.
     3. If still not found, create a new User + UserOAuthAccount.
     """
-    # 1. Look up existing OAuth account
     stmt = select(UserOAuthAccount).where(
         UserOAuthAccount.provider == provider,
         UserOAuthAccount.provider_user_id == provider_user_id,
@@ -76,13 +73,11 @@ async def _upsert_oauth_user(
         await db.refresh(user)
         return user
 
-    # 2. Try to link by email
     user: Optional[User] = None
     if provider_email:
         email_stmt = select(User).where(User.email == provider_email)
         user = (await db.execute(email_stmt)).scalar_one_or_none()
 
-    # 3. Create new user if needed
     if not user:
         user = User(
             email=provider_email,
@@ -141,9 +136,7 @@ def _redirect_with_tokens(user: User) -> RedirectResponse:
     return RedirectResponse(redirect_url)
 
 
-# ---------------------------------------------------------------------------
 # GitHub OAuth
-# ---------------------------------------------------------------------------
 
 
 @router.get("/github/login")
@@ -191,9 +184,7 @@ async def github_callback(
     return _redirect_with_tokens(user)
 
 
-# ---------------------------------------------------------------------------
 # Google OAuth
-# ---------------------------------------------------------------------------
 
 
 @router.get("/google/login")
@@ -249,9 +240,7 @@ async def google_callback(
     return _redirect_with_tokens(user)
 
 
-# ---------------------------------------------------------------------------
 # Token refresh, /me, logout
-# ---------------------------------------------------------------------------
 
 
 @router.post("/refresh", response_model=Token)

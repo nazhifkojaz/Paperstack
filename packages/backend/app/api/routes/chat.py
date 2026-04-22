@@ -58,9 +58,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ---------------------------------------------------------------------------
 # Conversation endpoints
-# ---------------------------------------------------------------------------
 
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
@@ -192,9 +190,7 @@ async def delete_conversation(
     await db.commit()
 
 
-# ---------------------------------------------------------------------------
 # Streaming endpoint
-# ---------------------------------------------------------------------------
 
 
 @router.post("/conversations/{conversation_id}/stream")
@@ -210,7 +206,6 @@ async def stream_message(
     embedding_client: httpx.AsyncClient = Depends(get_embedding_http_client),
 ):
     """Send a chat message and stream the assistant reply via SSE."""
-    # 1. Verify conversation ownership
     conv_result = await db.execute(
         select(ChatConversation).where(
             ChatConversation.id == conversation_id,
@@ -221,7 +216,6 @@ async def stream_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    # 2. Resolve API key using service
     try:
         resolution = await api_key_service.resolve_for_chat(current_user, db)
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
@@ -230,7 +224,7 @@ async def stream_message(
     api_key = resolution.api_key
     is_in_house = resolution.is_in_house
 
-    # 3. Decrement quota BEFORE streaming (optimistic decrement)
+    # Decrement quota BEFORE streaming (optimistic decrement)
     # Skip for OpenRouter (free) — only decrement for paid in-house providers.
     # If OpenRouter is primary and later 429s, quota is decremented inside
     # the event_stream() generator when falling back to a paid provider.
@@ -245,7 +239,6 @@ async def stream_message(
 
         background_tasks.add_task(_decrement_chat_quota, str(current_user.id))
 
-    # 4. Create services with injected HTTP clients
     embedding_svc = EmbeddingService(http_client=embedding_client)
     llm_svc = LLMService(http_client=llm_client)
     local_chat_service = ChatService(llm_service=llm_svc)
@@ -254,14 +247,13 @@ async def stream_message(
         embedding_service=embedding_svc,
     )
 
-    # 5. Embed query
     try:
         query_vector = await embedding_svc.embed_query(data.content)
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
-    # 6. PDF path: verify ownership, lazy-index if needed, single-PDF search
-    #    Collection path: multi-PDF search across indexed collection chunks
+    # PDF path: verify ownership, lazy-index if needed, single-PDF search
+    # Collection path: multi-PDF search across indexed collection chunks
     if conv.pdf_id is not None:
         pdf_result = await db.execute(
             select(Pdf).where(Pdf.id == conv.pdf_id, Pdf.user_id == current_user.id)
@@ -360,7 +352,7 @@ async def stream_message(
         base_prompt=COLLECTION_SYSTEM_PROMPT if conv.collection_id else None,
     )
 
-    # 6. Save user message (and auto-title the conversation on first message)
+    # Save user message and auto-title the conversation on first message
     user_msg = ChatMessage(
         conversation_id=conversation_id,
         role="user",
@@ -372,7 +364,7 @@ async def stream_message(
         conv.title = truncated[:60] + ("…" if len(truncated) > 60 else "")
     await db.commit()
 
-    # 7. Build context_chunks payload for SSE done event
+    # Build context_chunks payload for SSE done event
     context_chunks_payload = [
         {
             "chunk_id": c.chunk_id,
@@ -407,7 +399,6 @@ async def stream_message(
                     current_user.id,
                 )
 
-                # Resolve paid fallback
                 try:
                     paid_resolution = await api_key_service.resolve_paid_fallback(
                         current_user,
@@ -423,7 +414,6 @@ async def stream_message(
                 fallback_api_key = paid_resolution.api_key
                 provider_fallback = True
 
-                # Decrement quota for paid provider inline
                 from app.db.engine import SessionLocal  # noqa: PLC0415
 
                 async with SessionLocal() as fallback_db:
@@ -432,10 +422,8 @@ async def stream_message(
                     )
                     await fallback_db.commit()
 
-                # Send fallback notice
                 yield f"data: {json.dumps({'notice': 'Free tier rate limited, using backup model.'})}\n\n"
 
-                # Retry streaming with paid provider
                 async for token in local_chat_service.stream_reply(
                     system_prompt, messages, fallback_provider, fallback_api_key
                 ):
@@ -494,9 +482,7 @@ async def stream_message(
     )
 
 
-# ---------------------------------------------------------------------------
 # Semantic search
-# ---------------------------------------------------------------------------
 
 
 @router.post("/semantic-search", response_model=list[SemanticSearchResult])
@@ -546,9 +532,7 @@ async def semantic_search(
     ]
 
 
-# ---------------------------------------------------------------------------
 # Explain endpoint
-# ---------------------------------------------------------------------------
 
 
 @router.post("/explain", response_model=ExplainResponse)
@@ -562,7 +546,7 @@ async def explain_annotation(
     embedding_client: httpx.AsyncClient = Depends(get_embedding_http_client),
 ):
     """Explain a highlighted passage using RAG and save the explanation as an annotation note."""
-    # 1. Verify annotation ownership (join through annotation_sets for user_id check)
+    # Verify annotation ownership (join through annotation_sets for user_id check)
     ann_result = await db.execute(
         select(Annotation, AnnotationSet)
         .join(AnnotationSet, Annotation.set_id == AnnotationSet.id)
@@ -579,7 +563,6 @@ async def explain_annotation(
         annotation.note_content
     )  # capture before any intermediate commit
 
-    # 2. Verify PDF ownership
     pdf_result = await db.execute(
         select(Pdf).where(Pdf.id == data.pdf_id, Pdf.user_id == current_user.id)
     )
@@ -587,7 +570,6 @@ async def explain_annotation(
     if not pdf_row:
         raise HTTPException(status_code=404, detail="PDF not found.")
 
-    # 3. Resolve LLM key using service
     try:
         resolution = await api_key_service.resolve_for_explain(current_user, db)
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
@@ -596,8 +578,7 @@ async def explain_annotation(
     api_key = resolution.api_key
     is_in_house = resolution.is_in_house
 
-    # 4-6. Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
-    # Create local explain service with injected HTTP clients
+    # Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
     embedding_svc = EmbeddingService(http_client=embedding_client)
     llm_svc = LLMService(http_client=llm_client)
     local_explain_service = ExplainService(
@@ -656,7 +637,6 @@ async def explain_annotation(
     except (EmbeddingError, IndexingError) as exc:
         raise HTTPException(status_code=502, detail=f"Explanation failed: {exc}")
 
-    # 7. Append explanation to annotation note_content
     final_note = (
         f"{existing_note_content}\n\n{result.note_content}"
         if existing_note_content
@@ -664,7 +644,7 @@ async def explain_annotation(
     )
     annotation.note_content = final_note
 
-    # 8. Decrement explain quota if using paid in-house key (skip free OpenRouter)
+    # Decrement explain quota if using paid in-house key (skip free OpenRouter)
     remaining = -1  # -1 signals unlimited (own API key)
     if is_in_house and provider != "openrouter":
         remaining = await api_key_service.decrement_quota(

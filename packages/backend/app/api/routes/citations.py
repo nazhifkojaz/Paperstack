@@ -73,13 +73,12 @@ async def auto_extract_citation(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # 1. Fetch PDF metadata from DB
     stmt_pdf = select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == current_user.id)
     pdf = (await db.execute(stmt_pdf)).scalar_one_or_none()
     if not pdf:
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    # 2. Download raw PDF bytes (storage backend for stored PDFs, direct URL for linked PDFs)
+    # Download raw PDF bytes (storage backend for stored PDFs, direct URL for linked PDFs)
     try:
         if pdf.source_url and not pdf.github_sha and not pdf.drive_file_id:
             async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
@@ -96,13 +95,11 @@ async def auto_extract_citation(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not fetch PDF: {e}")
 
-    # 3. Run the citation extraction pipeline
     extracted = await citation_extractor.auto_extract_citation(
         pdf_bytes=pdf_bytes,
         doi_hint=pdf.doi,
     )
 
-    # 4. Upsert in DB
     stmt = select(Citation).where(Citation.pdf_id == pdf_id, Citation.user_id == current_user.id)
     citation = (await db.execute(stmt)).scalar_one_or_none()
 
