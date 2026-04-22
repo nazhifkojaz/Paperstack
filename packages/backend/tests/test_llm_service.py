@@ -140,19 +140,20 @@ class TestCallOpenRouter:
         import respx
         from app.services.llm_service import OPENROUTER_BASE_URL
 
-        service = LLMService()
-        with respx.mock:
-            respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={
-                        "choices": [
-                            {"message": {"content": "Hello from OpenRouter"}}
-                        ]
-                    },
+        async with httpx.AsyncClient() as client:
+            service = LLMService(http_client=client)
+            with respx.mock:
+                respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
+                    return_value=httpx.Response(
+                        200,
+                        json={
+                            "choices": [
+                                {"message": {"content": "Hello from OpenRouter"}}
+                            ]
+                        },
+                    )
                 )
-            )
-            result = await service.call_openrouter("sys", "user", "test-key")
+                result = await service.call_openrouter("sys", "user", "test-key")
         assert result == "Hello from OpenRouter"
 
     @pytest.mark.asyncio
@@ -162,13 +163,14 @@ class TestCallOpenRouter:
         from app.services.llm_service import OPENROUTER_BASE_URL
         from app.services.exceptions import LLMRateLimitError
 
-        service = LLMService()
-        with respx.mock:
-            respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
-                return_value=httpx.Response(429, text="Rate limited")
-            )
-            with pytest.raises(LLMRateLimitError):
-                await service.call_openrouter("sys", "user", "test-key")
+        async with httpx.AsyncClient() as client:
+            service = LLMService(http_client=client)
+            with respx.mock:
+                respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
+                    return_value=httpx.Response(429, text="Rate limited")
+                )
+                with pytest.raises(LLMRateLimitError):
+                    await service.call_openrouter("sys", "user", "test-key")
 
     @pytest.mark.asyncio
     async def test_timeout_raises_provider_error(self):
@@ -177,13 +179,14 @@ class TestCallOpenRouter:
         from app.services.llm_service import OPENROUTER_BASE_URL
         from app.services.exceptions import LLMProviderError
 
-        service = LLMService()
-        with respx.mock:
-            respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
-                side_effect=httpx.TimeoutException("timed out")
-            )
-            with pytest.raises(LLMProviderError, match="timed out"):
-                await service.call_openrouter("sys", "user", "test-key")
+        async with httpx.AsyncClient() as client:
+            service = LLMService(http_client=client)
+            with respx.mock:
+                respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
+                    side_effect=httpx.TimeoutException("timed out")
+                )
+                with pytest.raises(LLMProviderError, match="timed out"):
+                    await service.call_openrouter("sys", "user", "test-key")
 
     @pytest.mark.asyncio
     async def test_500_raises_provider_error(self):
@@ -192,14 +195,15 @@ class TestCallOpenRouter:
         from app.services.llm_service import OPENROUTER_BASE_URL
         from app.services.exceptions import LLMProviderError
 
-        service = LLMService()
-        with respx.mock:
-            respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
-                return_value=httpx.Response(500, text="Internal Server Error")
-            )
-            with pytest.raises(LLMProviderError) as exc_info:
-                await service.call_openrouter("sys", "user", "test-key")
-            assert exc_info.value.status_code == 500
+        async with httpx.AsyncClient() as client:
+            service = LLMService(http_client=client)
+            with respx.mock:
+                respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
+                    return_value=httpx.Response(500, text="Internal Server Error")
+                )
+                with pytest.raises(LLMProviderError) as exc_info:
+                    await service.call_openrouter("sys", "user", "test-key")
+                assert exc_info.value.status_code == 500
 
 
 class TestStreamOpenRouter:
@@ -217,20 +221,21 @@ class TestStreamOpenRouter:
             "data: [DONE]\n\n"
         )
 
-        service = LLMService()
-        with respx.mock:
-            respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
-                return_value=httpx.Response(
-                    200,
-                    text=sse_body,
-                    headers={"content-type": "text/event-stream"},
+        async with httpx.AsyncClient() as client:
+            service = LLMService(http_client=client)
+            with respx.mock:
+                respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
+                    return_value=httpx.Response(
+                        200,
+                        text=sse_body,
+                        headers={"content-type": "text/event-stream"},
+                    )
                 )
-            )
-            tokens = []
-            async for token in service.stream_openrouter(
-                "sys", [{"role": "user", "content": "hi"}], "test-key"
-            ):
-                tokens.append(token)
+                tokens = []
+                async for token in service.stream_openrouter(
+                    "sys", [{"role": "user", "content": "hi"}], "test-key"
+                ):
+                    tokens.append(token)
         assert tokens == ["Hello ", "world"]
 
     @pytest.mark.asyncio
@@ -245,20 +250,21 @@ class TestStreamOpenRouter:
             "data: [DONE]\n\n"
         )
 
-        service = LLMService()
-        with respx.mock:
-            respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
-                return_value=httpx.Response(
-                    200,
-                    text=sse_body,
-                    headers={"content-type": "text/event-stream"},
+        async with httpx.AsyncClient() as client:
+            service = LLMService(http_client=client)
+            with respx.mock:
+                respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
+                    return_value=httpx.Response(
+                        200,
+                        text=sse_body,
+                        headers={"content-type": "text/event-stream"},
+                    )
                 )
-            )
-            tokens = []
-            async for token in service.stream_openrouter(
-                "sys", [{"role": "user", "content": "hi"}], "test-key"
-            ):
-                tokens.append(token)
+                tokens = []
+                async for token in service.stream_openrouter(
+                    "sys", [{"role": "user", "content": "hi"}], "test-key"
+                ):
+                    tokens.append(token)
         assert tokens == ["token"]
 
     @pytest.mark.asyncio
@@ -267,14 +273,15 @@ class TestStreamOpenRouter:
         import respx
         from app.services.llm_service import OPENROUTER_BASE_URL
 
-        service = LLMService()
-        with respx.mock:
-            respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
-                return_value=httpx.Response(429, text="Rate limited")
-            )
-            with pytest.raises(httpx.HTTPStatusError) as exc_info:
-                async for _ in service.stream_openrouter(
-                    "sys", [{"role": "user", "content": "hi"}], "test-key"
-                ):
-                    pass
-            assert exc_info.value.response.status_code == 429
+        async with httpx.AsyncClient() as client:
+            service = LLMService(http_client=client)
+            with respx.mock:
+                respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
+                    return_value=httpx.Response(429, text="Rate limited")
+                )
+                with pytest.raises(httpx.HTTPStatusError) as exc_info:
+                    async for _ in service.stream_openrouter(
+                        "sys", [{"role": "user", "content": "hi"}], "test-key"
+                    ):
+                        pass
+                assert exc_info.value.response.status_code == 429
