@@ -312,7 +312,9 @@ class AutoHighlightCache(Base):
             "pdf_id",
             "user_id",
             "categories",
-            name="uq_auto_highlight_cache_pdf_user_cats",
+            "page_start",
+            "page_end",
+            name="uq_auto_highlight_cache_pdf_user_cats_pages",
         ),
     )
 
@@ -326,6 +328,8 @@ class AutoHighlightCache(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     categories: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    page_start: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    page_end: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("10"))
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
     )  # 'pending' | 'complete'
