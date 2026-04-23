@@ -13,7 +13,7 @@ from app.api.deps import get_db, get_current_user, get_llm_http_client
 from app.core.config import settings
 from app.db.models import (
     User, Pdf, Annotation, AnnotationSet, AutoHighlightCache,
-    UserUsageQuota, UserApiKey,
+    UserUsageQuota, UserApiKey, UserLLMPreferences,
 )
 from app.middleware.rate_limit import limiter
 from app.schemas.auto_highlight import (
@@ -145,8 +145,18 @@ async def analyze_paper(
                 highlights_count=count,
             )
 
+    # Check user's model preference for auto-highlight
+    prefs_result = await db.execute(
+        select(UserLLMPreferences.auto_highlight_model).where(
+            UserLLMPreferences.user_id == current_user.id
+        )
+    )
+    preferred_model = prefs_result.scalar_one_or_none()
+
     try:
-        resolution = await api_key_service.resolve_for_auto_highlight(current_user, db)
+        resolution = await api_key_service.resolve_for_auto_highlight(
+            current_user, db, force_free_model=preferred_model
+        )
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
         raise HTTPException(status_code=402, detail=str(e))
     provider = resolution.provider
@@ -214,7 +224,8 @@ async def analyze_paper(
 
             try:
                 highlights = await llm_svc.analyze_paper(
-                    paper_text, sorted_categories, provider, api_key
+                    paper_text, sorted_categories, provider, api_key,
+                    model=resolution.model,
                 )
             except LLMRateLimitError:
                 raise HTTPException(status_code=429, detail="Free tier rate limited. Please try again later or use your own API key.")

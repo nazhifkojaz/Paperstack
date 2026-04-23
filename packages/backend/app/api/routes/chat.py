@@ -24,6 +24,7 @@ from app.db.models import (
     ChatMessage,
     Pdf,
     User,
+    UserLLMPreferences,
 )
 from app.middleware.rate_limit import limiter
 from app.services.api_key_service import api_key_service
@@ -217,8 +218,18 @@ async def stream_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
+    # Check user's model preference for chat
+    chat_prefs_result = await db.execute(
+        select(UserLLMPreferences.chat_model).where(
+            UserLLMPreferences.user_id == current_user.id
+        )
+    )
+    chat_preferred_model = chat_prefs_result.scalar_one_or_none()
+
     try:
-        resolution = await api_key_service.resolve_for_chat(current_user, db)
+        resolution = await api_key_service.resolve_for_chat(
+            current_user, db, force_free_model=chat_preferred_model
+        )
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
         raise HTTPException(status_code=402, detail=str(e))
     provider = resolution.provider
@@ -382,7 +393,8 @@ async def stream_message(
         try:
             try:
                 async for token in local_chat_service.stream_reply(
-                    system_prompt, messages, provider, api_key
+                    system_prompt, messages, provider, api_key,
+                    model=resolution.model,
                 ):
                     full_reply.append(token)
                     yield f"data: {json.dumps({'token': token})}\n\n"
@@ -532,8 +544,18 @@ async def explain_annotation(
     if not pdf_row:
         raise HTTPException(status_code=404, detail="PDF not found.")
 
+    # Check user's model preference for explain
+    explain_prefs_result = await db.execute(
+        select(UserLLMPreferences.explain_model).where(
+            UserLLMPreferences.user_id == current_user.id
+        )
+    )
+    explain_preferred_model = explain_prefs_result.scalar_one_or_none()
+
     try:
-        resolution = await api_key_service.resolve_for_explain(current_user, db)
+        resolution = await api_key_service.resolve_for_explain(
+            current_user, db, force_free_model=explain_preferred_model
+        )
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
         raise HTTPException(status_code=402, detail=str(e))
     provider = resolution.provider
@@ -563,6 +585,7 @@ async def explain_annotation(
             provider=provider,
             api_key=api_key,
             db=db,
+            model=resolution.model,
         )
     except LLMRateLimitError:
         raise HTTPException(status_code=429, detail="Free tier rate limited. Please try again later or use your own API key.")
