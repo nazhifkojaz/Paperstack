@@ -108,12 +108,19 @@ async def analyze_paper(
     """Analyze a paper with LLM and create auto-highlight annotations."""
     sorted_categories = sorted(data.categories)
 
+    if data.page_start > data.page_end:
+        raise HTTPException(status_code=400, detail="page_start must be <= page_end")
+    if data.page_count > 15:
+        raise HTTPException(status_code=400, detail="Cannot analyze more than 15 pages at once")
+
     # Check cache
     cache_result = await db.execute(
         select(AutoHighlightCache).where(
             AutoHighlightCache.pdf_id == data.pdf_id,
             AutoHighlightCache.user_id == current_user.id,
             AutoHighlightCache.categories == sorted_categories,
+            AutoHighlightCache.page_start == data.page_start,
+            AutoHighlightCache.page_end == data.page_end,
         )
     )
     cache_row = cache_result.scalar_one_or_none()
@@ -151,6 +158,8 @@ async def analyze_paper(
             pdf_id=data.pdf_id,
             user_id=current_user.id,
             categories=sorted_categories,
+            page_start=data.page_start,
+            page_end=data.page_end,
             status="pending",
             provider=provider,
         )
@@ -186,7 +195,9 @@ async def analyze_paper(
                 tmp_path = await backend.download_to_tempfile(file_id, pdf_row.filename)
 
             with open(tmp_path, "rb") as f:
-                paper_text, total_pages, pages_analyzed = extract_text_with_pages(f)
+                paper_text, total_pages, pages_analyzed = extract_text_with_pages(
+                    f, page_start=data.page_start, page_end=data.page_end
+                )
 
             if not is_text_pdf(paper_text):
                 raise HTTPException(

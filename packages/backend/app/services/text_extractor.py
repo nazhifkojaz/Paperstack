@@ -17,26 +17,46 @@ _TABLE_CAPTION_RE = re.compile(
 )
 
 
-def extract_text_with_pages(pdf_file: Union[BinaryIO, BytesIO]) -> tuple[str, int, str]:
+def extract_text_with_pages(
+    pdf_file: Union[BinaryIO, BytesIO],
+    page_start: int = 1,
+    page_end: int = 0,
+) -> tuple[str, int, str]:
     """Extract text from PDF with page markers, respecting column layout.
+
+    Args:
+        page_start: First page to extract (1-indexed, inclusive).
+        page_end: Last page to extract (1-indexed, inclusive). 0 = all pages.
 
     Returns:
         tuple of (text_with_page_markers, total_pages, pages_analyzed_note)
-        pages_analyzed_note is "all" or "1-N of M" if truncated.
+        pages_analyzed_note is "all" or "N-M of T" when a range is specified.
     """
     with pymupdf.open(stream=pdf_file.read(), filetype="pdf") as doc:
         total_pages = len(doc)
         parts: list[str] = []
 
-        for page_idx in range(total_pages):
+        start_idx = max(0, page_start - 1)
+        end_idx = min(page_end, total_pages) if page_end > 0 else total_pages
+
+        for page_idx in range(start_idx, end_idx):
             page = doc[page_idx]
             page_text = _extract_page_in_reading_order(page)
             parts.append(f"--- PAGE {page_idx + 1} ---\n{page_text}")
 
         full_text = "\n\n".join(parts)
-        truncated_text, pages_note = _truncate_text(
-            full_text, MAX_TEXT_LENGTH, total_pages
-        )
+
+        if page_end > 0 and page_end < total_pages:
+            pages_note = f"{page_start}-{page_end} of {total_pages}"
+        elif page_end > 0 and page_end >= total_pages and page_start > 1:
+            pages_note = f"{page_start}-{total_pages} of {total_pages}"
+        else:
+            truncated_text, pages_note = _truncate_text(
+                full_text, MAX_TEXT_LENGTH, total_pages
+            )
+            return truncated_text, total_pages, pages_note
+
+        truncated_text, _ = _truncate_text(full_text, MAX_TEXT_LENGTH, end_idx)
         return truncated_text, total_pages, pages_note
 
 

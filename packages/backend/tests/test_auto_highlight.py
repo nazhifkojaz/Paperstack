@@ -137,6 +137,8 @@ async def test_cache_delete(client: AsyncClient, auth_headers, db_session, test_
         user_id=test_user.id,
         annotation_set_id=ann_set.id,
         categories=["findings"],
+        page_start=1,
+        page_end=10,
     )
     db_session.add(cache_entry)
     await db_session.commit()
