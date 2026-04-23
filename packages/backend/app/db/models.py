@@ -330,7 +330,7 @@ class AutoHighlightCache(Base):
     pages: Mapped[Any] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
-    )  # 'pending' | 'complete'
+    )  # 'pending' | 'complete' | 'failed'
     provider: Mapped[Optional[str]] = mapped_column(String(20))
     llm_response: Mapped[Optional[Any]] = mapped_column(JSONB)
     annotation_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(

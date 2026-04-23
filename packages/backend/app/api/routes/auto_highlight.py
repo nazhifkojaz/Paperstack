@@ -1,16 +1,19 @@
 """Auto-highlight routes: LLM-powered paper analysis."""
+import asyncio
 import logging
 import uuid
-from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user, get_llm_http_client
+from app.api.deps import get_db, get_current_user
 from app.core.config import settings
+from app.core.http_client import HTTPClientState
+from app.db.engine import SessionLocal
 from app.db.models import (
     User, Pdf, Annotation, AnnotationSet, AutoHighlightCache,
     UserUsageQuota, UserApiKey, UserLLMPreferences,
@@ -23,8 +26,6 @@ from app.schemas.auto_highlight import (
 from app.services.api_key_service import api_key_service
 from app.services.exceptions import (
     ApiKeyNotFoundError,
-    LLMRateLimitError,
-    LLMProviderError,
     QuotaExhaustedError,
 )
 from app.services.llm_service import LLMService, CATEGORY_COLORS
@@ -51,63 +52,135 @@ def _build_set_name(categories: list[str]) -> str:
     return "AI: " + ", ".join(names)
 
 
-@asynccontextmanager
-async def _cleanup_pending_cache_on_error(db: AsyncSession, cache_id: uuid.UUID):
-    """Context manager that cleans up pending cache entry on error.
+async def _run_analysis_background(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+    llm_client: httpx.AsyncClient,
+) -> None:
+    """Background task: download PDF, call LLM, create annotations.
 
-    On any exception, this will:
-    1. Rollback the database transaction
-    2. Delete the pending cache entry
-    3. Commit the deletion
-    4. Re-raise with appropriate HTTP status code
-
-    HTTPException is re-raised as-is (preserves status code).
-    LLMRateLimitError becomes 429.
-    LLMProviderError becomes 502.
-    Other exceptions become 500.
+    Creates its own DB session. Updates cache status to 'complete' or 'failed'.
     """
-    try:
-        yield
-    except HTTPException:
-        await db.rollback()
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
-        )
-        await db.commit()
-        raise
-    except LLMRateLimitError as e:
-        await db.rollback()
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
-        )
-        await db.commit()
-        raise HTTPException(status_code=429, detail=str(e))
-    except LLMProviderError as e:
-        await db.rollback()
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
-        )
-        await db.commit()
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
-        await db.rollback()
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
-        )
-        await db.commit()
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+    tmp_path: Path | None = None
+    async with SessionLocal() as db:
+        try:
+            # Fetch user (needed for storage backend)
+            user_result = await db.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            if not user:
+                raise ValueError("User not found")
+
+            pdf_result = await db.execute(
+                select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == user_id)
+            )
+            pdf_row = pdf_result.scalar_one_or_none()
+            if not pdf_row:
+                raise ValueError("PDF not found")
+
+            # Download PDF
+            from app.services.pdf_download_service import pdf_download_service
+
+            if pdf_row.source_url and not pdf_row.github_sha and not pdf_row.drive_file_id:
+                download_result = await pdf_download_service.download_to_tempfile(
+                    source=PdfSource.EXTERNAL_URL,
+                    external_url=pdf_row.source_url,
+                )
+                tmp_path = download_result.file_path
+            else:
+                from app.services.storage.factory import get_storage_backend
+                backend = await get_storage_backend(user, db)
+                file_id = pdf_row.drive_file_id or pdf_row.github_sha
+                tmp_path = await backend.download_to_tempfile(file_id, pdf_row.filename)
+
+            with open(tmp_path, "rb") as f:
+                paper_text, total_pages, pages_analyzed = extract_text_with_pages(
+                    f, pages=pages
+                )
+
+            if not is_text_pdf(paper_text):
+                raise ValueError(
+                    "This PDF doesn't contain selectable text. "
+                    "Auto-highlight requires text-based PDFs."
+                )
+
+            llm_svc = LLMService(http_client=llm_client)
+            highlights = await llm_svc.analyze_paper(
+                paper_text, categories, provider, api_key, model=model,
+            )
+
+            annotation_set = AnnotationSet(
+                pdf_id=pdf_id,
+                user_id=user_id,
+                name=_build_set_name(categories),
+                color="#a855f7",
+                source="auto_highlight",
+            )
+            db.add(annotation_set)
+            await db.flush()
+
+            for h in highlights:
+                ann = Annotation(
+                    set_id=annotation_set.id,
+                    page_number=max(1, h["page"]),
+                    type="highlight",
+                    rects=[],
+                    selected_text=h["text"],
+                    note_content=h["reason"],
+                    color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
+                    ann_metadata={"category": h["category"]},
+                )
+                db.add(ann)
+
+            cache_result = await db.execute(
+                select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+            )
+            cache_row = cache_result.scalar_one()
+            cache_row.status = "complete"
+            cache_row.llm_response = highlights
+            cache_row.annotation_set_id = annotation_set.id
+
+            await db.commit()
+            logger.info("Background analysis complete: cache_id=%s", cache_id)
+
+        except Exception as e:
+            logger.exception("Background analysis failed: cache_id=%s", cache_id)
+            try:
+                # Roll back any partial work before updating status
+                await db.rollback()
+                cache_result = await db.execute(
+                    select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+                )
+                cache_row = cache_result.scalar_one_or_none()
+                if cache_row:
+                    cache_row.status = "failed"
+                    cache_row.llm_response = {"error": str(e)}
+                    await db.commit()
+            except Exception:
+                logger.exception(
+                    "Failed to update cache status for cache_id=%s", cache_id
+                )
+        finally:
+            if tmp_path:
+                tmp_path.unlink(missing_ok=True)
 
 
-@router.post("/analyze", response_model=AutoHighlightResponse)
+@router.post("/analyze", response_model=AutoHighlightResponse, status_code=202)
 @limiter.limit(settings.RATE_LIMIT_AUTO_HIGHLIGHT_ANALYZE)
 async def analyze_paper(
     request: Request,
     data: AutoHighlightRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    llm_client: httpx.AsyncClient = Depends(get_llm_http_client),
 ):
-    """Analyze a paper with LLM and create auto-highlight annotations."""
+    """Kick off background paper analysis. Returns 202 immediately."""
     sorted_categories = sorted(data.categories)
 
     resolved_pages = sorted(data.pages) if data.pages else list(range(1, 11))
@@ -119,33 +192,18 @@ async def analyze_paper(
             detail=f"Cannot analyze more than {_MAX_PAGES} pages at once",
         )
 
-    # Check cache
-    cache_result = await db.execute(
-        select(AutoHighlightCache).where(
+    # Reject if any analysis is already pending for this PDF + user
+    pending_result = await db.execute(
+        select(AutoHighlightCache.id).where(
             AutoHighlightCache.pdf_id == data.pdf_id,
             AutoHighlightCache.user_id == current_user.id,
-            AutoHighlightCache.categories == sorted_categories,
-            AutoHighlightCache.pages == resolved_pages,
+            AutoHighlightCache.status == "pending",
         )
     )
-    cache_row = cache_result.scalar_one_or_none()
+    if pending_result.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Analysis already in progress.")
 
-    if cache_row:
-        if cache_row.status == "pending":
-            raise HTTPException(status_code=409, detail="Analysis already in progress.")
-        if cache_row.status == "complete" and cache_row.annotation_set_id:
-            # Count annotations
-            count_result = await db.execute(
-                select(func.count()).where(Annotation.set_id == cache_row.annotation_set_id)
-            )
-            count = count_result.scalar() or 0
-            return AutoHighlightResponse(
-                annotation_set_id=cache_row.annotation_set_id,
-                from_cache=True,
-                highlights_count=count,
-            )
-
-    # Check user's model preference for auto-highlight
+    # Resolve API key (fail fast on quota/auth errors)
     prefs_result = await db.execute(
         select(UserLLMPreferences.auto_highlight_model).where(
             UserLLMPreferences.user_id == current_user.id
@@ -159,118 +217,70 @@ async def analyze_paper(
         )
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
         raise HTTPException(status_code=402, detail=str(e))
+
     provider = resolution.provider
     api_key = resolution.api_key
-    is_in_house = resolution.is_in_house
+    model = resolution.model
     logger.info(
-        "Resolved provider=%s, is_in_house=%s for user %s",
-        provider, is_in_house, current_user.id,
+        "Resolved provider=%s for background analysis, user=%s",
+        provider, current_user.id,
     )
 
-    # Create pending cache entry (atomic dedup)
-    try:
-        pending_cache = AutoHighlightCache(
+    # Create pending cache entry
+    pending_cache = AutoHighlightCache(
+        pdf_id=data.pdf_id,
+        user_id=current_user.id,
+        categories=sorted_categories,
+        pages=resolved_pages,
+        status="pending",
+        provider=provider,
+    )
+    db.add(pending_cache)
+    await db.commit()
+    await db.refresh(pending_cache)
+
+    # Get the shared HTTP client for the background task
+    llm_client = HTTPClientState.get_llm_client(request.app)
+
+    # Spawn background task
+    asyncio.create_task(
+        _run_analysis_background(
+            cache_id=pending_cache.id,
             pdf_id=data.pdf_id,
             user_id=current_user.id,
             categories=sorted_categories,
             pages=resolved_pages,
-            status="pending",
             provider=provider,
+            api_key=api_key,
+            model=model,
+            llm_client=llm_client,
         )
-        db.add(pending_cache)
-        await db.flush()
-    except Exception:
-        await db.rollback()
-        raise HTTPException(status_code=409, detail="Analysis already in progress.")
+    )
 
-    tmp_path: Path | None = None
-    try:
-        async with _cleanup_pending_cache_on_error(db, pending_cache.id):
-            pdf_result = await db.execute(
-                select(Pdf).where(Pdf.id == data.pdf_id, Pdf.user_id == current_user.id)
-            )
-            pdf_row = pdf_result.scalar_one_or_none()
-            if not pdf_row:
-                raise HTTPException(status_code=404, detail="PDF not found")
+    return AutoHighlightResponse(
+        cache_id=pending_cache.id,
+        from_cache=False,
+        highlights_count=0,
+    )
 
-            # Download PDF using the unified download service
-            from app.services.pdf_download_service import pdf_download_service
 
-            if pdf_row.source_url and not pdf_row.github_sha and not pdf_row.drive_file_id:
-                download_result = await pdf_download_service.download_to_tempfile(
-                    source=PdfSource.EXTERNAL_URL,
-                    external_url=pdf_row.source_url,
-                )
-                tmp_path = download_result.file_path
-            else:
-                from app.services.storage.factory import get_storage_backend
-                backend = await get_storage_backend(current_user, db)
-                file_id = pdf_row.drive_file_id or pdf_row.github_sha
-                tmp_path = await backend.download_to_tempfile(file_id, pdf_row.filename)
-
-            with open(tmp_path, "rb") as f:
-                paper_text, total_pages, pages_analyzed = extract_text_with_pages(
-                    f, pages=resolved_pages
-                )
-
-            if not is_text_pdf(paper_text):
-                raise HTTPException(
-                    status_code=422,
-                    detail="This PDF doesn't contain selectable text. Auto-highlight requires text-based PDFs.",
-                )
-
-            # Call LLM (rate limited → let context manager handle → 429)
-            llm_svc = LLMService(http_client=llm_client)
-
-            try:
-                highlights = await llm_svc.analyze_paper(
-                    paper_text, sorted_categories, provider, api_key,
-                    model=resolution.model,
-                )
-            except LLMRateLimitError:
-                raise HTTPException(status_code=429, detail="Free tier rate limited. Please try again later or use your own API key.")
-
-            annotation_set = AnnotationSet(
-                pdf_id=data.pdf_id,
-                user_id=current_user.id,
-                name=_build_set_name(sorted_categories),
-                color="#a855f7",
-                source="auto_highlight",
-            )
-            db.add(annotation_set)
-            await db.flush()
-
-            for h in highlights:
-                ann = Annotation(
-                    set_id=annotation_set.id,
-                    page_number=max(1, h["page"]),
-                    type="highlight",
-                    rects=[],  # Resolved by frontend TextLayer matching
-                    selected_text=h["text"],
-                    note_content=h["reason"],
-                    color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
-                    ann_metadata={"category": h["category"]},
-                )
-                db.add(ann)
-
-            pending_cache.status = "complete"
-            pending_cache.llm_response = highlights
-            pending_cache.annotation_set_id = annotation_set.id
-
-            # OpenRouter (free) has no per-user quota. BYOK = unlimited.
-            # No quota decrement needed.
-
-            await db.commit()
-
-            return AutoHighlightResponse(
-                annotation_set_id=annotation_set.id,
-                from_cache=False,
-                highlights_count=len(highlights),
-                pages_analyzed=pages_analyzed,
-            )
-    finally:
-        if tmp_path:
-            tmp_path.unlink(missing_ok=True)
+@router.get("/cache/entry/{cache_id}", response_model=AutoHighlightCacheResponse)
+async def get_cache_entry(
+    cache_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get status of a specific cache entry (for polling)."""
+    result = await db.execute(
+        select(AutoHighlightCache).where(
+            AutoHighlightCache.id == cache_id,
+            AutoHighlightCache.user_id == current_user.id,
+        )
+    )
+    cache_row = result.scalar_one_or_none()
+    if not cache_row:
+        raise HTTPException(status_code=404, detail="Cache entry not found")
+    return cache_row
 
 
 @router.get("/cache/{pdf_id}", response_model=list[AutoHighlightCacheResponse])
@@ -279,12 +289,11 @@ async def list_cache(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List cached analyses for a PDF."""
+    """List all cached analyses for a PDF (including pending and failed)."""
     result = await db.execute(
         select(AutoHighlightCache).where(
             AutoHighlightCache.pdf_id == pdf_id,
             AutoHighlightCache.user_id == current_user.id,
-            AutoHighlightCache.status == "complete",
         ).order_by(AutoHighlightCache.created_at.desc())
     )
     return result.scalars().all()
@@ -307,13 +316,11 @@ async def delete_cache(
     if not cache_row:
         raise HTTPException(status_code=404, detail="Cache entry not found")
 
-    # Delete the annotation set first (cascades to annotations + cache via FK)
     if cache_row.annotation_set_id:
         await db.execute(
             delete(AnnotationSet).where(AnnotationSet.id == cache_row.annotation_set_id)
         )
     else:
-        # No annotation set — just delete the cache row
         await db.execute(
             delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
         )

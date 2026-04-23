@@ -18,10 +18,11 @@ class AutoHighlightRequest(BaseModel):
 
 
 class AutoHighlightResponse(BaseModel):
-    annotation_set_id: UUID
+    cache_id: UUID
+    annotation_set_id: Optional[UUID] = None
     from_cache: bool
     highlights_count: int
-    pages_analyzed: str = "all"
+    pages_analyzed: str = "pending"
 
 
 class AutoHighlightCacheResponse(BaseModel):
@@ -30,6 +31,7 @@ class AutoHighlightCacheResponse(BaseModel):
     id: UUID
     categories: Any  # JSONB
     pages: Any  # JSONB list[int]
+    status: str
     created_at: datetime
     annotation_set_id: Optional[UUID] = None
 
