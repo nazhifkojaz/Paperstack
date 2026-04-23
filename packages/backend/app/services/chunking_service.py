@@ -430,7 +430,6 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
     chunk_overlap = settings.CHUNK_OVERLAP
 
     # Track paragraph list for overlap computation
-    all_paras = paragraphs  # list of (start, end, text)
 
     # Detect reference section start to skip bibliography content
     in_references = False

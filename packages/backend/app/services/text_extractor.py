@@ -416,9 +416,9 @@ def validate_extraction(text: str) -> ExtractionQuality:
         )
 
     # Check average line length (interleaved columns produce very short lines)
-    lines = [l for l in clean.split("\n") if l.strip()]
+    lines = [ln for ln in clean.split("\n") if ln.strip()]
     if lines:
-        avg_line_len = sum(len(l) for l in lines) / len(lines)
+        avg_line_len = sum(len(ln) for ln in lines) / len(lines)
         if avg_line_len < 30:
             warnings.append(
                 f"Short average line length ({avg_line_len:.0f} chars) — possible column interleaving"

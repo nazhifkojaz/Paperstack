@@ -1,6 +1,5 @@
 """Tests for the chunking service (Phase 2: paragraph-aware, section-aware)."""
 
-import pytest
 from app.services.chunking_service import (
     Chunk,
     chunk_text_with_pages,
@@ -14,7 +13,6 @@ from app.services.chunking_service import (
     _is_reference_heading,
     _is_list_item,
     _has_list_content,
-    _SECTION_KEYWORDS,
     _REFERENCE_HEADINGS,
 )
 
@@ -228,7 +226,6 @@ def test_parse_headings_font_markers():
     text = "Some text\n\n[HEADING L1] Introduction\n\nBody text here."
     headings = _parse_headings(text)
     assert len(headings) >= 1
-    offsets = [h[0] for h in headings]
     titles = [h[1] for h in headings]
     assert "Introduction" in titles
 
