@@ -26,6 +26,7 @@ from app.services.exceptions import (
     EmbeddingError,
     IndexInProgressError,
     IndexingError,
+    OpenRouterQuotaError,
     TextExtractionError,
 )
 from app.services.pdf_download_service import PdfDownloadService, PdfSource
@@ -159,7 +160,7 @@ class IndexingService:
                 raise ChunkingError("No chunks produced from PDF text.")
 
             texts = [c.content for c in chunks]
-            embeddings = await self._embedding_service.embed_texts(texts)
+            embeddings = await self._embedding_service.embed_texts(texts, db=db)
 
             # Delete stale chunks and insert new ones
             await db.execute(
@@ -205,7 +206,7 @@ class IndexingService:
                 indexed_at=now,
             )
 
-        except (EmbeddingError, TextExtractionError, ChunkingError) as exc:
+        except (EmbeddingError, OpenRouterQuotaError, TextExtractionError, ChunkingError) as exc:
             index_status.status = "failed"
             index_status.error_message = str(exc)
             index_status.updated_at = datetime.now(timezone.utc)

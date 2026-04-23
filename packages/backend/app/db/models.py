@@ -1,10 +1,12 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, Any
 import uuid
 from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Computed,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -15,7 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import HALFVEC
 
 
 class Base(DeclarativeBase):
@@ -400,10 +402,10 @@ class PdfChunk(Base):
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     end_page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Optional[Any]] = mapped_column(Vector(768))
+    embedding: Mapped[Optional[Any]] = mapped_column(HALFVEC(2048))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     section_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    search_vector = Column(TSVECTOR, nullable=True)  # GENERATED column, managed by DB
+    search_vector = Column(TSVECTOR, Computed("to_tsvector('english', content)"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )
@@ -452,3 +454,14 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )
+
+
+class OpenrouterUsageCache(Base):
+    __tablename__ = "openrouter_usage_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_count_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    day_started_at: Mapped[date] = mapped_column(Date, nullable=False)
+    last_request_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_key_response: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)
+    last_key_fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

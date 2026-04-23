@@ -36,6 +36,19 @@ class IndexingError(Exception):
         super().__init__(message)
 
 
+class OpenRouterQuotaError(Exception):
+
+    def __init__(self, limit: int, count_today: int, threshold_pct: int = 90):
+        self.limit = limit
+        self.count_today = count_today
+        self.threshold_pct = threshold_pct
+        super().__init__(
+            f"OpenRouter free-tier usage at {threshold_pct}% or above "
+            f"({count_today}/{limit} requests today). "
+            "Please try again after UTC midnight or add a personal API key."
+        )
+
+
 # API Key Service Exceptions
 
 class ApiKeyNotFoundError(Exception):

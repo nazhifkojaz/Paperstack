@@ -85,11 +85,11 @@ class VectorSearchService:
                     WITH vector_results AS (
                         SELECT id, page_number, end_page_number, content,
                                section_title, section_level,
-                               1 - (embedding <=> CAST(:vec AS vector)) AS semantic_score
+                               1 - (embedding <=> CAST(:vec AS halfvec)) AS semantic_score
                         FROM pdf_chunks
                         WHERE user_id = :user_id
                           AND pdf_id = :pdf_id
-                        ORDER BY embedding <=> CAST(:vec AS vector)
+                        ORDER BY embedding <=> CAST(:vec AS halfvec)
                         LIMIT :k2
                     ),
                     keyword_results AS (
@@ -131,11 +131,11 @@ class VectorSearchService:
                 sql_text("""
                     SELECT pc.id, pc.page_number, pc.end_page_number, pc.content,
                            pc.section_title, pc.section_level,
-                           1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
+                           1 - (pc.embedding <=> CAST(:vec AS halfvec)) AS score
                     FROM pdf_chunks pc
                     WHERE pc.user_id = :user_id
                       AND pc.pdf_id = :pdf_id
-                    ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                    ORDER BY pc.embedding <=> CAST(:vec AS halfvec)
                     LIMIT :k
                 """),
                 {
@@ -205,13 +205,13 @@ class VectorSearchService:
                     WITH vector_results AS (
                         SELECT pc.id, pc.pdf_id, pc.page_number, pc.end_page_number, pc.content, p.title AS pdf_title,
                                pc.section_title, pc.section_level,
-                               1 - (pc.embedding <=> CAST(:vec AS vector)) AS semantic_score
+                               1 - (pc.embedding <=> CAST(:vec AS halfvec)) AS semantic_score
                         FROM pdf_chunks pc
                         JOIN pdfs p ON p.id = pc.pdf_id
                         JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id
                         WHERE pc.user_id = :user_id
                           AND pcol.collection_id = :collection_id
-                        ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                        ORDER BY pc.embedding <=> CAST(:vec AS halfvec)
                         LIMIT :k2
                     ),
                     keyword_results AS (
@@ -257,13 +257,13 @@ class VectorSearchService:
                 sql_text("""
                     SELECT pc.id, pc.pdf_id, pc.page_number, pc.end_page_number, pc.content, p.title AS pdf_title,
                            pc.section_title, pc.section_level,
-                           1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
+                           1 - (pc.embedding <=> CAST(:vec AS halfvec)) AS score
                     FROM pdf_chunks pc
                     JOIN pdfs p ON p.id = pc.pdf_id
                     JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id
                     WHERE pc.user_id = :user_id
                       AND pcol.collection_id = :collection_id
-                    ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                    ORDER BY pc.embedding <=> CAST(:vec AS halfvec)
                     LIMIT :k
                 """),
                 {
@@ -322,11 +322,11 @@ class VectorSearchService:
                     WITH vector_results AS (
                         SELECT pc.id, pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
                                pc.section_title, pc.section_level,
-                               1 - (pc.embedding <=> CAST(:vec AS vector)) AS semantic_score
+                               1 - (pc.embedding <=> CAST(:vec AS halfvec)) AS semantic_score
                         FROM pdf_chunks pc
                         JOIN pdfs p ON p.id = pc.pdf_id
                         WHERE pc.user_id = :user_id
-                        ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                        ORDER BY pc.embedding <=> CAST(:vec AS halfvec)
                         LIMIT :limit2
                     ),
                     keyword_results AS (
@@ -369,11 +369,11 @@ class VectorSearchService:
                 sql_text("""
                     SELECT pc.id, pc.pdf_id, p.title AS pdf_title, pc.page_number, pc.end_page_number, pc.content,
                            pc.section_title, pc.section_level,
-                           1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
+                           1 - (pc.embedding <=> CAST(:vec AS halfvec)) AS score
                     FROM pdf_chunks pc
                     JOIN pdfs p ON p.id = pc.pdf_id
                     WHERE pc.user_id = :user_id
-                    ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                    ORDER BY pc.embedding <=> CAST(:vec AS halfvec)
                     LIMIT :limit
                 """),
                 {
