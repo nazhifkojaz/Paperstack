@@ -1,5 +1,6 @@
 """LLM service for auto-highlight paper analysis and chat streaming."""
 import json
+import logging
 import re
 from typing import Any, AsyncIterator, Optional
 
@@ -7,8 +8,25 @@ import httpx
 
 from app.services.exceptions import LLMRateLimitError, LLMProviderError
 
-OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+logger = logging.getLogger(__name__)
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_MAX_CHARS = 20_000
+
+FREE_MODELS = [
+    {
+        "id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "label": "Nemotron 3 Super 120B",
+        "description": "NVIDIA's large model, good general-purpose quality",
+    },
+    {
+        "id": "google/gemma-4-31b-it:free",
+        "label": "Gemma 4 31B",
+        "description": "Google's instruction-tuned model, strong reasoning",
+    },
+]
+
+DEFAULT_FREE_MODEL = FREE_MODELS[0]["id"]
 
 CATEGORY_COLORS = {
     "findings": "#22c55e",
@@ -37,8 +55,11 @@ def strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
-def build_prompt(paper_text: str, categories: list[str]) -> tuple[str, str]:
+def build_prompt(paper_text: str, categories: list[str], max_chars: int = 0) -> tuple[str, str]:
     """Build system and user prompts for paper analysis."""
+    if max_chars and len(paper_text) > max_chars:
+        paper_text = paper_text[:max_chars] + "\n\n[TRUNCATED: paper text exceeded model context limit]"
+
     cat_defs = "\n".join(
         f"- {k}: {v}" for k, v in CATEGORY_DEFINITIONS.items() if k in categories
     )
@@ -237,15 +258,19 @@ class LLMService:
             self._handle_http_error(exc, "anthropic")
         return resp.json()["content"][0]["text"]
 
-    async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+    async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str, model: str = DEFAULT_FREE_MODEL) -> str:
         """Call OpenRouter API (OpenAI-compatible) and return text content."""
         client = self._require_client()
+        logger.info(
+            "Calling OpenRouter %s (prompt: %d chars, key: ...%s)",
+            model, len(user_prompt), api_key[-4:],
+        )
         try:
             resp = await client.post(
                 f"{OPENROUTER_BASE_URL}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={
-                    "model": OPENROUTER_MODEL,
+                    "model": model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
@@ -259,7 +284,17 @@ class LLMService:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             self._handle_http_error(exc, "openrouter")
-        return resp.json()["choices"][0]["message"]["content"]
+        logger.info("OpenRouter responded: status=%d, body=%s", resp.status_code, resp.text[:500])
+        data = resp.json()
+        if "error" in data:
+            err = data["error"]
+            logger.error("OpenRouter error response: %s", err)
+            error_msg = err.get("message", str(err))
+            metadata = err.get("metadata", {})
+            if metadata:
+                error_msg = f"{error_msg} | {metadata}"
+            raise LLMProviderError("openrouter", resp.status_code, error_msg)
+        return data["choices"][0]["message"]["content"]
 
     # --- Streaming methods for chat ---
 
@@ -388,7 +423,7 @@ class LLMService:
                         continue
 
     async def stream_openrouter(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[dict], api_key: str, model: str = DEFAULT_FREE_MODEL
     ) -> AsyncIterator[str]:
         """Stream tokens from OpenRouter (OpenAI-compatible SSE)."""
         client = self._require_client()
@@ -397,7 +432,7 @@ class LLMService:
             f"{OPENROUTER_BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "model": OPENROUTER_MODEL,
+                "model": model,
                 "messages": [{"role": "system", "content": system_prompt}] + messages,
                 "temperature": 0.3,
                 "stream": True,
@@ -420,9 +455,11 @@ class LLMService:
         categories: list[str],
         provider: str,
         api_key: str,
+        model: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Analyze a paper and return structured highlights."""
-        system_prompt, user_prompt = build_prompt(paper_text, categories)
+        max_chars = OPENROUTER_MAX_CHARS if provider == "openrouter" else 0
+        system_prompt, user_prompt = build_prompt(paper_text, categories, max_chars)
 
         if provider == "glm":
             raw = await self.call_glm(system_prompt, user_prompt, api_key)
@@ -433,7 +470,7 @@ class LLMService:
         elif provider == "anthropic":
             raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
         elif provider == "openrouter":
-            raw = await self.call_openrouter(system_prompt, user_prompt, api_key)
+            raw = await self.call_openrouter(system_prompt, user_prompt, api_key, model=model or DEFAULT_FREE_MODEL)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 

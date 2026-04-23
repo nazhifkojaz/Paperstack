@@ -312,8 +312,7 @@ class AutoHighlightCache(Base):
             "pdf_id",
             "user_id",
             "categories",
-            "page_start",
-            "page_end",
+            "pages",
             name="uq_auto_highlight_cache_pdf_user_cats_pages",
         ),
     )
@@ -328,8 +327,7 @@ class AutoHighlightCache(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     categories: Mapped[Any] = mapped_column(JSONB, nullable=False)
-    page_start: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
-    page_end: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("10"))
+    pages: Mapped[Any] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
     )  # 'pending' | 'complete'
@@ -457,6 +455,22 @@ class ChatMessage(Base):
     )  # [{chunk_id, page_number, snippet}]
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
+    )
+
+
+class UserLLMPreferences(Base):
+    __tablename__ = "user_llm_preferences"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    chat_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    auto_highlight_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    explain_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
     )
 
 
