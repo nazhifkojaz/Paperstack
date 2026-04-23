@@ -191,7 +191,7 @@ class TestAutoHighlightOpenRouterRateLimit:
     async def test_analyze_openrouter_429_returns_429(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
-        """When OpenRouter 429s on auto-highlight, return 429."""
+        """When OpenRouter 429s in background, cache entry is marked failed."""
         _init_http_clients()
 
         from app.services.exceptions import LLMRateLimitError
@@ -248,7 +248,8 @@ class TestAutoHighlightOpenRouterRateLimit:
                     headers=auth_headers,
                 )
 
-                assert resp.status_code == 429
+                # Now returns 202 immediately; LLM error handled in background
+                assert resp.status_code == 202
         finally:
             tmp_path.unlink(missing_ok=True)
 
@@ -317,6 +318,7 @@ class TestAutoHighlightOpenRouterRateLimit:
                     headers=auth_headers,
                 )
 
-                assert resp.status_code == 200
+                # Now returns 202 immediately; analysis runs in background
+                assert resp.status_code == 202
         finally:
             tmp_path.unlink(missing_ok=True)
