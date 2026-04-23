@@ -18,7 +18,7 @@ except Exception:
 
 SYSTEM_PROMPT = (
     "You are a research assistant helping a user understand academic papers. "
-    "Answer questions using ONLY the context excerpts provided below. "
+    "Answer questions using ONLY the context excerpts and paper metadata provided below. "
     "If the answer is not in the context, say so clearly. "
     "Format your responses using markdown (bold for key terms, bullet points for lists). "
     "Cite page numbers by writing [p.N] after each claim."
@@ -26,7 +26,7 @@ SYSTEM_PROMPT = (
 
 COLLECTION_SYSTEM_PROMPT = (
     "You are a research assistant helping a user understand a collection of academic papers. "
-    "Answer questions using ONLY the context excerpts provided below. "
+    "Answer questions using ONLY the context excerpts and paper metadata provided below. "
     "If the answer is not in the context, say so clearly. "
     "Format your responses using markdown (bold for key terms, bullet points for lists). "
     "Each context excerpt is labelled with its paper title and page number. "
@@ -37,6 +37,40 @@ COLLECTION_SYSTEM_PROMPT = (
 )
 
 CONTEXT_WINDOW = 10  # maximum number of past messages sent as conversation history
+
+
+def _format_paper_metadata(metadata: dict | list[dict] | None) -> str:
+    """Format paper metadata into a compact section for the system prompt.
+
+    Single-PDF: {"title": "...", "authors": "...", "year": 2024}
+    Collection: [{"title": "...", "authors": "...", "year": 2024}, ...]
+    """
+    if metadata is None:
+        return ""
+
+    if isinstance(metadata, dict):
+        parts = ["## Paper Metadata:"]
+        if metadata.get("title"):
+            parts.append(f"Title: {metadata['title']}")
+        if metadata.get("authors"):
+            parts.append(f"Authors: {metadata['authors']}")
+        if metadata.get("year"):
+            parts.append(f"Year: {metadata['year']}")
+        return "\n".join(parts) if len(parts) > 1 else ""
+
+    # Collection: list of dicts
+    lines = ["## Paper Metadata:"]
+    for i, m in enumerate(metadata, 1):
+        title = m.get("title", "Untitled")
+        authors = m.get("authors")
+        year = m.get("year")
+        entry = f"{i}. {title}"
+        if authors:
+            entry += f" — {authors}"
+        if year:
+            entry += f" ({year})"
+        lines.append(entry)
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _count_tokens(text: str) -> int:
@@ -140,17 +174,19 @@ class ChatService:
         history: list[dict],
         user_message: str,
         base_prompt: str | None = None,
+        paper_metadata: dict | list[dict] | None = None,
     ) -> tuple[str, list[dict]]:
         """Build system prompt and message list for the LLM.
 
         The system prompt embeds the retrieved context so every provider
         receives it the same way regardless of their message format.
         """
-        system = (
-            (base_prompt or SYSTEM_PROMPT)
-            + "\n\n## Context from the papers:\n\n"
-            + context
-        )
+        metadata_section = _format_paper_metadata(paper_metadata)
+        parts = [base_prompt or SYSTEM_PROMPT]
+        if metadata_section:
+            parts.append(metadata_section)
+        parts.append("## Context from the papers:\n\n" + context)
+        system = "\n\n".join(parts)
         msgs: list[dict] = []
         for h in history[-CONTEXT_WINDOW:]:
             msgs.append({"role": h["role"], "content": h["content"]})

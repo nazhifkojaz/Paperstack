@@ -22,6 +22,7 @@ from app.db.models import (
     AnnotationSet,
     ChatConversation,
     ChatMessage,
+    Citation,
     Pdf,
     User,
     UserLLMPreferences,
@@ -315,6 +316,24 @@ async def stream_message(
         context = local_chat_service.build_context(
             [{"page_number": c.page_number, "end_page_number": c.end_page_number, "content": c.content, "section_title": c.section_title} for c in top_chunks]
         )
+
+        # Fetch citation metadata (authors, year) for this PDF
+        paper_metadata = None
+        citation_result = await db.execute(
+            select(Citation).where(
+                Citation.pdf_id == conv.pdf_id,
+                Citation.user_id == current_user.id,
+            )
+        )
+        citation_row = citation_result.scalar_one_or_none()
+        if citation_row:
+            paper_metadata = {
+                "title": pdf_row.title,
+                "authors": citation_row.authors,
+                "year": citation_row.year,
+            }
+        elif pdf_row.title:
+            paper_metadata = {"title": pdf_row.title}
     else:
         # Collection chat: search across all indexed PDFs in the collection
         if conv.collection_id is None:
@@ -346,6 +365,36 @@ async def stream_message(
             context_parts.append(f"[{c.pdf_title}, {page_label}]\n{c.content}")
         context = "\n\n---\n\n".join(context_parts)
 
+        # Fetch citation metadata for all unique PDFs in the collection results
+        unique_pdf_ids = {c.pdf_id for c in top_chunks if c.pdf_id}
+        paper_metadata = None
+        if unique_pdf_ids:
+            citation_rows = await db.execute(
+                select(Citation).where(
+                    Citation.pdf_id.in_(unique_pdf_ids),
+                    Citation.user_id == current_user.id,
+                )
+            )
+            citation_by_pdf = {
+                str(c.pdf_id): c for c in citation_rows.scalars().all()
+            }
+            seen_titles = set()
+            metadata_list = []
+            for c in top_chunks:
+                if not c.pdf_id or c.pdf_title in seen_titles:
+                    continue
+                seen_titles.add(c.pdf_title)
+                entry: dict = {"title": c.pdf_title}
+                cit = citation_by_pdf.get(str(c.pdf_id))
+                if cit:
+                    if cit.authors:
+                        entry["authors"] = cit.authors
+                    if cit.year:
+                        entry["year"] = cit.year
+                metadata_list.append(entry)
+            if metadata_list:
+                paper_metadata = metadata_list
+
     history_result = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.conversation_id == conversation_id)
@@ -359,6 +408,7 @@ async def stream_message(
         history,
         data.content,
         base_prompt=COLLECTION_SYSTEM_PROMPT if conv.collection_id else None,
+        paper_metadata=paper_metadata,
     )
 
     # Save user message and auto-title the conversation on first message
