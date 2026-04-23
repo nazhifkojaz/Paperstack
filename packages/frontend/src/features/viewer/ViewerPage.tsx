@@ -18,8 +18,9 @@ import { FpsCounter } from './FpsCounter';
 import { AnnotationSidebar } from '../annotations/AnnotationSidebar';
 import { CitationPanel } from '../citations/CitationPanel';
 import { ChatPanel } from '../chat/ChatPanel';
-import { Loader2, ArrowLeft, ExternalLink } from 'lucide-react';
+import { Loader2, ArrowLeft, ExternalLink, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { SettingsDialog } from '@/features/settings/SettingsDialog';
 
 const EMPTY_SETS: AnnotationSet[] = [];
 const EMPTY_ANNOTATIONS: Annotation[] = [];
@@ -29,6 +30,7 @@ export function ViewerPage() {
     const navigate = useNavigate();
     const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
+    const [settingsOpen, setSettingsOpen] = useState(false);
 
     const currentPage = usePdfViewerStore(s => s.currentPage);
     const totalPages = usePdfViewerStore(s => s.totalPages);
@@ -184,6 +186,9 @@ export function ViewerPage() {
                 <div className="flex-1 truncate font-medium">
                     {pdfMetadata.title || pdfMetadata.filename}
                 </div>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSettingsOpen(true)}>
+                    <Settings className="h-4 w-4" />
+                </Button>
             </div>
 
             <div className="flex flex-1 overflow-hidden">
@@ -219,6 +224,7 @@ export function ViewerPage() {
             </div>
 
             {showFps && <FpsCounter />}
+            <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
         </div>
     );
 }
