@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { useAutoHighlightQuota } from '@/api/autoHighlight';
+import { useAutoHighlightQuota, useAnalysisStatus } from '@/api/autoHighlight';
 import { CategorySelectionDialog } from './CategorySelectionDialog';
 import { ApiKeyDialog } from './ApiKeyDialog';
+import { toast } from 'sonner';
 
 interface AutoHighlightButtonProps {
     pdfId: string;
@@ -11,18 +13,58 @@ interface AutoHighlightButtonProps {
 export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
     const [showCategoryDialog, setShowCategoryDialog] = useState(false);
     const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
+    const [activeCacheId, setActiveCacheId] = useState<string | null>(null);
+    const notifiedRef = useRef<string | null>(null);
     const { data: quota } = useAutoHighlightQuota();
+    const queryClient = useQueryClient();
 
     const canAnalyze = quota?.has_own_key || (quota?.free_uses_remaining ?? 0) > 0;
+
+    // Poll for background analysis status
+    const { data: statusData } = useAnalysisStatus(activeCacheId);
+
+    // Derive "is analyzing" from state + query data (no setState in effect needed)
+    const isAnalyzing = activeCacheId !== null && (!statusData || statusData.status === 'pending');
+
+    // Fire toast + invalidation exactly once per cache ID on terminal status
+    useEffect(() => {
+        if (!statusData || !activeCacheId) return;
+        if (notifiedRef.current === activeCacheId) return;
+
+        if (statusData.status === 'complete' && statusData.annotation_set_id) {
+            notifiedRef.current = activeCacheId;
+            toast.success('Analysis complete — highlights added.');
+            queryClient.invalidateQueries({ queryKey: ['annotation_sets', pdfId] });
+            queryClient.invalidateQueries({ queryKey: ['auto-highlight-cache', pdfId] });
+            queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
+        } else if (statusData.status === 'failed') {
+            notifiedRef.current = activeCacheId;
+            toast.error('Analysis failed. Please try again.');
+        }
+    }, [statusData, activeCacheId, pdfId, queryClient]);
+
+    const handleAnalysisStarted = (cacheId: string) => {
+        setActiveCacheId(cacheId);
+    };
 
     return (
         <div className="px-4 py-3 border-b border-border">
             <Button
                 className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white"
                 onClick={() => canAnalyze ? setShowCategoryDialog(true) : setShowApiKeyDialog(true)}
+                disabled={isAnalyzing}
             >
-                <span className="mr-1.5">✦</span>
-                Auto-Highlight Paper
+                {isAnalyzing ? (
+                    <>
+                        <span className="mr-1.5 animate-spin">✦</span>
+                        Analyzing...
+                    </>
+                ) : (
+                    <>
+                        <span className="mr-1.5">✦</span>
+                        Auto-Highlight Paper
+                    </>
+                )}
             </Button>
 
             {quota && (
@@ -55,6 +97,7 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
                 open={showCategoryDialog}
                 onOpenChange={setShowCategoryDialog}
                 pdfId={pdfId}
+                onAnalysisStarted={handleAnalysisStarted}
             />
 
             <ApiKeyDialog

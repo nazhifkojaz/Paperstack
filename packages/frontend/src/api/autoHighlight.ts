@@ -10,11 +10,21 @@ interface AutoHighlightRequest {
 }
 
 interface AutoHighlightResponse {
-    annotation_set_id: string;
+    cache_id: string;
+    annotation_set_id: string | null;
     from_cache: boolean;
     highlights_count: number;
     pages_analyzed: string;
     provider_fallback?: boolean;
+}
+
+interface AutoHighlightCacheEntry {
+    id: string;
+    categories: string[];
+    pages: number[];
+    status: 'pending' | 'complete' | 'failed';
+    created_at: string;
+    annotation_set_id: string | null;
 }
 
 interface QuotaInfo {
@@ -44,18 +54,28 @@ export const useAutoHighlightQuota = () => {
 };
 
 export const useAnalyzePaper = () => {
-    const queryClient = useQueryClient();
     return useMutation({
         mutationFn: (data: AutoHighlightRequest): Promise<AutoHighlightResponse> =>
             apiFetch('/auto-highlight/analyze', {
                 method: 'POST',
                 body: JSON.stringify(data),
             }),
-        onSuccess: (_, variables) => {
-            queryClient.invalidateQueries({ queryKey: ['annotation_sets', variables.pdf_id] });
-            queryClient.invalidateQueries({ queryKey: ['auto-highlight-cache', variables.pdf_id] });
-            queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
+    });
+};
+
+export const useAnalysisStatus = (cacheId: string | null) => {
+    return useQuery({
+        queryKey: ['analysis-status', cacheId],
+        queryFn: (): Promise<AutoHighlightCacheEntry> =>
+            apiFetch(`/auto-highlight/cache/entry/${cacheId}`),
+        enabled: !!cacheId,
+        refetchInterval: (query) => {
+            const data = query.state.data as AutoHighlightCacheEntry | undefined;
+            // Keep polling if we haven't gotten a terminal status yet
+            if (!data || data.status === 'pending') return 2000;
+            return false;
         },
+        retry: 3,
     });
 };
 
