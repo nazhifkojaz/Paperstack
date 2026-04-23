@@ -76,6 +76,7 @@ class ExplainService:
         provider: str,
         api_key: str,
         db: AsyncSession,
+        model: Optional[str] = None,
     ) -> ExplainResult:
         """Generate explanation with explicit provider and API key. Main entry point for routes."""
         index_status = await self._indexing_service.get_or_create_status(
@@ -127,7 +128,10 @@ class ExplainService:
         )
 
         call_method = getattr(self._llm_service, f"call_{provider}")
-        explanation = await call_method(system_prompt, user_message, api_key)
+        kwargs: dict = {"system_prompt": system_prompt, "user_prompt": user_message, "api_key": api_key}
+        if model and provider == "openrouter":
+            kwargs["model"] = model
+        explanation = await call_method(**kwargs)
 
         context_chunks_payload = [
             {

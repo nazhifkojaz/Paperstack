@@ -163,6 +163,7 @@ class ChatService:
         messages: list[dict],
         provider: str,
         api_key: str,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         method_name = STREAM_PROVIDERS.get(provider)
         if not method_name:
@@ -170,5 +171,8 @@ class ChatService:
                 f"Unknown provider '{provider}'. Valid: {list(STREAM_PROVIDERS)}"
             )
         stream_method = getattr(self._llm_service, method_name)
-        async for token in stream_method(system_prompt, messages, api_key):
+        kwargs: dict = {"system_prompt": system_prompt, "messages": messages, "api_key": api_key}
+        if model and provider == "openrouter":
+            kwargs["model"] = model
+        async for token in stream_method(**kwargs):
             yield token
