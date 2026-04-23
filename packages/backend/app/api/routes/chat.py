@@ -5,7 +5,7 @@ import logging
 import uuid
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +26,7 @@ from app.db.models import (
     User,
 )
 from app.middleware.rate_limit import limiter
-from app.services.api_key_service import QuotaType, api_key_service
+from app.services.api_key_service import api_key_service
 from app.services.chat_service import ChatService, COLLECTION_SYSTEM_PROMPT
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
@@ -35,11 +35,13 @@ from app.services.exceptions import (
     IndexInProgressError,
     IndexingError,
     LLMRateLimitError,
+    OpenRouterQuotaError,
     QuotaExhaustedError,
 )
 from app.services.explain_service import ExplainService
 from app.services.indexing_service import IndexingService
 from app.services.llm_service import LLMService
+from app.services.openrouter_usage_service import openrouter_usage_service
 from app.services.pdf_download_service import pdf_download_service
 from app.services.vector_search_service import vector_search_service
 from app.schemas.chat import (
@@ -199,7 +201,6 @@ async def stream_message(
     request: Request,
     conversation_id: uuid.UUID,
     data: MessageCreate,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     llm_client: httpx.AsyncClient = Depends(get_llm_http_client),
@@ -224,20 +225,15 @@ async def stream_message(
     api_key = resolution.api_key
     is_in_house = resolution.is_in_house
 
-    # Decrement quota BEFORE streaming (optimistic decrement)
-    # Skip for OpenRouter (free) — only decrement for paid in-house providers.
-    # If OpenRouter is primary and later 429s, quota is decremented inside
-    # the event_stream() generator when falling back to a paid provider.
-    if is_in_house and provider != "openrouter":
+    if is_in_house and provider == "openrouter":
+        try:
+            await openrouter_usage_service.record_and_check(db)
+        except OpenRouterQuotaError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
 
-        async def _decrement_chat_quota(user_id: str) -> None:
-            from app.db.engine import SessionLocal  # noqa: PLC0415
-
-            async with SessionLocal() as bg_db:
-                await api_key_service.decrement_quota(user_id, QuotaType.CHAT, bg_db)
-                await bg_db.commit()
-
-        background_tasks.add_task(_decrement_chat_quota, str(current_user.id))
+    # Quota decrement: OpenRouter (free) has no per-user quota.
+    # BYOK users have unlimited usage. In-house paid tiers are gone.
+    # No quota decrement needed anymore.
 
     embedding_svc = EmbeddingService(http_client=embedding_client)
     llm_svc = LLMService(http_client=llm_client)
@@ -248,7 +244,9 @@ async def stream_message(
     )
 
     try:
-        query_vector = await embedding_svc.embed_query(data.content)
+        query_vector = await embedding_svc.embed_query(data.content, db=db)
+    except OpenRouterQuotaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
@@ -291,7 +289,7 @@ async def stream_message(
                     pdf_row, current_user, index_status, db
                 )
                 await db.commit()
-            except (EmbeddingError, IndexingError) as exc:
+            except (EmbeddingError, OpenRouterQuotaError, IndexingError) as exc:
                 await db.commit()
                 raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
 
@@ -381,7 +379,6 @@ async def stream_message(
     async def event_stream():
         full_reply = []
         assistant_message_id = str(uuid.uuid4())
-        provider_fallback = False
         try:
             try:
                 async for token in local_chat_service.stream_reply(
@@ -390,45 +387,8 @@ async def stream_message(
                     full_reply.append(token)
                     yield f"data: {json.dumps({'token': token})}\n\n"
             except LLMRateLimitError:
-                # Only retry if primary was OpenRouter
-                if provider != "openrouter":
-                    raise
-
-                logger.warning(
-                    "OpenRouter rate limited, falling back for user %s",
-                    current_user.id,
-                )
-
-                try:
-                    paid_resolution = await api_key_service.resolve_paid_fallback(
-                        current_user,
-                        db,
-                        quota_field=QuotaType.CHAT.value,
-                        feature_priority=api_key_service.CHAT_PRIORITY,
-                    )
-                except (QuotaExhaustedError, ApiKeyNotFoundError):
-                    yield f"data: {json.dumps({'error': 'Free tier rate limited and no paid fallback available.', 'code': 'rate_limited'})}\n\n"
-                    return
-
-                fallback_provider = paid_resolution.provider
-                fallback_api_key = paid_resolution.api_key
-                provider_fallback = True
-
-                from app.db.engine import SessionLocal  # noqa: PLC0415
-
-                async with SessionLocal() as fallback_db:
-                    await api_key_service.decrement_quota(
-                        str(current_user.id), QuotaType.CHAT, fallback_db
-                    )
-                    await fallback_db.commit()
-
-                yield f"data: {json.dumps({'notice': 'Free tier rate limited, using backup model.'})}\n\n"
-
-                async for token in local_chat_service.stream_reply(
-                    system_prompt, messages, fallback_provider, fallback_api_key
-                ):
-                    full_reply.append(token)
-                    yield f"data: {json.dumps({'token': token})}\n\n"
+                yield f"data: {json.dumps({'error': 'Free tier rate limited. Please try again later or use your own API key.', 'code': 'rate_limited'})}\n\n"
+                return
 
             # Persist assistant message synchronously before sending `done`.
             # Saving as a background task (after the response is sent) created a race
@@ -466,7 +426,7 @@ async def stream_message(
                 len(context_chunks_payload),
             )
 
-            yield f"data: {json.dumps({'done': True, 'message_id': assistant_message_id, 'context_chunks': context_chunks_payload, 'provider_fallback': provider_fallback})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'message_id': assistant_message_id, 'context_chunks': context_chunks_payload})}\n\n"
 
         except Exception as exc:
             logger.exception("Streaming error for conversation %s", conversation_id)
@@ -497,7 +457,9 @@ async def semantic_search(
     """Search across indexed PDFs using semantic similarity."""
     try:
         embedding_svc = EmbeddingService(http_client=embedding_client)
-        query_vector = await embedding_svc.embed_query(data.query)
+        query_vector = await embedding_svc.embed_query(data.query, db=db)
+    except OpenRouterQuotaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
@@ -578,6 +540,12 @@ async def explain_annotation(
     api_key = resolution.api_key
     is_in_house = resolution.is_in_house
 
+    if is_in_house and provider == "openrouter":
+        try:
+            await openrouter_usage_service.record_and_check(db)
+        except OpenRouterQuotaError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+
     # Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
     embedding_svc = EmbeddingService(http_client=embedding_client)
     llm_svc = LLMService(http_client=llm_client)
@@ -585,8 +553,6 @@ async def explain_annotation(
         embedding_service=embedding_svc,
         llm_service=llm_svc,
     )
-
-    provider_fallback = False
 
     try:
         result = await local_explain_service.explain_with_provider(
@@ -599,41 +565,11 @@ async def explain_annotation(
             db=db,
         )
     except LLMRateLimitError:
-        # Only retry if primary was OpenRouter
-        if provider != "openrouter":
-            raise
-
-        logger.warning(
-            "OpenRouter rate limited for explain, falling back for user %s",
-            current_user.id,
-        )
-
-        try:
-            paid_resolution = await api_key_service.resolve_paid_fallback(
-                current_user,
-                db,
-                quota_field=QuotaType.EXPLAIN.value,
-                feature_priority=api_key_service.EXPLAIN_PRIORITY,
-            )
-        except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
-            raise HTTPException(status_code=402, detail=str(e))
-
-        provider = paid_resolution.provider
-        api_key = paid_resolution.api_key
-        is_in_house = True
-        provider_fallback = True
-
-        result = await local_explain_service.explain_with_provider(
-            selected_text=data.selected_text,
-            page_number=data.page_number,
-            pdf_row=pdf_row,
-            user=current_user,
-            provider=provider,
-            api_key=api_key,
-            db=db,
-        )
+        raise HTTPException(status_code=429, detail="Free tier rate limited. Please try again later or use your own API key.")
     except IndexInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except OpenRouterQuotaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except (EmbeddingError, IndexingError) as exc:
         raise HTTPException(status_code=502, detail=f"Explanation failed: {exc}")
 
@@ -644,12 +580,8 @@ async def explain_annotation(
     )
     annotation.note_content = final_note
 
-    # Decrement explain quota if using paid in-house key (skip free OpenRouter)
-    remaining = -1  # -1 signals unlimited (own API key)
-    if is_in_house and provider != "openrouter":
-        remaining = await api_key_service.decrement_quota(
-            str(current_user.id), QuotaType.EXPLAIN, db
-        )
+    # OpenRouter (free) has no per-user quota. BYOK = unlimited.
+    remaining = -1  # signals unlimited
 
     await db.commit()
 
@@ -657,5 +589,4 @@ async def explain_annotation(
         explanation=result.explanation,
         note_content=final_note,
         explain_uses_remaining=remaining,
-        provider_fallback=provider_fallback,
     )

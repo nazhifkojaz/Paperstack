@@ -71,4 +71,3 @@ class ExplainResponse(BaseModel):
     explanation: str
     note_content: str
     explain_uses_remaining: int
-    provider_fallback: bool = False

@@ -184,13 +184,13 @@ def _init_http_clients():
         HTTPClientState.init_http_clients(app)
 
 
-class TestAutoHighlightOpenRouterFallback:
-    """Tests for OpenRouter 429 → paid fallback in auto-highlight."""
+class TestAutoHighlightOpenRouterRateLimit:
+    """Tests for OpenRouter 429 handling in auto-highlight."""
 
-    async def test_analyze_openrouter_429_falls_back_to_paid(
+    async def test_analyze_openrouter_429_returns_429(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
-        """When OpenRouter 429s on auto-highlight, fall back to paid provider."""
+        """When OpenRouter 429s on auto-highlight, return 429."""
         _init_http_clients()
 
         from app.services.exceptions import LLMRateLimitError
@@ -198,27 +198,17 @@ class TestAutoHighlightOpenRouterFallback:
         pdf = await create_test_pdf(
             db_session,
             user_id=test_user.id,
-            title="Analyze Fallback PDF",
-            filename="analyze_fb.pdf",
-            github_sha="sha_analyze_fb",
+            title="Analyze Rate Limit PDF",
+            filename="analyze_rl.pdf",
+            github_sha="sha_analyze_rl",
         )
         await db_session.commit()
 
-        # Create a temp file for the download mock
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp.write(b"%PDF-1.4 test content")
             tmp_path = Path(tmp.name)
 
         try:
-            mock_highlights = [
-                {
-                    "text": "Key finding",
-                    "page": 1,
-                    "category": "findings",
-                    "reason": "Important",
-                },
-            ]
-
             mock_backend = AsyncMock()
             mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
 
@@ -226,13 +216,6 @@ class TestAutoHighlightOpenRouterFallback:
                 "app.api.routes.auto_highlight.api_key_service.resolve_for_auto_highlight",
                 new_callable=AsyncMock,
             ) as mock_resolve, patch(
-                "app.api.routes.auto_highlight.api_key_service.resolve_paid_fallback",
-                new_callable=AsyncMock,
-            ) as mock_paid_resolve, patch(
-                "app.api.routes.auto_highlight.api_key_service.decrement_quota",
-                new_callable=AsyncMock,
-                return_value=4,
-            ) as mock_decrement, patch(
                 "app.services.storage.factory.get_storage_backend",
                 new_callable=AsyncMock,
                 return_value=mock_backend,
@@ -250,91 +233,6 @@ class TestAutoHighlightOpenRouterFallback:
                     api_key="openrouter-key",
                     is_in_house=True,
                     quota_remaining=5,
-                )
-                mock_paid_resolve.return_value = MagicMock(
-                    provider="gemini",
-                    api_key="gemini-key",
-                    is_in_house=True,
-                    quota_remaining=5,
-                )
-
-                mock_llm = MagicMock()
-                mock_llm.analyze_paper = AsyncMock(
-                    side_effect=[
-                        LLMRateLimitError("openrouter"),
-                        mock_highlights,
-                    ]
-                )
-                mock_llm_cls.return_value = mock_llm
-
-                resp = await client.post(
-                    "/v1/auto-highlight/analyze",
-                    json={"pdf_id": str(pdf.id), "categories": ["findings"]},
-                    headers=auth_headers,
-                )
-
-                assert resp.status_code == 200
-                data = resp.json()
-                assert data["provider_fallback"] is True
-                assert data["highlights_count"] == 1
-
-                mock_paid_resolve.assert_called_once()
-                mock_decrement.assert_called_once()
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-    async def test_analyze_openrouter_429_no_paid_fallback_returns_402(
-        self, client: AsyncClient, auth_headers, db_session, test_user
-    ):
-        """When OpenRouter 429s and no paid fallback available, return 402."""
-        _init_http_clients()
-
-        from app.services.exceptions import LLMRateLimitError, QuotaExhaustedError
-
-        pdf = await create_test_pdf(
-            db_session,
-            user_id=test_user.id,
-            title="Analyze No Fallback PDF",
-            filename="analyze_nofb.pdf",
-            github_sha="sha_analyze_nofb",
-        )
-        await db_session.commit()
-
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(b"%PDF-1.4 test content")
-            tmp_path = Path(tmp.name)
-
-        try:
-            mock_backend = AsyncMock()
-            mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
-
-            with patch(
-                "app.api.routes.auto_highlight.api_key_service.resolve_for_auto_highlight",
-                new_callable=AsyncMock,
-            ) as mock_resolve, patch(
-                "app.api.routes.auto_highlight.api_key_service.resolve_paid_fallback",
-                new_callable=AsyncMock,
-            ) as mock_paid_resolve, patch(
-                "app.services.storage.factory.get_storage_backend",
-                new_callable=AsyncMock,
-                return_value=mock_backend,
-            ), patch(
-                "app.api.routes.auto_highlight.extract_text_with_pages",
-                return_value=("Paper text content", 5, "5"),
-            ), patch(
-                "app.api.routes.auto_highlight.is_text_pdf",
-                return_value=True,
-            ), patch(
-                "app.api.routes.auto_highlight.LLMService",
-            ) as mock_llm_cls:
-                mock_resolve.return_value = MagicMock(
-                    provider="openrouter",
-                    api_key="openrouter-key",
-                    is_in_house=True,
-                    quota_remaining=5,
-                )
-                mock_paid_resolve.side_effect = QuotaExhaustedError(
-                    "free_uses_remaining", remaining=0
                 )
 
                 mock_llm = MagicMock()
@@ -349,84 +247,7 @@ class TestAutoHighlightOpenRouterFallback:
                     headers=auth_headers,
                 )
 
-                assert resp.status_code == 402
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-    async def test_analyze_openrouter_no_quota_decrement(
-        self, client: AsyncClient, auth_headers, db_session, test_user
-    ):
-        """When OpenRouter succeeds, quota should NOT be decremented."""
-        _init_http_clients()
-
-        pdf = await create_test_pdf(
-            db_session,
-            user_id=test_user.id,
-            title="Analyze OpenRouter OK",
-            filename="analyze_or_ok.pdf",
-            github_sha="sha_analyze_or_ok",
-        )
-        await db_session.commit()
-
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(b"%PDF-1.4 test content")
-            tmp_path = Path(tmp.name)
-
-        try:
-            mock_highlights = [
-                {
-                    "text": "A finding",
-                    "page": 1,
-                    "category": "findings",
-                    "reason": "Result",
-                },
-            ]
-
-            mock_backend = AsyncMock()
-            mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
-
-            with patch(
-                "app.api.routes.auto_highlight.api_key_service.resolve_for_auto_highlight",
-                new_callable=AsyncMock,
-            ) as mock_resolve, patch(
-                "app.api.routes.auto_highlight.api_key_service.decrement_quota",
-                new_callable=AsyncMock,
-                return_value=4,
-            ) as mock_decrement, patch(
-                "app.services.storage.factory.get_storage_backend",
-                new_callable=AsyncMock,
-                return_value=mock_backend,
-            ), patch(
-                "app.api.routes.auto_highlight.extract_text_with_pages",
-                return_value=("Paper text content", 5, "5"),
-            ), patch(
-                "app.api.routes.auto_highlight.is_text_pdf",
-                return_value=True,
-            ), patch(
-                "app.api.routes.auto_highlight.LLMService",
-            ) as mock_llm_cls:
-                mock_resolve.return_value = MagicMock(
-                    provider="openrouter",
-                    api_key="openrouter-key",
-                    is_in_house=True,
-                    quota_remaining=5,
-                )
-
-                mock_llm = MagicMock()
-                mock_llm.analyze_paper = AsyncMock(return_value=mock_highlights)
-                mock_llm_cls.return_value = mock_llm
-
-                resp = await client.post(
-                    "/v1/auto-highlight/analyze",
-                    json={"pdf_id": str(pdf.id), "categories": ["findings"]},
-                    headers=auth_headers,
-                )
-
-                assert resp.status_code == 200
-                data = resp.json()
-                assert data["provider_fallback"] is False
-                # Quota should NOT be decremented for free OpenRouter
-                mock_decrement.assert_not_called()
+                assert resp.status_code == 429
         finally:
             tmp_path.unlink(missing_ok=True)
 
@@ -466,10 +287,6 @@ class TestAutoHighlightOpenRouterFallback:
                 "app.api.routes.auto_highlight.api_key_service.resolve_for_auto_highlight",
                 new_callable=AsyncMock,
             ) as mock_resolve, patch(
-                "app.api.routes.auto_highlight.api_key_service.decrement_quota",
-                new_callable=AsyncMock,
-                return_value=4,
-            ) as mock_decrement, patch(
                 "app.services.storage.factory.get_storage_backend",
                 new_callable=AsyncMock,
                 return_value=mock_backend,
@@ -482,7 +299,6 @@ class TestAutoHighlightOpenRouterFallback:
             ), patch(
                 "app.api.routes.auto_highlight.LLMService",
             ) as mock_llm_cls:
-                # User has their own key — not in-house
                 mock_resolve.return_value = MagicMock(
                     provider="anthropic",
                     api_key="user-own-key",
@@ -501,9 +317,5 @@ class TestAutoHighlightOpenRouterFallback:
                 )
 
                 assert resp.status_code == 200
-                data = resp.json()
-                assert data["provider_fallback"] is False
-                # Own key — no quota decrement
-                mock_decrement.assert_not_called()
         finally:
             tmp_path.unlink(missing_ok=True)

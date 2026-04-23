@@ -18,7 +18,6 @@ class AutoHighlightResponse(BaseModel):
     from_cache: bool
     highlights_count: int
     pages_analyzed: str = "all"
-    provider_fallback: bool = False
 
 
 class AutoHighlightCacheResponse(BaseModel):
