@@ -11,12 +11,10 @@ class AutoHighlightRequest(BaseModel):
         min_length=1,
         description="Categories to highlight",
     )
-    page_start: int = Field(default=1, ge=1, description="First page to analyze (1-indexed)")
-    page_end: int = Field(default=10, ge=1, description="Last page to analyze (inclusive)")
-
-    @property
-    def page_count(self) -> int:
-        return self.page_end - self.page_start + 1
+    pages: Optional[list[int]] = Field(
+        default=None,
+        description="Page numbers to analyze (1-indexed). None = pages 1-10.",
+    )
 
 
 class AutoHighlightResponse(BaseModel):
@@ -31,8 +29,7 @@ class AutoHighlightCacheResponse(BaseModel):
 
     id: UUID
     categories: Any  # JSONB
-    page_start: int
-    page_end: int
+    pages: Any  # JSONB list[int]
     created_at: datetime
     annotation_set_id: Optional[UUID] = None
 

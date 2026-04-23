@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 from io import BytesIO
-from typing import BinaryIO, Union
+from typing import BinaryIO, Optional, Union
 
 import pymupdf  # PyMuPDF >= 1.27
 
@@ -19,44 +19,47 @@ _TABLE_CAPTION_RE = re.compile(
 
 def extract_text_with_pages(
     pdf_file: Union[BinaryIO, BytesIO],
-    page_start: int = 1,
-    page_end: int = 0,
+    pages: Optional[list[int]] = None,
 ) -> tuple[str, int, str]:
     """Extract text from PDF with page markers, respecting column layout.
 
     Args:
-        page_start: First page to extract (1-indexed, inclusive).
-        page_end: Last page to extract (1-indexed, inclusive). 0 = all pages.
+        pages: Specific page numbers to extract (1-indexed). None = all pages.
 
     Returns:
         tuple of (text_with_page_markers, total_pages, pages_analyzed_note)
-        pages_analyzed_note is "all" or "N-M of T" when a range is specified.
+        pages_analyzed_note is "all" or a description like "1, 4, 5 of 20".
     """
     with pymupdf.open(stream=pdf_file.read(), filetype="pdf") as doc:
         total_pages = len(doc)
         parts: list[str] = []
 
-        start_idx = max(0, page_start - 1)
-        end_idx = min(page_end, total_pages) if page_end > 0 else total_pages
+        if pages is not None:
+            page_indices = sorted({max(0, min(p - 1, total_pages - 1)) for p in pages})
+        else:
+            page_indices = list(range(total_pages))
 
-        for page_idx in range(start_idx, end_idx):
+        for page_idx in page_indices:
             page = doc[page_idx]
             page_text = _extract_page_in_reading_order(page)
             parts.append(f"--- PAGE {page_idx + 1} ---\n{page_text}")
 
         full_text = "\n\n".join(parts)
 
-        if page_end > 0 and page_end < total_pages:
-            pages_note = f"{page_start}-{page_end} of {total_pages}"
-        elif page_end > 0 and page_end >= total_pages and page_start > 1:
-            pages_note = f"{page_start}-{total_pages} of {total_pages}"
+        if pages is not None and len(page_indices) < total_pages:
+            page_nums = sorted(set(pages))
+            count = len(page_nums)
+            if count <= 5:
+                pages_note = f"{count} pages ({', '.join(str(p) for p in page_nums)} of {total_pages})"
+            else:
+                pages_note = f"{count} pages ({page_nums[0]}–{page_nums[-1]} of {total_pages})"
         else:
             truncated_text, pages_note = _truncate_text(
                 full_text, MAX_TEXT_LENGTH, total_pages
             )
             return truncated_text, total_pages, pages_note
 
-        truncated_text, _ = _truncate_text(full_text, MAX_TEXT_LENGTH, end_idx)
+        truncated_text, _ = _truncate_text(full_text, MAX_TEXT_LENGTH, total_pages)
         return truncated_text, total_pages, pages_note
 
 

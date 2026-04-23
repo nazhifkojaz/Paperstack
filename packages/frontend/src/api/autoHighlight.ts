@@ -6,8 +6,7 @@ import { apiFetch } from './client';
 interface AutoHighlightRequest {
     pdf_id: string;
     categories: string[];
-    page_start?: number;
-    page_end?: number;
+    pages?: number[];
 }
 
 interface AutoHighlightResponse {

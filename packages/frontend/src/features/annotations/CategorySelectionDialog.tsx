@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
@@ -21,10 +21,11 @@ const CATEGORIES = [
 const MAX_PAGES = 15;
 const DEFAULT_END = 10;
 
-function parseFreeformPages(input: string, totalPages: number): { start: number; end: number } | null {
+function parseFreeformPages(input: string, totalPages: number): number[] | null {
     const nums = new Set<number>();
     for (const part of input.split(',')) {
         const trimmed = part.trim();
+        if (!trimmed) continue;
         const rangeMatch = trimmed.match(/^(\d+)\s*-\s*(\d+)$/);
         if (rangeMatch) {
             const lo = parseInt(rangeMatch[1], 10);
@@ -40,7 +41,7 @@ function parseFreeformPages(input: string, totalPages: number): { start: number;
     if (nums.size === 0) return null;
     const sorted = [...nums].sort((a, b) => a - b);
     if (totalPages > 0 && sorted[sorted.length - 1] > totalPages) return null;
-    return { start: sorted[0], end: sorted[sorted.length - 1] };
+    return sorted;
 }
 
 interface Props {
@@ -57,13 +58,21 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId }: Props) =>
     const [pageEnd, setPageEnd] = useState(DEFAULT_END);
     const [advancedMode, setAdvancedMode] = useState(false);
     const [freeformInput, setFreeformInput] = useState('');
-    const [freeformError, setFreeformError] = useState('');
 
     const totalPages = usePdfViewerStore(state => state.totalPages);
     const analyzeMutation = useAnalyzePaper();
 
     const effectiveEnd = Math.min(pageEnd, totalPages || pageEnd);
-    const pageCount = effectiveEnd - pageStart + 1;
+    const simplePageCount = effectiveEnd - pageStart + 1;
+
+    const resolvedFreeformPages = useMemo(() => {
+        if (!freeformInput.trim()) return null;
+        return parseFreeformPages(freeformInput, totalPages);
+    }, [freeformInput, totalPages]);
+
+    const pagesToSend = advancedMode
+        ? resolvedFreeformPages
+        : (pageStart <= effectiveEnd ? Array.from({ length: simplePageCount }, (_, i) => pageStart + i) : null);
 
     const toggle = (id: string) => {
         setSelected(prev => {
@@ -89,43 +98,18 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId }: Props) =>
 
     const handleFreeformChange = useCallback((val: string) => {
         setFreeformInput(val);
-        setFreeformError('');
-        if (!val.trim()) return;
-        const parsed = parseFreeformPages(val, totalPages);
-        if (!parsed) {
-            setFreeformError(totalPages > 0 ? `Invalid format or pages exceed ${totalPages}` : 'Invalid format. Use: 1, 3, 5-7');
-        } else {
-            setPageStart(parsed.start);
-            setPageEnd(parsed.end);
-        }
-    }, [totalPages]);
+    }, []);
+
+    const isOverLimit = pagesToSend ? pagesToSend.length > MAX_PAGES : false;
 
     const handleAnalyze = async () => {
-        if (selected.size === 0) return;
-
-        if (advancedMode && freeformInput.trim()) {
-            const parsed = parseFreeformPages(freeformInput, totalPages);
-            if (!parsed) {
-                toast.error('Invalid page range format');
-                return;
-            }
-        }
-
-        if (pageStart > effectiveEnd) {
-            toast.error('Start page must be <= end page');
-            return;
-        }
-        if (pageCount > MAX_PAGES) {
-            toast.error(`Cannot analyze more than ${MAX_PAGES} pages at once`);
-            return;
-        }
+        if (selected.size === 0 || !pagesToSend || isOverLimit) return;
 
         try {
             const result = await analyzeMutation.mutateAsync({
                 pdf_id: pdfId,
                 categories: Array.from(selected),
-                page_start: pageStart,
-                page_end: effectiveEnd,
+                pages: pagesToSend,
             });
 
             toast.success(
@@ -146,6 +130,15 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId }: Props) =>
             toast.error(detail);
         }
     };
+
+    const freeformHint = useMemo(() => {
+        if (!freeformInput.trim() || !resolvedFreeformPages) return null;
+        const pages = resolvedFreeformPages;
+        if (pages.length <= 6) {
+            return `Pages ${pages.join(', ')}`;
+        }
+        return `${pages.length} pages (${pages[0]}–${pages[pages.length - 1]})`;
+    }, [freeformInput, resolvedFreeformPages]);
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -190,13 +183,13 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId }: Props) =>
                                         onChange={e => handleFreeformChange(e.target.value)}
                                         className="text-sm"
                                     />
-                                    {freeformError && (
-                                        <p className="text-xs text-destructive">{freeformError}</p>
-                                    )}
-                                    {!freeformError && freeformInput.trim() && (
-                                        <p className="text-xs text-muted-foreground">
-                                            Resolved: pages {pageStart}–{effectiveEnd}
+                                    {freeformInput.trim() && !resolvedFreeformPages && (
+                                        <p className="text-xs text-destructive">
+                                            Invalid format or pages exceed {totalPages || 'PDF length'}
                                         </p>
+                                    )}
+                                    {freeformHint && (
+                                        <p className="text-xs text-muted-foreground">{freeformHint}</p>
                                     )}
                                 </div>
                             ) : (
@@ -218,7 +211,7 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId }: Props) =>
                                         onChange={e => handleEndChange(e.target.value)}
                                         className="w-20 text-sm"
                                     />
-                                    {pageCount > MAX_PAGES && (
+                                    {simplePageCount > MAX_PAGES && (
                                         <span className="text-xs text-destructive">
                                             Max {MAX_PAGES}
                                         </span>
@@ -261,7 +254,7 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId }: Props) =>
                             </Button>
                             <Button
                                 onClick={handleAnalyze}
-                                disabled={selected.size === 0 || pageCount > MAX_PAGES || pageStart > effectiveEnd}
+                                disabled={selected.size === 0 || !pagesToSend || isOverLimit}
                                 className="bg-gradient-to-r from-purple-600 to-purple-700"
                             >
                                 Analyze
