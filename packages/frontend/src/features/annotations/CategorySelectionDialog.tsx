@@ -18,7 +18,7 @@ const CATEGORIES = [
     { id: 'background', label: 'Background & Prior Work', color: '#6b7280', default: false },
 ];
 
-const MAX_PAGES = 15;
+const MAX_PAGES = 100;
 const DEFAULT_END = 10;
 
 function parseFreeformPages(input: string, totalPages: number): number[] | null {

@@ -7,7 +7,7 @@ from typing import BinaryIO, Optional, Union
 
 import pymupdf  # PyMuPDF >= 1.27
 
-MAX_TEXT_LENGTH = 120_000
+MAX_TEXT_LENGTH = 500_000
 
 _FIGURE_CAPTION_RE = re.compile(
     r"^((?:Figure|Fig\.?)\s*\d+[.:)\-]\s*.+)", re.IGNORECASE | re.MULTILINE

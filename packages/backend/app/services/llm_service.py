@@ -11,7 +11,7 @@ from app.services.exceptions import LLMRateLimitError, LLMProviderError
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MAX_CHARS = 20_000
+OPENROUTER_MAX_CHARS = 200_000
 
 FREE_MODELS = [
     {

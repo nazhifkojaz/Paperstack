@@ -163,7 +163,7 @@ class TestCallOpenRouter:
 
 class TestAnalyzePaper:
     async def test_openrouter_truncates_paper(self):
-        long_text = "A" * 50_000
+        long_text = "A" * 200_001  # Exceed OPENROUTER_MAX_CHARS (200_000)
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -186,8 +186,15 @@ class TestAnalyzePaper:
         # Verify the paper text was truncated in the request
         call_args = mock_client.post.call_args
         sent_text = call_args[1]["json"]["messages"][1]["content"]
-        assert len(sent_text) < 50_000
+        # The prompt includes instructions + paper text, so check that truncation marker exists
+        # and that the paper text portion doesn't exceed max_chars
         assert "[TRUNCATED" in sent_text
+        # Extract just the paper text (it's after "--- PAPER TEXT ---")
+        paper_start = sent_text.find("--- PAPER TEXT ---")
+        assert paper_start > 0
+        paper_text = sent_text[paper_start:]
+        # The paper text should be ~200_000 chars + truncation message
+        assert len(paper_text) < 200_100  # 200_000 + some buffer for truncation message
 
     async def test_non_openrouter_no_truncation(self):
         long_text = "A" * 50_000

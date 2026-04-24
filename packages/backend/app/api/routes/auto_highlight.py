@@ -36,7 +36,34 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_MAX_PAGES = 15
+_MAX_PAGES = 100
+_CHUNK_SIZE = 5  # Pages per LLM call (conservative for free-tier models)
+
+
+def _split_text_by_pages(
+    full_text: str, chunk_pages: list[list[int]]
+) -> list[str]:
+    """Split extracted text into per-chunk strings using PAGE markers."""
+    import re
+
+    # Parse all page blocks from the full text
+    pattern = re.compile(r"--- PAGE (\d+) ---\n")
+    splits = list(pattern.finditer(full_text))
+
+    # Map page number → its text block
+    page_blocks: dict[int, str] = {}
+    for i, match in enumerate(splits):
+        page_num = int(match.group(1))
+        start = match.start()
+        end = splits[i + 1].start() if i + 1 < len(splits) else len(full_text)
+        page_blocks[page_num] = full_text[start:end].strip()
+
+    chunks: list[str] = []
+    for pages in chunk_pages:
+        parts = [page_blocks[p] for p in pages if p in page_blocks]
+        chunks.append("\n\n".join(parts))
+
+    return chunks
 
 
 def _build_set_name(categories: list[str]) -> str:
@@ -111,10 +138,43 @@ async def _run_analysis_background(
                     "Auto-highlight requires text-based PDFs."
                 )
 
+            # Split pages into chunks to avoid upstream LLM timeouts
+            sorted_pages = sorted(pages)
+            page_chunks = [
+                sorted_pages[i : i + _CHUNK_SIZE]
+                for i in range(0, len(sorted_pages), _CHUNK_SIZE)
+            ]
+
             llm_svc = LLMService(http_client=llm_client)
-            highlights = await llm_svc.analyze_paper(
-                paper_text, categories, provider, api_key, model=model,
-            )
+
+            if len(page_chunks) <= 1:
+                highlights = await llm_svc.analyze_paper(
+                    paper_text, categories, provider, api_key, model=model,
+                )
+            else:
+                text_chunks = _split_text_by_pages(paper_text, page_chunks)
+                tasks = [
+                    llm_svc.analyze_paper(
+                        chunk, categories, provider, api_key, model=model,
+                    )
+                    for chunk in text_chunks
+                ]
+                chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                highlights = []
+                for i, result in enumerate(chunk_results):
+                    if isinstance(result, Exception):
+                        logger.warning(
+                            "Chunk %d (pages %s) failed: %s",
+                            i, page_chunks[i], result,
+                        )
+                    else:
+                        highlights.extend(result)
+
+                if not highlights:
+                    raise ValueError(
+                        "All analysis chunks failed. Try fewer pages or a different model."
+                    )
 
             annotation_set = AnnotationSet(
                 pdf_id=pdf_id,
@@ -193,16 +253,6 @@ async def analyze_paper(
         )
 
 
-    pending_result = await db.execute(
-        select(AutoHighlightCache.id).where(
-            AutoHighlightCache.pdf_id == data.pdf_id,
-            AutoHighlightCache.user_id == current_user.id,
-            AutoHighlightCache.status == "pending",
-        )
-    )
-    if pending_result.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Analysis already in progress.")
-
     # Resolve API key (fail fast on quota/auth errors)
     prefs_result = await db.execute(
         select(UserLLMPreferences.auto_highlight_model).where(
@@ -226,16 +276,36 @@ async def analyze_paper(
         provider, current_user.id,
     )
 
-    # Create pending cache entry
-    pending_cache = AutoHighlightCache(
-        pdf_id=data.pdf_id,
-        user_id=current_user.id,
-        categories=sorted_categories,
-        pages=resolved_pages,
-        status="pending",
-        provider=provider,
+    # Reuse existing failed entry or create new cache entry
+    existing_result = await db.execute(
+        select(AutoHighlightCache).where(
+            AutoHighlightCache.pdf_id == data.pdf_id,
+            AutoHighlightCache.user_id == current_user.id,
+            AutoHighlightCache.categories == sorted_categories,
+            AutoHighlightCache.pages == resolved_pages,
+        )
     )
-    db.add(pending_cache)
+    pending_cache = existing_result.scalar_one_or_none()
+
+    if pending_cache:
+        if pending_cache.status == "pending":
+            raise HTTPException(status_code=409, detail="Analysis already in progress.")
+        # Reuse failed/complete entry
+        pending_cache.status = "pending"
+        pending_cache.provider = provider
+        pending_cache.llm_response = None
+        pending_cache.annotation_set_id = None
+    else:
+        pending_cache = AutoHighlightCache(
+            pdf_id=data.pdf_id,
+            user_id=current_user.id,
+            categories=sorted_categories,
+            pages=resolved_pages,
+            status="pending",
+            provider=provider,
+        )
+        db.add(pending_cache)
+
     await db.commit()
     await db.refresh(pending_cache)
 
