@@ -411,7 +411,7 @@ class TestStreamMessage:
             mock_resolve.side_effect = HTTPException(status_code=402, detail="No API keys available")
 
             with patch(
-                "app.api.routes.chat.IndexingService",
+                "app.services.indexing_service.IndexingService",
                 return_value=mock_indexing,
             ):
                 response = await client.post(
@@ -504,11 +504,11 @@ class TestStreamMessage:
                     return_value=mock_llm_instance,
                 ):
                     with patch(
-                        "app.api.routes.chat.ChatService",
+                        "app.services.chat_orchestrator.ChatService",
                         return_value=mock_chat_instance,
                     ):
                         with patch(
-                            "app.api.routes.chat.IndexingService",
+                            "app.services.indexing_service.IndexingService",
                             return_value=mock_indexing,
                         ):
                             response = await client.post(
@@ -586,10 +586,10 @@ class TestStreamMessageOpenRouterRateLimit:
                 "app.api.routes.chat.LLMService",
                 return_value=mock_llm_instance,
             ), patch(
-                "app.api.routes.chat.ChatService",
+                "app.services.chat_orchestrator.ChatService",
                 return_value=mock_chat_instance,
             ), patch(
-                "app.api.routes.chat.IndexingService",
+                "app.services.indexing_service.IndexingService",
                 return_value=mock_indexing,
             ):
                 response = await client.post(
@@ -657,10 +657,10 @@ class TestStreamMessageOpenRouterRateLimit:
                 "app.api.routes.chat.LLMService",
                 return_value=mock_llm_instance,
             ), patch(
-                "app.api.routes.chat.ChatService",
+                "app.services.chat_orchestrator.ChatService",
                 return_value=mock_chat_instance,
             ), patch(
-                "app.api.routes.chat.IndexingService",
+                "app.services.indexing_service.IndexingService",
                 return_value=mock_indexing,
             ):
                 response = await client.post(
@@ -995,7 +995,7 @@ class TestOpenRouterQuotaGating:
                 "app.api.routes.chat.EmbeddingService",
                 return_value=mock_embed_instance,
             ), patch(
-                "app.api.routes.chat.IndexingService",
+                "app.services.indexing_service.IndexingService",
                 return_value=mock_indexing,
             ):
                 response = await client.post(
@@ -1071,7 +1071,7 @@ class TestOpenRouterQuotaGating:
                 "app.api.routes.chat.EmbeddingService",
                 return_value=mock_embed_instance,
             ), patch(
-                "app.api.routes.chat.IndexingService",
+                "app.services.indexing_service.IndexingService",
                 return_value=mock_indexing,
             ):
                 response = await client.post(
@@ -1139,10 +1139,10 @@ class TestOpenRouterQuotaGating:
                 "app.api.routes.chat.LLMService",
                 return_value=mock_llm_instance,
             ), patch(
-                "app.api.routes.chat.ChatService",
+                "app.services.chat_orchestrator.ChatService",
                 return_value=mock_chat_instance,
             ), patch(
-                "app.api.routes.chat.IndexingService",
+                "app.services.indexing_service.IndexingService",
                 return_value=mock_indexing,
             ):
                 response = await client.post(

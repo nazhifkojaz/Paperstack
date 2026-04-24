@@ -23,12 +23,11 @@ from app.db.models import (
     AnnotationSet,
     ChatConversation,
     ChatMessage,
-    Citation,
     Pdf,
     User,
 )
 from app.middleware.rate_limit import limiter
-from app.services.chat_service import ChatService, COLLECTION_SYSTEM_PROMPT
+from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
     EmbeddingError,
@@ -38,9 +37,7 @@ from app.services.exceptions import (
     OpenRouterQuotaError,
 )
 from app.services.explain_service import ExplainService
-from app.services.indexing_service import IndexingService
 from app.services.llm_service import LLMService
-from app.services.pdf_download_service import pdf_download_service
 from app.services.vector_search_service import vector_search_service
 from app.schemas.chat import (
     ConversationCreate,
@@ -213,140 +210,39 @@ async def stream_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-
     resolution = await resolve_api_key_with_quota(current_user, db, "chat")
-    provider = resolution.provider
-    api_key = resolution.api_key
 
     embedding_svc = EmbeddingService(http_client=embedding_client)
     llm_svc = LLMService(http_client=llm_client)
-    local_chat_service = ChatService(llm_service=llm_svc)
-    local_indexing_service = IndexingService(
-        download_service=pdf_download_service,
+    orchestrator = ChatOrchestrator(
         embedding_service=embedding_svc,
+        llm_service=llm_svc,
     )
 
+    # Prepare RAG context (embedding, indexing, vector search, citations)
     try:
-        query_vector = await embedding_svc.embed_query(data.content, db=db)
+        prepared = await orchestrator.prepare_context(
+            query=data.content,
+            pdf_id=conv.pdf_id,
+            collection_id=conv.collection_id,
+            user=current_user,
+            db=db,
+        )
     except OpenRouterQuotaError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
+    except IndexInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except (EmbeddingError, OpenRouterQuotaError, IndexingError) as exc:
+        raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "PDF not found.":
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=422, detail=msg)
 
-    # PDF path: verify ownership, lazy-index if needed, single-PDF search
-    # Collection path: multi-PDF search across indexed collection chunks
-    if conv.pdf_id is not None:
-        pdf_result = await db.execute(
-            select(Pdf).where(Pdf.id == conv.pdf_id, Pdf.user_id == current_user.id)
-        )
-        pdf_row = pdf_result.scalar_one_or_none()
-        if not pdf_row:
-            raise HTTPException(status_code=404, detail="PDF not found.")
-
-
-        index_status = await local_indexing_service.get_or_create_status(
-            str(conv.pdf_id), str(current_user.id), db
-        )
-
-        try:
-            await local_indexing_service.ensure_indexed(pdf_row, current_user, index_status, db)
-            await db.commit()
-        except IndexInProgressError as e:
-            raise HTTPException(status_code=409, detail=str(e))
-        except (EmbeddingError, OpenRouterQuotaError, IndexingError) as exc:
-            await db.commit()
-            raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
-
-        top_chunks = await vector_search_service.search_pdf(
-            query_vector=query_vector,
-            pdf_id=conv.pdf_id,
-            user_id=current_user.id,
-            top_k=settings.CHAT_TOP_K_SINGLE_PDF,
-            db=db,
-            query_text=data.content,
-        )
-        context = local_chat_service.build_context(
-            [{"page_number": c.page_number, "end_page_number": c.end_page_number, "content": c.content, "section_title": c.section_title} for c in top_chunks]
-        )
-
-        # Fetch citation metadata (authors, year) for this PDF
-        paper_metadata = None
-        citation_result = await db.execute(
-            select(Citation).where(
-                Citation.pdf_id == conv.pdf_id,
-                Citation.user_id == current_user.id,
-            )
-        )
-        citation_row = citation_result.scalar_one_or_none()
-        if citation_row:
-            paper_metadata = {
-                "title": pdf_row.title,
-                "authors": citation_row.authors,
-                "year": citation_row.year,
-            }
-        elif pdf_row.title:
-            paper_metadata = {"title": pdf_row.title}
-    else:
-        # Collection chat: search across all indexed PDFs in the collection
-        if conv.collection_id is None:
-            raise HTTPException(
-                status_code=422,
-                detail="Conversation has neither pdf_id nor collection_id.",
-            )
-
-        top_chunks = await vector_search_service.search_collection(
-            query_vector=query_vector,
-            collection_id=conv.collection_id,
-            user_id=current_user.id,
-            top_k=settings.CHAT_TOP_K_COLLECTION,
-            db=db,
-            query_text=data.content,
-        )
-        if not top_chunks:
-            raise HTTPException(
-                status_code=422,
-                detail="No indexed PDFs found in this collection. Open each PDF in the viewer and send a message to index it first.",
-            )
-        context_parts = []
-        for c in top_chunks:
-            end_page = getattr(c, "end_page_number", None)
-            if end_page and end_page > c.page_number:
-                page_label = f"Pages {c.page_number}-{end_page}"
-            else:
-                page_label = f"Page {c.page_number}"
-            context_parts.append(f"[{c.pdf_title}, {page_label}]\n{c.content}")
-        context = "\n\n---\n\n".join(context_parts)
-
-        # Fetch citation metadata for all unique PDFs in the collection results
-        unique_pdf_ids = {c.pdf_id for c in top_chunks if c.pdf_id}
-        paper_metadata = None
-        if unique_pdf_ids:
-            citation_rows = await db.execute(
-                select(Citation).where(
-                    Citation.pdf_id.in_(unique_pdf_ids),
-                    Citation.user_id == current_user.id,
-                )
-            )
-            citation_by_pdf = {
-                str(c.pdf_id): c for c in citation_rows.scalars().all()
-            }
-            seen_titles = set()
-            metadata_list = []
-            for c in top_chunks:
-                if not c.pdf_id or c.pdf_title in seen_titles:
-                    continue
-                seen_titles.add(c.pdf_title)
-                entry: dict[str, str] = {"title": c.pdf_title}
-                cit = citation_by_pdf.get(str(c.pdf_id))
-                if cit:
-                    if cit.authors:
-                        entry["authors"] = cit.authors
-                    if cit.year:
-                        entry["year"] = cit.year
-                metadata_list.append(entry)
-            if metadata_list:
-                paper_metadata = metadata_list
-
+    # Fetch history
     history_result = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.conversation_id == conversation_id)
@@ -355,96 +251,37 @@ async def stream_message(
     history = [
         {"role": m.role, "content": m.content} for m in history_result.scalars().all()
     ]
-    system_prompt, messages = local_chat_service.build_messages(
-        context,
-        history,
-        data.content,
-        base_prompt=COLLECTION_SYSTEM_PROMPT if conv.collection_id else None,
-        paper_metadata=paper_metadata,
+
+    # Build LLM messages
+    prepared_msgs = await orchestrator.build_messages(
+        context=prepared.context,
+        history=history,
+        user_message=data.content,
+        collection_id=conv.collection_id,
+        paper_metadata=prepared.paper_metadata,
     )
 
-
-    user_msg = ChatMessage(
+    # Persist user message
+    await orchestrator.persist_user_message(
         conversation_id=conversation_id,
-        role="user",
         content=data.content,
+        conv=conv,
+        db=db,
     )
-    db.add(user_msg)
-    if not conv.title:
-        truncated = data.content.strip()
-        conv.title = truncated[:60] + ("…" if len(truncated) > 60 else "")
-    await db.commit()
 
-
-    context_chunks_payload = [
-        {
-            "chunk_id": c.chunk_id,
-            "page_number": c.page_number,
-            "end_page_number": c.end_page_number,
-            "snippet": c.content[:200],
-            "section_title": c.section_title,
-            "section_level": c.section_level,
-            **({"pdf_id": c.pdf_id, "pdf_title": c.pdf_title} if c.pdf_id else {}),
-        }
-        for c in top_chunks
-    ]
-
+    # Stream response
     async def event_stream():
-        full_reply = []
-        assistant_message_id = str(uuid.uuid4())
-        try:
-            try:
-                async for token in local_chat_service.stream_reply(
-                    system_prompt, messages, provider, api_key,
-                    model=resolution.model,
-                ):
-                    full_reply.append(token)
-                    yield f"data: {json.dumps({'token': token})}\n\n"
-            except LLMRateLimitError:
-                yield f"data: {json.dumps({'error': 'Free tier rate limited. Please try again later or use your own API key.', 'code': 'rate_limited'})}\n\n"
-                return
-
-            # Persist assistant message synchronously before sending `done`.
-            # Saving as a background task (after the response is sent) created a race
-            # condition: if the user sent a second message before the task ran, the
-            # backend fetched history without the assistant reply and passed an invalid
-            # conversation thread to the LLM.
-            msg = ChatMessage(
-                id=uuid.UUID(assistant_message_id),
-                conversation_id=conversation_id,
-                role="assistant",
-                content="".join(full_reply),
-                context_chunks=[
-                    {
-                        "chunk_id": c["chunk_id"],
-                        "page_number": c["page_number"],
-                        "end_page_number": c.get("end_page_number"),
-                        "snippet": c["snippet"],
-                        "section_title": c.get("section_title"),
-                        "section_level": c.get("section_level"),
-                        **(
-                            {"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]}
-                            if c.get("pdf_id")
-                            else {}
-                        ),
-                    }
-                    for c in context_chunks_payload
-                ],
-            )
-            db.add(msg)
-            await db.commit()
-            logger.info(
-                "Saved assistant message for conversation %s (%d chars, %d chunks)",
-                conversation_id,
-                len("".join(full_reply)),
-                len(context_chunks_payload),
-            )
-
-            yield f"data: {json.dumps({'done': True, 'message_id': assistant_message_id, 'context_chunks': context_chunks_payload})}\n\n"
-
-        except Exception as exc:
-            logger.exception("Streaming error for conversation %s", conversation_id)
-            yield f"data: {json.dumps({'error': str(exc), 'code': 'stream_error'})}\n\n"
+        async for event in orchestrator.stream_and_save(
+            system_prompt=prepared_msgs.system_prompt,
+            messages=prepared_msgs.messages,
+            provider=resolution.provider,
+            api_key=resolution.api_key,
+            model=resolution.model,
+            conversation_id=conversation_id,
+            context_chunks_payload=prepared.context_chunks_payload,
+            db=db,
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
         event_stream(),
