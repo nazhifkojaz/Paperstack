@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, List, Optional
+from typing import List, Optional
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +39,7 @@ async def upload_pdf(
     project_ids: str = Form(None),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfResponse:
     """Upload a new PDF to the user's active storage backend."""
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
@@ -92,7 +92,7 @@ async def check_pdf_url(
     request: Request,
     data: PdfUrlCheckRequest,
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfUrlCheckResponse:
     """Validate a URL points to a viewable PDF before adding it."""
     url_str = str(data.url)
 
@@ -160,7 +160,7 @@ async def link_pdf(
     data: PdfLinkCreate,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfResponse:
     """Create a PDF entry from an external URL (no file upload/storage)."""
     pdf_id = uuid.uuid4()
     filename = f"linked/{pdf_id}"
@@ -199,7 +199,7 @@ async def list_pdfs(
     params: PdfListParams = Depends(),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> List[PdfResponse]:
     """List PDFs with filtering, sorting, and pagination."""
     query = select(Pdf).where(Pdf.user_id == current_user.id)
 
@@ -231,7 +231,7 @@ async def get_pdf(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfResponse:
     """Get a specific PDF by ID."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
@@ -245,7 +245,7 @@ async def update_pdf(
     pdf_in: PdfUpdate,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfResponse:
     """Update a PDF's metadata."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
@@ -265,7 +265,7 @@ async def delete_pdf(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, str]:
     """Delete a PDF from both the database and its storage backend."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
@@ -286,7 +286,7 @@ async def get_pdf_content(
     request: Request,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> Response:
     """Fetch raw PDF content from the user's storage backend.
 
     Uses ETag caching based on the storage file identifier.
@@ -317,7 +317,7 @@ async def get_pdf_collections(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, list[str]]:
     """Get all collections a PDF belongs to."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
@@ -334,7 +334,7 @@ async def export_annotated_pdf(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> Response:
     """Fetch the PDF, overlay annotations, and return the baked PDF."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:

@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, List
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -19,7 +19,7 @@ async def create_collection(
     collection_in: CollectionCreate,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> CollectionResponse:
     """Create a new collection."""
     if collection_in.parent_id:
         parent = await db.get(Collection, collection_in.parent_id)
@@ -41,7 +41,7 @@ async def create_collection(
 async def list_collections(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> List[CollectionResponse]:
     """List all collections for the user."""
     query = select(Collection).where(Collection.user_id == current_user.id).order_by(Collection.position)
     result = await db.execute(query)
@@ -53,7 +53,7 @@ async def update_collection(
     collection_in: CollectionUpdate,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> CollectionResponse:
     """Update a collection."""
     collection = await db.get(Collection, collection_id)
     if not collection or collection.user_id != current_user.id:
@@ -78,7 +78,7 @@ async def delete_collection(
     collection_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, str]:
     """Delete a collection."""
     collection = await db.get(Collection, collection_id)
     if not collection or collection.user_id != current_user.id:
@@ -94,7 +94,7 @@ async def add_pdf_to_collection(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, str]:
     """Add a PDF to a collection."""
     collection = await db.get(Collection, collection_id)
     if not collection or collection.user_id != current_user.id:
@@ -127,7 +127,7 @@ async def remove_pdf_from_collection(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, str]:
     """Remove a PDF from a collection."""
     collection = await db.get(Collection, collection_id)
     if not collection or collection.user_id != current_user.id:
