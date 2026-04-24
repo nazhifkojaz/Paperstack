@@ -124,10 +124,7 @@ def _deduplicate_chunks(
 
 
 class ChatService:
-    """Chat service for building RAG context and streaming LLM replies.
-
-    Accepts an optional LLMService instance for dependency injection.
-    """
+    """Builds RAG context and streams LLM replies."""
 
     def __init__(self, llm_service: LLMService | None = None):
         self._llm_service = llm_service or LLMService()
@@ -135,11 +132,7 @@ class ChatService:
     def build_context(
         self, chunks: list[dict], max_tokens: int = DEFAULT_CONTEXT_MAX_TOKENS
     ) -> str:
-        """Format retrieved chunks into a context string for the LLM prompt.
-
-        Respects a token budget (max_tokens). Chunks that would exceed the
-        budget are truncated with a marker; subsequent chunks are dropped.
-        """
+        """Format chunks into context string respecting token budget."""
         deduped = _deduplicate_chunks(chunks)
         parts = []
         total_tokens = 0
@@ -176,11 +169,7 @@ class ChatService:
         base_prompt: str | None = None,
         paper_metadata: dict | list[dict] | None = None,
     ) -> tuple[str, list[dict]]:
-        """Build system prompt and message list for the LLM.
-
-        The system prompt embeds the retrieved context so every provider
-        receives it the same way regardless of their message format.
-        """
+        """Build system prompt and message list for LLM."""
         metadata_section = _format_paper_metadata(paper_metadata)
         parts = [base_prompt or SYSTEM_PROMPT]
         if metadata_section:

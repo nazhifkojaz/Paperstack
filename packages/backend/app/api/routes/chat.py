@@ -62,7 +62,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# Conversation endpoints
 
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
@@ -194,7 +193,6 @@ async def delete_conversation(
     await db.commit()
 
 
-# Streaming endpoint
 
 
 @router.post("/conversations/{conversation_id}/stream")
@@ -219,7 +217,7 @@ async def stream_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    # Check user's model preference for chat
+
     chat_prefs_result = await db.execute(
         select(UserLLMPreferences.chat_model).where(
             UserLLMPreferences.user_id == current_user.id
@@ -272,18 +270,18 @@ async def stream_message(
         if not pdf_row:
             raise HTTPException(status_code=404, detail="PDF not found.")
 
-        # Get or create index status
+
         index_status = await local_indexing_service.get_or_create_status(
             str(conv.pdf_id), str(current_user.id), db
         )
 
-        # Handle stale/active indexing
+
         try:
             was_reset = await local_indexing_service.reset_if_stale(index_status, db)  # noqa: F841
         except IndexInProgressError as e:
             raise HTTPException(status_code=409, detail=str(e))
 
-        # Handle failed indexing
+
         if index_status.status == "failed":
             logger.info(
                 "Resetting failed index status for pdf %s (user %s) to allow re-index retry",
@@ -294,7 +292,7 @@ async def stream_message(
             index_status.error_message = None
             await db.flush()
 
-        # Lazy index if needed
+
         if index_status.status == "not_indexed":
             try:
                 await local_indexing_service.index_pdf(
@@ -411,7 +409,7 @@ async def stream_message(
         paper_metadata=paper_metadata,
     )
 
-    # Save user message and auto-title the conversation on first message
+
     user_msg = ChatMessage(
         conversation_id=conversation_id,
         role="user",
@@ -423,7 +421,7 @@ async def stream_message(
         conv.title = truncated[:60] + ("…" if len(truncated) > 60 else "")
     await db.commit()
 
-    # Build context_chunks payload for SSE done event
+
     context_chunks_payload = [
         {
             "chunk_id": c.chunk_id,
@@ -504,7 +502,6 @@ async def stream_message(
     )
 
 
-# Semantic search
 
 
 @router.post("/semantic-search", response_model=list[SemanticSearchResult])
@@ -556,7 +553,6 @@ async def semantic_search(
     ]
 
 
-# Explain endpoint
 
 
 @router.post("/explain", response_model=ExplainResponse)
@@ -594,7 +590,7 @@ async def explain_annotation(
     if not pdf_row:
         raise HTTPException(status_code=404, detail="PDF not found.")
 
-    # Check user's model preference for explain
+
     explain_prefs_result = await db.execute(
         select(UserLLMPreferences.explain_model).where(
             UserLLMPreferences.user_id == current_user.id

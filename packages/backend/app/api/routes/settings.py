@@ -85,7 +85,6 @@ async def get_connected_accounts(
     )
 
 
-# --- LLM model preferences ---
 
 
 class LLMModelResponse(BaseModel):

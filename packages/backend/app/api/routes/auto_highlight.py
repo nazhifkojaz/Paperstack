@@ -70,7 +70,7 @@ async def _run_analysis_background(
     tmp_path: Path | None = None
     async with SessionLocal() as db:
         try:
-            # Fetch user (needed for storage backend)
+
             user_result = await db.execute(
                 select(User).where(User.id == user_id)
             )
@@ -85,7 +85,7 @@ async def _run_analysis_background(
             if not pdf_row:
                 raise ValueError("PDF not found")
 
-            # Download PDF
+
             from app.services.pdf_download_service import pdf_download_service
 
             if pdf_row.source_url and not pdf_row.github_sha and not pdf_row.drive_file_id:
@@ -153,7 +153,7 @@ async def _run_analysis_background(
         except Exception as e:
             logger.exception("Background analysis failed: cache_id=%s", cache_id)
             try:
-                # Roll back any partial work before updating status
+
                 await db.rollback()
                 cache_result = await db.execute(
                     select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
@@ -192,7 +192,7 @@ async def analyze_paper(
             detail=f"Cannot analyze more than {_MAX_PAGES} pages at once",
         )
 
-    # Reject if any analysis is already pending for this PDF + user
+
     pending_result = await db.execute(
         select(AutoHighlightCache.id).where(
             AutoHighlightCache.pdf_id == data.pdf_id,

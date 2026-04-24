@@ -16,7 +16,6 @@ from app.middleware.rate_limit import limiter
 router = APIRouter()
 
 
-# Shared upsert helper — called by both OAuth callbacks
 
 
 async def _upsert_oauth_user(
@@ -32,13 +31,7 @@ async def _upsert_oauth_user(
     token_expires_at: Optional[datetime],
     extra_data: dict,
 ) -> User:
-    """Find or create a User and its linked UserOAuthAccount.
-
-    Account-linking strategy (in order):
-    1. Look up existing UserOAuthAccount by (provider, provider_user_id) — update it.
-    2. If not found, look up User by email — link a new UserOAuthAccount to it.
-    3. If still not found, create a new User + UserOAuthAccount.
-    """
+    """Upsert user and linked OAuth account. Returns existing or new User."""
     stmt = select(UserOAuthAccount).where(
         UserOAuthAccount.provider == provider,
         UserOAuthAccount.provider_user_id == provider_user_id,
@@ -136,7 +129,6 @@ def _redirect_with_tokens(user: User) -> RedirectResponse:
     return RedirectResponse(redirect_url)
 
 
-# GitHub OAuth
 
 
 @router.get("/github/login")
@@ -184,7 +176,6 @@ async def github_callback(
     return _redirect_with_tokens(user)
 
 
-# Google OAuth
 
 
 @router.get("/google/login")
@@ -240,7 +231,6 @@ async def google_callback(
     return _redirect_with_tokens(user)
 
 
-# Token refresh, /me, logout
 
 
 @router.post("/refresh", response_model=Token)
