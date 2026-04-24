@@ -5,13 +5,6 @@ import type { TextLayerHandle } from '@/features/viewer/TextLayer';
 import { collectTextNodes, rangeToRects } from '@/features/viewer/pdfTextUtils';
 import type { PdfRectData, Rect, TextNode } from '@/features/viewer/pdfTextUtils';
 
-interface ResolvedAnnotation extends Annotation {
-    _resolved?: boolean;
-    _unmatched?: boolean;
-}
-
-// Module-level state
-
 /**
  * Tracks annotation IDs that have already been patched to the server.
  * Module-level so all AnnotationOverlay instances share it and don't race.
@@ -28,24 +21,12 @@ const _globalPatchedIds = new Set<string>();
  */
 const _globalUnmatchedIds = new Set<string>();
 
-// Hook
+interface ResolvedAnnotation extends Annotation {
+    _resolved?: boolean;
+    _unmatched?: boolean;
+}
 
-/**
- * Resolves auto-highlight annotations that have empty rects by searching
- * for their selected_text in the TextLayer DOM.
- *
- * Strategy:
- *   Tier 1 - exact substring match
- *   Tier 2 - normalized match (Unicode, whitespace, ligatures, bullets)
- *   Tier 3 - longest-common-subsequence word match (configurable threshold)
- *
- * Also tries +/-1 neighboring pages to compensate for LLM page-number errors,
- * but only when no match is found on the assigned page, and with a stricter
- * threshold (0.75 vs 0.6).
- *
- * Annotations that cannot be matched are flagged with _unmatched: true so the
- * sidebar can display them with a "Could not locate in PDF" indicator.
- */
+/** Resolves auto-highlight annotations with empty rects by searching TextLayer DOM. Tries exact, normalized, and word-LCS matches. */
 export function useTextMatcher(
     annotations: Annotation[],
     pageNumber: number,
@@ -63,7 +44,7 @@ export function useTextMatcher(
         const container = handle.getContainer();
         if (!container) return;
 
-        // Annotations assigned to this exact page
+
         const ownPageAnns = annotations.filter(
             a =>
                 a.rects.length === 0 &&
@@ -73,7 +54,7 @@ export function useTextMatcher(
                 !_globalUnmatchedIds.has(a.id),
         );
 
-        // Neighbor annotations (page +/-1) — only tried as fallback with stricter threshold
+
         const neighborAnns = annotations.filter(
             a =>
                 a.rects.length === 0 &&
@@ -96,7 +77,7 @@ export function useTextMatcher(
             const { textNodes, fullText } = collectTextNodes(container);
             if (fullText.length === 0) return;
 
-            // Get PDF coordinate data for precise rect computation
+
             const textItems = handle.getTextItems();
             const spanToItemMap = handle.getSpanToItemMap();
             const viewportScale = handle.getViewportScale();
@@ -108,7 +89,7 @@ export function useTextMatcher(
             const newResolved = new Map<string, { rects: Rect[]; page: number }>();
             const newUnmatched = new Set<string>();
 
-            // Pass 1: Own-page annotations with standard threshold (0.6)
+
             for (const ann of ownPageAnns) {
                 if (!ann.selected_text) continue;
 
@@ -125,7 +106,7 @@ export function useTextMatcher(
                 newResolved.set(ann.id, { rects: validRects, page: pageNumber });
             }
 
-            // Pass 2: Neighbor annotations with stricter threshold (0.75)
+
             for (const ann of neighborAnns) {
                 if (!ann.selected_text || _globalPatchedIds.has(ann.id)) continue;
 
@@ -139,10 +120,10 @@ export function useTextMatcher(
                 newResolved.set(ann.id, { rects: validRects, page: pageNumber });
             }
 
-            // Check cancelled before any mutations or state updates
+
             if (cancelled) return;
 
-            // Persist resolved annotations to the server
+
             for (const [annId, entry] of newResolved) {
                 if (_globalPatchedIds.has(annId)) continue;
                 _globalPatchedIds.add(annId);
@@ -155,12 +136,12 @@ export function useTextMatcher(
                 patchAnnotation({ id: annId, data: patchData });
             }
 
-            // Gate future effect runs: never re-walk the DOM for permanently unmatched IDs
+
             for (const id of newUnmatched) {
                 _globalUnmatchedIds.add(id);
             }
 
-            // Update unmatched tracking — prune IDs that were resolved
+
             setUnmatchedIds(prev => new Set(
                 [...prev, ...newUnmatched]
                     .filter(id => !newResolved.has(id)),
@@ -196,12 +177,7 @@ export function useTextMatcher(
     });
 }
 
-// Text normalization
-
-/**
- * Simple normalization for the search text (needle).
- * Used by Tier 2 to normalize the search query for comparison.
- */
+/** Normalize text for search: NFKC, whitespace, ligatures, bullets. */
 export function normalize(text: string): string {
     return text
         .normalize('NFKC')
@@ -218,14 +194,7 @@ export function normalize(text: string): string {
         .toLowerCase();
 }
 
-/**
- * Build normalized string with a mapping back to original fullText indices.
- *
- * Key difference from the old implementation: we iterate fullText directly
- * (not a pre-NFKC copy) so toOrig always indexes into the original string.
- * Ligature expansion maps the second char to origPos + charLen (the position
- * of the next original character) to avoid zero-length ranges.
- */
+/** Build normalized string with mapping back to original indices for ligature handling. */
 export function buildNormMap(fullText: string): { norm: string; toOrig: number[] } {
     const chars: string[] = [];
     const toOrig: number[] = [];
@@ -294,16 +263,7 @@ export function buildNormMap(fullText: string): { norm: string; toOrig: number[]
     return { norm: chars.join(''), toOrig };
 }
 
-// Matching
-
-/**
- * Core matching function. Returns rects or empty array.
- *
- * @param wordMatchThreshold - minimum fraction of needle words that must
- *   match in-order for Tier 3 (word LCS). Default 0.6 for own-page,
- *   use 0.75 for neighbor-page fallback.
- * @param pdfData - optional PDF coordinate data for precise rect computation
- */
+/** Core matching: exact → normalized → word-LCS. Returns rects or empty array. */
 function findTextInDom(
     textNodes: TextNode[],
     fullText: string,
@@ -339,18 +299,7 @@ function findTextInDom(
     return [];
 }
 
-/**
- * Word-level longest-common-subsequence matching.
- *
- * 1. Tokenize both needle and haystack into words (with positions).
- * 2. Greedy in-order matching: for each needle word, find next occurrence
- *    in haystack after the previous match.
- * 3. If >= minScore of needle words matched in order, return the haystack span
- *    covering first-to-last matched word.
- * 4. Sanity check: span must be within 50-200% of expected length.
- *
- * @param minScore - minimum fraction of needle words required (default 0.6)
- */
+/** Word-level LCS matching with greedy in-order algorithm. Returns span or null. */
 export function wordLcsMatch(
     normFull: string,
     normSearch: string,
