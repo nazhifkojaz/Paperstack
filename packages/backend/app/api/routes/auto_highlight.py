@@ -10,26 +10,20 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_current_user, resolve_api_key_with_quota
 from app.core.config import settings
 from app.core.http_client import HTTPClientState
 from app.db.engine import SessionLocal
 from app.db.models import (
     User, Pdf, Annotation, AnnotationSet, AutoHighlightCache,
-    UserUsageQuota, UserApiKey, UserLLMPreferences,
+    UserUsageQuota, UserApiKey,
 )
 from app.middleware.rate_limit import limiter
 from app.schemas.auto_highlight import (
     AutoHighlightRequest, AutoHighlightResponse,
     AutoHighlightCacheResponse, QuotaResponse,
 )
-from app.services.api_key_service import api_key_service
-from app.services.exceptions import (
-    ApiKeyNotFoundError,
-    QuotaExhaustedError,
-)
 from app.services.llm_service import LLMService, CATEGORY_COLORS
-from app.services.pdf_download_service import PdfSource
 from app.services.text_extractor import extract_text_with_pages, is_text_pdf
 
 logger = logging.getLogger(__name__)
@@ -114,18 +108,10 @@ async def _run_analysis_background(
 
 
             from app.services.pdf_download_service import pdf_download_service
+            from app.services.indexing_service import IndexingService
 
-            if pdf_row.source_url and not pdf_row.github_sha and not pdf_row.drive_file_id:
-                download_result = await pdf_download_service.download_to_tempfile(
-                    source=PdfSource.EXTERNAL_URL,
-                    external_url=pdf_row.source_url,
-                )
-                tmp_path = download_result.file_path
-            else:
-                from app.services.storage.factory import get_storage_backend
-                backend = await get_storage_backend(user, db)
-                file_id = pdf_row.drive_file_id or pdf_row.github_sha
-                tmp_path = await backend.download_to_tempfile(file_id, pdf_row.filename)
+            idx_service = IndexingService(download_service=pdf_download_service)
+            tmp_path = await idx_service.download_pdf_for_row(pdf_row, user, db)
 
             with open(tmp_path, "rb") as f:
                 paper_text, total_pages, pages_analyzed = extract_text_with_pages(
@@ -254,20 +240,9 @@ async def analyze_paper(
 
 
     # Resolve API key (fail fast on quota/auth errors)
-    prefs_result = await db.execute(
-        select(UserLLMPreferences.auto_highlight_model).where(
-            UserLLMPreferences.user_id == current_user.id
-        )
+    resolution = await resolve_api_key_with_quota(
+        current_user, db, "auto_highlight", check_openrouter_quota=False,
     )
-    preferred_model = prefs_result.scalar_one_or_none()
-
-    try:
-        resolution = await api_key_service.resolve_for_auto_highlight(
-            current_user, db, force_free_model=preferred_model
-        )
-    except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
-        raise HTTPException(status_code=402, detail=str(e))
-
     provider = resolution.provider
     api_key = resolution.api_key
     model = resolution.model
