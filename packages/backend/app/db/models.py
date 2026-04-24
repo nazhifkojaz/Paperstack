@@ -30,14 +30,14 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    # Legacy GitHub fields — kept nullable for rollback safety; moved to UserOAuthAccount
+    # Deprecated: GitHub OAuth moved to UserOAuthAccount
     github_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, unique=True, nullable=True
     )
     github_login: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     access_token: Mapped[Optional[str]] = mapped_column(
         String, nullable=True
-    )  # legacy encrypted token
+    )  # deprecated encrypted token
     repo_created: Mapped[bool] = mapped_column(Boolean, default=False)
     # Provider-agnostic fields
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

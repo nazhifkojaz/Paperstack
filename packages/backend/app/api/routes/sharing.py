@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.api.deps import get_db, get_current_user
-from app.db.models import User, Share, AnnotationSet, Annotation, Pdf
+from app.db.models import User, Share, AnnotationSet, Annotation, Pdf, UserOAuthAccount
 from app.services.pdf_download_service import pdf_download_service, PdfSource
 from app.services.storage.factory import get_storage_backend
 from app.schemas.sharing import (
@@ -41,7 +41,14 @@ async def create_share(
     shared_with_id: Optional[UUID] = None
     target_user: Optional[User] = None
     if share_in.shared_with_github_login:
-        stmt_user = select(User).where(User.github_login == share_in.shared_with_github_login)
+        stmt_user = (
+            select(User)
+            .join(UserOAuthAccount)
+            .where(
+                UserOAuthAccount.provider == "github",
+                UserOAuthAccount.extra_data["github_login"].astext == share_in.shared_with_github_login,
+            )
+        )
         target_user = (await db.execute(stmt_user)).scalar_one_or_none()
         if not target_user:
             raise HTTPException(
@@ -67,7 +74,7 @@ async def create_share(
         annotation_set_id=share.annotation_set_id,
         shared_by=share.shared_by,
         shared_with=share.shared_with,
-        shared_with_github_login=target_user.github_login if target_user else None,
+        shared_with_github_login=share_in.shared_with_github_login if target_user else None,
         share_token=share.share_token,
         permission=share.permission,
         created_at=share.created_at,
@@ -89,8 +96,12 @@ async def get_shares_for_set(
         raise HTTPException(status_code=404, detail="Annotation set not found")
 
     stmt = (
-        select(Share, User)
+        select(Share, User, UserOAuthAccount.extra_data["github_login"].astext)
         .outerjoin(User, User.id == Share.shared_with)
+        .outerjoin(
+            UserOAuthAccount,
+            (UserOAuthAccount.user_id == User.id) & (UserOAuthAccount.provider == "github"),
+        )
         .where(Share.annotation_set_id == set_id)
         .order_by(Share.created_at.desc())
     )
@@ -102,12 +113,12 @@ async def get_shares_for_set(
             annotation_set_id=share.annotation_set_id,
             shared_by=share.shared_by,
             shared_with=share.shared_with,
-            shared_with_github_login=shared_with_user.github_login if shared_with_user else None,
+            shared_with_github_login=github_login if shared_with_user else None,
             share_token=share.share_token,
             permission=share.permission,
             created_at=share.created_at,
         )
-        for share, shared_with_user in rows
+        for share, shared_with_user, github_login in rows
     ]
 
 
