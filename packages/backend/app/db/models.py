@@ -1,6 +1,8 @@
 from datetime import date, datetime
 from typing import Optional, Any
 import uuid
+
+from app.schemas.types import ContextChunkDict
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -154,7 +156,7 @@ class Annotation(Base):
     )
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     type: Mapped[str] = mapped_column(String(20), nullable=False)
-    rects: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    rects: Mapped[list[dict[str, float]]] = mapped_column(JSONB, nullable=False)
     selected_text: Mapped[Optional[str]] = mapped_column(Text)
     note_content: Mapped[Optional[str]] = mapped_column(Text)
     color: Mapped[Optional[str]] = mapped_column(String(7))
@@ -326,8 +328,8 @@ class AutoHighlightCache(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    categories: Mapped[Any] = mapped_column(JSONB, nullable=False)
-    pages: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    categories: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    pages: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
     )  # 'pending' | 'complete' | 'failed'
@@ -404,7 +406,7 @@ class PdfChunk(Base):
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     end_page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Optional[Any]] = mapped_column(HALFVEC(2048))
+    embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(2048))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     section_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     search_vector = Column(TSVECTOR, Computed("to_tsvector('english', content)"), nullable=True)
@@ -450,7 +452,7 @@ class ChatMessage(Base):
         String(10), nullable=False
     )  # 'user' | 'assistant'
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    context_chunks: Mapped[Optional[Any]] = mapped_column(
+    context_chunks: Mapped[Optional[list[ContextChunkDict]]] = mapped_column(
         JSONB
     )  # [{chunk_id, page_number, snippet}]
     created_at: Mapped[datetime] = mapped_column(
