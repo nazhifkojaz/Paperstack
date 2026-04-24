@@ -22,8 +22,8 @@ def extract_title_from_bytes(file_bytes: bytes) -> Optional[str]:
         reader = PdfReader(io.BytesIO(file_bytes))
         if reader.metadata:
             return reader.metadata.get("/Title")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Could not extract PDF title: %s", exc)
     return None
 
 def get_pdf_file_size(file_bytes: bytes) -> int:

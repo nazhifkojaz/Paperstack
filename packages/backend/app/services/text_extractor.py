@@ -1,11 +1,14 @@
 """PDF text extraction with page markers, using PyMuPDF for layout-aware extraction."""
 
+import logging
 import re
 from dataclasses import dataclass
 from io import BytesIO
 from typing import BinaryIO, Optional, Union
 
 import pymupdf  # PyMuPDF >= 1.27
+
+logger = logging.getLogger(__name__)
 
 MAX_TEXT_LENGTH = 500_000
 
@@ -168,9 +171,8 @@ def _extract_tables_from_page(page: pymupdf.Page) -> list[dict]:
                     "markdown": md,
                 }
             )
-    except Exception:
-        # Table detection is best-effort; fall back to plain text extraction
-        pass
+    except Exception as exc:
+        logger.debug("Table detection failed on page: %s", exc)
 
     return tables
 

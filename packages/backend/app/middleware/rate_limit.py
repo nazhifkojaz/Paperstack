@@ -1,9 +1,13 @@
 """Rate limiting middleware for Paperstack backend."""
+import logging
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+
+logger = logging.getLogger(__name__)
 
 
 def get_identifier(request: Request) -> str:
@@ -46,8 +50,8 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
             )
             reset_in = 1 + window_stats[0]
             remaining = window_stats[1]  # noqa: F841
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not get rate limit window stats: %s", exc)
 
     retry_after = max(1, int(reset_in - time.time()))
 
