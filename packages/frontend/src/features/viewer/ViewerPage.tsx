@@ -63,9 +63,8 @@ export function ViewerPage() {
     useKeyboardShortcuts();
     useGlobalSelectionClear();
 
-    // Dev-only FPS counter: show in dev mode, or when `?fps=1` is in the URL
-    const showFps = import.meta.env.DEV ||
-        new URLSearchParams(window.location.search).get('fps') === '1';
+    // FPS counter: only when `?fps=1` is in the URL
+    const showFps = new URLSearchParams(window.location.search).get('fps') === '1';
 
     const { data: pdfMetadata, isLoading: isLoadingMetadata } = usePdf(id!);
     const { blob, sourceUrl, isLoading: isLoadingContent, error, isLinked } = usePdfSource(pdfMetadata);
