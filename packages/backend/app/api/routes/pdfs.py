@@ -1,12 +1,15 @@
 import uuid
 from typing import Any, List, Optional
+import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, asc
 
 from app.api import deps
+from app.core.config import settings
 from app.db.models import User, Pdf, PdfCollection, PdfTag, Collection, Annotation, AnnotationSet
-from app.schemas.pdf import PdfResponse, PdfUpdate, PdfListParams, PdfLinkCreate
+from app.middleware.rate_limit import limiter
+from app.schemas.pdf import PdfResponse, PdfUpdate, PdfListParams, PdfLinkCreate, PdfUrlCheckRequest, PdfUrlCheckResponse
 from app.services import pdf_metadata
 from app.services.storage.factory import get_storage_backend
 
@@ -81,6 +84,75 @@ async def upload_pdf(
     await db.commit()
     await db.refresh(pdf)
     return pdf
+
+
+@router.post("/check-url", response_model=PdfUrlCheckResponse)
+@limiter.limit(settings.RATE_LIMIT_PDF_CHECK_URL)
+async def check_pdf_url(
+    request: Request,
+    data: PdfUrlCheckRequest,
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """Validate a URL points to a viewable PDF before adding it."""
+    url_str = str(data.url)
+
+    # Phase 1: HEAD request to check reachability and content-type
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        try:
+            head_resp = await client.head(url_str)
+        except httpx.TimeoutException:
+            return PdfUrlCheckResponse(valid=False, error="Server took too long to respond (timed out after 30 seconds).")
+        except httpx.ConnectError:
+            return PdfUrlCheckResponse(valid=False, error="Could not reach the server. Check the URL and try again.")
+        except httpx.HTTPError as exc:
+            return PdfUrlCheckResponse(valid=False, error=f"Failed to connect: {exc}")
+
+        if head_resp.status_code != 200:
+            return PdfUrlCheckResponse(valid=False, error=f"Server returned HTTP {head_resp.status_code}. The file may not exist at this URL.")
+
+        content_type = head_resp.headers.get("content-type", "").lower()
+        if "application/pdf" not in content_type and "application/x-pdf" not in content_type:
+            return PdfUrlCheckResponse(
+                valid=False,
+                error=f"URL does not point to a PDF file (Content-Type: {content_type or 'unknown'})",
+            )
+
+        # Phase 2: GET to check CORS and extract metadata
+        try:
+            get_resp = await client.get(url_str)
+        except httpx.HTTPError:
+            return PdfUrlCheckResponse(valid=False, error="Failed to download the PDF content.")
+
+        file_bytes = get_resp.content
+        if not file_bytes.startswith(b"%PDF-"):
+            return PdfUrlCheckResponse(valid=False, error="Content is not a valid PDF file.")
+
+        # CORS check
+        acao = get_resp.headers.get("access-control-allow-origin", "")
+        cors_ok = acao == "*" or (acao and settings.FRONTEND_URL in acao)
+        if not cors_ok:
+            return PdfUrlCheckResponse(
+                valid=False,
+                cors_blocked=True,
+                error="This PDF cannot be loaded directly in the browser due to server restrictions (CORS).",
+                suggestions=[
+                    "Download the PDF and upload it manually using the Upload tab",
+                    "Find an alternative URL that allows cross-origin access",
+                ],
+            )
+
+        # Extract metadata
+        page_count = pdf_metadata.extract_page_count(file_bytes)
+        file_size = len(file_bytes)
+        title = pdf_metadata.extract_title_from_bytes(file_bytes)
+
+        return PdfUrlCheckResponse(
+            valid=True,
+            page_count=page_count,
+            file_size=file_size,
+            title=title,
+            cors_blocked=False,
+        )
 
 
 @router.post("/link", response_model=PdfResponse)

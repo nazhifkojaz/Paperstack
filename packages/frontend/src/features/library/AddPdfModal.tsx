@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, Link as LinkIcon, Loader2 } from 'lucide-react';
-import { useUploadPdf, useLinkPdf } from '@/api/pdfs';
+import { Upload, Link as LinkIcon, Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
+import { useUploadPdf, useLinkPdf, useCheckPdfUrl, PdfUrlCheckResponse } from '@/api/pdfs';
 import { toast } from 'sonner';
 import {
     Dialog,
@@ -21,6 +21,13 @@ interface AddPdfModalProps {
     onOpenChange: (open: boolean) => void;
 }
 
+function formatFileSize(bytes: number | null | undefined): string {
+    if (!bytes) return 'unknown size';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
     // Upload File tab state
     const [file, setFile] = useState<File | null>(null);
@@ -32,8 +39,13 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
     const [urlTitle, setUrlTitle] = useState('');
     const [urlProjectIds, setUrlProjectIds] = useState<string[]>([]);
 
+    // URL check state
+    const [checkResult, setCheckResult] = useState<PdfUrlCheckResponse | null>(null);
+    const [checkError, setCheckError] = useState<string | null>(null);
+
     const uploadMutation = useUploadPdf();
     const linkMutation = useLinkPdf();
+    const checkUrlMutation = useCheckPdfUrl();
 
     const resetState = () => {
         setFile(null);
@@ -42,6 +54,8 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
         setUrl('');
         setUrlTitle('');
         setUrlProjectIds([]);
+        setCheckResult(null);
+        setCheckError(null);
     };
 
     const handleOpenChange = (nextOpen: boolean) => {
@@ -91,7 +105,7 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
     };
 
     const handleLink = async () => {
-        if (!url.trim() || !urlTitle.trim()) return;
+        if (!url.trim() || !urlTitle.trim() || !checkResult?.valid) return;
 
         try {
             await toast.promise(linkMutation.mutateAsync({
@@ -106,6 +120,30 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
             handleOpenChange(false);
         } catch {
             // error already shown by toast
+        }
+    };
+
+    const handleUrlChange = (value: string) => {
+        setUrl(value);
+        if (checkResult || checkError) {
+            setCheckResult(null);
+            setCheckError(null);
+        }
+    };
+
+    const handleCheckUrl = async () => {
+        if (!url.trim()) return;
+        setCheckResult(null);
+        setCheckError(null);
+
+        try {
+            const result = await checkUrlMutation.mutateAsync(url.trim());
+            setCheckResult(result);
+            if (result.valid && result.title && !urlTitle.trim()) {
+                setUrlTitle(result.title);
+            }
+        } catch (err) {
+            setCheckError(err instanceof Error ? err.message : 'Failed to check URL');
         }
     };
 
@@ -198,19 +236,74 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
                     </TabsContent>
 
                     <TabsContent value="url" className="space-y-4 mt-4">
-                        {/* URL */}
+                        {/* URL + Check button */}
                         <div className="space-y-2">
                             <Label htmlFor="pdf-url">PDF URL</Label>
-                            <Input
-                                id="pdf-url"
-                                type="url"
-                                placeholder="https://arxiv.org/pdf/2301.00001.pdf"
-                                value={url}
-                                onChange={(e) => setUrl(e.target.value)}
-                            />
-                            <p className="text-xs text-muted-foreground">
-                                Direct link to a PDF file. The PDF will be loaded from this URL each time you open it.
-                            </p>
+                            <div className="flex gap-2">
+                                <Input
+                                    id="pdf-url"
+                                    type="url"
+                                    placeholder="https://arxiv.org/pdf/2301.00001.pdf"
+                                    value={url}
+                                    onChange={(e) => handleUrlChange(e.target.value)}
+                                    className="flex-1"
+                                />
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleCheckUrl}
+                                    disabled={!url.trim() || checkUrlMutation.isPending}
+                                >
+                                    {checkUrlMutation.isPending ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                        'Check'
+                                    )}
+                                </Button>
+                            </div>
+
+                            {/* Inline status */}
+                            {checkUrlMutation.isPending && (
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    Checking URL...
+                                </div>
+                            )}
+                            {checkResult?.valid && (
+                                <div className="flex items-center gap-2 text-xs text-green-600">
+                                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                                    <span>
+                                        Valid PDF — {checkResult.page_count ?? '?'} pages, {formatFileSize(checkResult.file_size)} — viewable in browser
+                                    </span>
+                                </div>
+                            )}
+                            {checkResult?.cors_blocked && (
+                                <div className="flex items-start gap-2 text-xs text-amber-600">
+                                    <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                                    <div>
+                                        <p className="font-medium">{checkResult.error}</p>
+                                        {checkResult.suggestions && (
+                                            <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                                                {checkResult.suggestions.map((s, i) => (
+                                                    <li key={i}>• {s}</li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                            {checkResult && !checkResult.valid && !checkResult.cors_blocked && (
+                                <div className="flex items-center gap-2 text-xs text-destructive">
+                                    <XCircle className="h-3.5 w-3.5 shrink-0" />
+                                    <span>{checkResult.error}</span>
+                                </div>
+                            )}
+                            {checkError && (
+                                <div className="flex items-center gap-2 text-xs text-destructive">
+                                    <XCircle className="h-3.5 w-3.5 shrink-0" />
+                                    <span>{checkError}</span>
+                                </div>
+                            )}
                         </div>
 
                         {/* Title */}
@@ -231,7 +324,7 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
                         <Button
                             className="w-full"
                             onClick={handleLink}
-                            disabled={!url.trim() || !urlTitle.trim() || isLinking}
+                            disabled={!url.trim() || !urlTitle.trim() || isLinking || !checkResult?.valid}
                         >
                             {isLinking ? (
                                 <>

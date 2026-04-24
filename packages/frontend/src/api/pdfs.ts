@@ -113,6 +113,27 @@ export const useLinkPdf = () => {
     });
 };
 
+export interface PdfUrlCheckResponse {
+    valid: boolean;
+    page_count?: number | null;
+    file_size?: number | null;
+    title?: string | null;
+    cors_blocked: boolean;
+    error?: string | null;
+    suggestions?: string[] | null;
+}
+
+export const useCheckPdfUrl = () => {
+    return useMutation({
+        mutationFn: async (url: string): Promise<PdfUrlCheckResponse> => {
+            return apiFetch('/pdfs/check-url', {
+                method: 'POST',
+                body: JSON.stringify({ url }),
+            });
+        },
+    });
+};
+
 export const useUpdatePdf = () => {
     const queryClient = useQueryClient();
 
