@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,8 +29,8 @@ class AutoHighlightCacheResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    categories: Any  # JSONB
-    pages: Any  # JSONB list[int]
+    categories: list[str]  # JSONB
+    pages: list[int]  # JSONB
     status: str
     created_at: datetime
     annotation_set_id: Optional[UUID] = None
