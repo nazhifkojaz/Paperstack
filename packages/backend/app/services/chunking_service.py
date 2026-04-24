@@ -18,11 +18,6 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 
-CHUNK_SIZE = (
-    800  # characters (~200 words, ~160 tokens) — deprecated, use settings.CHUNK_SIZE
-)
-CHUNK_OVERLAP = 150  # characters — deprecated, use settings.CHUNK_OVERLAP
-
 _REFERENCE_HEADINGS = {
     "references",
     "bibliography",

@@ -256,7 +256,6 @@ class TestSecurityHeadersMiddleware:
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
         assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
-        assert response.headers["X-XSS-Protection"] == "1; mode=block"
 
     async def test_security_headers_on_api_endpoint(self, client):
         """Test that security headers are present on API endpoints."""
@@ -267,7 +266,6 @@ class TestSecurityHeadersMiddleware:
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
         assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
-        assert response.headers["X-XSS-Protection"] == "1; mode=block"
 
     async def test_security_headers_on_404(self, client):
         """Test that security headers are present on 404 responses."""
@@ -277,7 +275,6 @@ class TestSecurityHeadersMiddleware:
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
         assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
-        assert response.headers["X-XSS-Protection"] == "1; mode=block"
 
     async def test_security_headers_on_500_error(self, client):
         """Test that security headers are present on 500 error responses."""

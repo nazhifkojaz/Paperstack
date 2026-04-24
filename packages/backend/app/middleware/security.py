@@ -22,7 +22,4 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Force HTTPS for 1 year including subdomains
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
-        # Enable browser XSS filter (obsolete but harmless fallback)
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-
         return response
