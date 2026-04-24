@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 QuotaField = Literal["chat_uses_remaining", "explain_uses_remaining", "free_uses_remaining"]
-Provider = Literal["openai", "anthropic", "gemini", "glm", "openrouter"]  # gemini/glm kept for BYOK
+Provider = Literal["openai", "anthropic", "openrouter"]  # gemini/glm removed - no BYOK users
 
 
 class QuotaType(Enum):
@@ -59,9 +59,9 @@ class ApiKeyService:
     """Service for resolving API keys and managing quotas."""
 
     # Provider priorities for BYOK user keys
-    AUTO_HIGHLIGHT_PRIORITY: list[Provider] = ["openai", "anthropic", "gemini", "glm"]
-    CHAT_PRIORITY: list[Provider] = ["openai", "anthropic", "gemini", "glm"]
-    EXPLAIN_PRIORITY: list[Provider] = ["openai", "anthropic", "gemini", "glm"]
+    AUTO_HIGHLIGHT_PRIORITY: list[Provider] = ["openai", "anthropic"]
+    CHAT_PRIORITY: list[Provider] = ["openai", "anthropic"]
+    EXPLAIN_PRIORITY: list[Provider] = ["openai", "anthropic"]
 
     # In-house provider — only OpenRouter free tier
     IN_HOUSE_PRIORITY: list[Provider] = ["openrouter"]
