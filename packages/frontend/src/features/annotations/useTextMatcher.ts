@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { Annotation } from '@/api/annotations';
 import { useUpdateAnnotation } from '@/api/annotations';
-import type { TextLayerHandle } from '@/features/viewer/TextLayer';
-import { collectTextNodes, rangeToRects } from '@/features/viewer/pdfTextUtils';
-import type { PdfRectData, Rect, TextNode } from '@/features/viewer/pdfTextUtils';
+import type { TextLayerHandle } from '@/types/viewer';
+import type { PdfRectData, TextNode } from '@/types/viewer';
+import type { Rect } from '@/types/annotation';
+import { collectTextNodes, rangeToRects } from '@/lib/pdfTextUtils';
 
 /**
  * Tracks annotation IDs that have already been patched to the server.

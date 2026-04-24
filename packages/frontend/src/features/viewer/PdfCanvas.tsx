@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import { usePdfViewerStore } from '@/stores/pdfViewerStore';
-import { TextLayer, type TextLayerHandle } from './TextLayer';
+import { TextLayer } from './TextLayer';
+import type { TextLayerHandle } from '@/types/viewer';
 import { AnnotationOverlay } from '../annotations/AnnotationOverlay';
 
 interface PdfCanvasProps {

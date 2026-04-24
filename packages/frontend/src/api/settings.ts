@@ -1,5 +1,5 @@
 import { apiFetch } from './client'
-import { User } from '@/stores/authStore'
+import type { User } from '@/types/user'
 
 export async function updateStorageProvider(provider: 'github' | 'google'): Promise<User> {
     return apiFetch<User>('/settings/storage-provider', {

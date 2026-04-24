@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
-import type { Rect } from '@/features/annotations/useRectCreate';
+import type { Rect } from '@/types/annotation';
 
 export interface AnnotationSet {
     id: string;

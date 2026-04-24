@@ -3,27 +3,14 @@ import type { PDFPageProxy } from 'pdfjs-dist';
 import { TextLayer as PdfjsTextLayer } from 'pdfjs-dist';
 import { usePdfViewerStore } from '@/stores/pdfViewerStore';
 import { SelectionPopup } from '@/features/annotations/SelectionPopup';
-import { collectTextNodes, selectionRangeToRects } from './pdfTextUtils';
-import type { PdfTextItem, PdfRectData } from './pdfTextUtils';
+import { collectTextNodes, selectionRangeToRects } from '@/lib/pdfTextUtils';
+import type { PdfTextItem, PdfRectData, TextLayerHandle } from '@/types/viewer';
 
 interface SelectionState {
     selectionRect: { x: number; y: number; width: number; height: number };
     normalizedRects: Array<{ x: number; y: number; w: number; h: number }>;
     selectedText: string;
 }
-
-export interface TextLayerHandle {
-    getContainer: () => HTMLDivElement | null;
-    renderReady: () => Promise<void>;
-    /** PDF text items for precise rect computation (bypasses DOM scaleX) */
-    getTextItems: () => PdfTextItem[];
-    /** Mapping from span elements to text item indices */
-    getSpanToItemMap: () => Map<Element, number>;
-    /** Current viewport scale for converting PDF units to pixels */
-    getViewportScale: () => number;
-}
-
-export type { PdfTextItem } from './pdfTextUtils';
 
 interface TextLayerProps {
     pageProxy: PDFPageProxy | null;

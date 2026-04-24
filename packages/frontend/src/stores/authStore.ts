@@ -1,13 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { User } from '@/types/user'
 
-export interface User {
-    id: string
-    email?: string
-    display_name?: string
-    avatar_url?: string
-    storage_provider: 'github' | 'google'
-}
+export type { User }
 
 interface AuthState {
     user: User | null

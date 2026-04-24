@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { API_URL } from '@/lib/config'
-import type { User } from '@/stores/authStore'
+import type { User } from '@/types/user'
 
 
 export function OAuthCallbackPage() {
