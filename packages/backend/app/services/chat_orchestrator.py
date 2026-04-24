@@ -379,6 +379,6 @@ class ChatOrchestrator:
                 "context_chunks": context_chunks_payload,
             }
 
-        except Exception as exc:
+        except Exception:
             logger.exception("Streaming error for conversation %s", conversation_id)
-            yield {"error": str(exc), "code": "stream_error"}
+            yield {"error": "Stream interrupted. Please try again.", "code": "stream_error"}

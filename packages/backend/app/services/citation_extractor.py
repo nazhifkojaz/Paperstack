@@ -365,10 +365,11 @@ async def search_semantic_scholar(title: str, authors: Optional[str] = None) -> 
             title,
         )
         return None
-    except Exception:
-        logger.exception(
-            "Unexpected error searching Semantic Scholar for title '%s'",
+    except (httpx.RequestError, KeyError, ValueError, IndexError) as exc:
+        logger.warning(
+            "Unexpected error searching Semantic Scholar for title '%s': %s",
             title,
+            exc,
         )
         return None
 

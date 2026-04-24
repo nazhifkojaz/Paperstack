@@ -1,17 +1,21 @@
+import logging
 import uuid
 from typing import List, Optional
+
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Response, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, asc
 
 from app.api import deps
 from app.core.config import settings
-from app.db.models import User, Pdf, PdfCollection, PdfTag, Collection, Annotation, AnnotationSet
+from app.db.models import Annotation, AnnotationSet, Collection, Pdf, PdfCollection, PdfTag, User
 from app.middleware.rate_limit import limiter
-from app.schemas.pdf import PdfResponse, PdfUpdate, PdfListParams, PdfLinkCreate, PdfUrlCheckRequest, PdfUrlCheckResponse
+from app.schemas.pdf import PdfLinkCreate, PdfListParams, PdfResponse, PdfUpdate, PdfUrlCheckRequest, PdfUrlCheckResponse
 from app.services import pdf_metadata
 from app.services.storage.factory import get_storage_backend
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -369,5 +373,6 @@ async def export_annotated_pdf(
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="annotated_{pdf.filename.split("/")[-1]}"'},
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export annotated PDF: {str(e)}")
+    except Exception:
+        logger.exception("Failed to export annotated PDF for pdf_id=%s", pdf_id)
+        raise HTTPException(status_code=500, detail="Failed to export annotated PDF")
