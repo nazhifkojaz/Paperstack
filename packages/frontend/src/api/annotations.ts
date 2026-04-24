@@ -28,8 +28,6 @@ export interface Annotation {
     updated_at: string;
 }
 
-// Queries
-
 export const useAnnotationSets = (pdfId: string) => {
     return useQuery({
         queryKey: ['annotation_sets', pdfId],
@@ -74,8 +72,6 @@ export const useMultiSetAnnotations = (setIds: string[]) => {
 
     return { data: allAnnotations, isLoading };
 };
-
-// Mutations
 
 export const useCreateAnnotationSet = () => {
     const queryClient = useQueryClient();

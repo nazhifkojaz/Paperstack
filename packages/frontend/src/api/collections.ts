@@ -10,7 +10,6 @@ interface Collection {
     created_at: string;
 }
 
-// Queries
 export const useCollections = () => {
     return useQuery({
         queryKey: ['collections'],
@@ -18,7 +17,6 @@ export const useCollections = () => {
     });
 };
 
-// Mutations
 export const useCreateCollection = () => {
     const queryClient = useQueryClient();
 
@@ -35,13 +33,11 @@ export const useCreateCollection = () => {
     });
 };
 
-// Relationship Mutations
 export const useAddPdfToCollection = () => {
     const queryClient = useQueryClient();
 
     return useMutation({
         mutationFn: async ({ pdfId, collectionId }: { pdfId: string; collectionId: string }): Promise<void> => {
-            // pdf_id is a FastAPI query param (not path), so it must be sent as ?pdf_id=
             await apiFetch(`/collections/${collectionId}/pdfs?pdf_id=${pdfId}`, { method: 'POST' });
         },
         onSuccess: () => {

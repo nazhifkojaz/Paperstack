@@ -137,8 +137,6 @@ export const useExplainAnnotation = () => {
     });
 };
 
-// --- Raw SSE streaming function (not a hook) ---
-
 export async function streamChat(params: {
     conversationId: string;
     message: string;

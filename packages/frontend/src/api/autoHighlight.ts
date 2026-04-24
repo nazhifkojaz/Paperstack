@@ -1,8 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 
-// Types
-
 interface AutoHighlightRequest {
     pdf_id: string;
     categories: string[];
@@ -44,8 +42,6 @@ interface ApiKeyResponse {
     created_at: string;
 }
 
-// Auto-Highlight Hooks
-
 export const useAutoHighlightQuota = () => {
     return useQuery({
         queryKey: ['auto-highlight-quota'],
@@ -78,8 +74,6 @@ export const useAnalysisStatus = (cacheId: string | null) => {
         retry: 3,
     });
 };
-
-// API Key Hooks
 
 export const useCreateApiKey = () => {
     const queryClient = useQueryClient();

@@ -27,8 +27,6 @@ export interface CitationUpdate {
     source?: string;
 }
 
-// Queries
-
 export const useCitation = (pdfId: string) =>
     useQuery<Citation>({
         queryKey: ['citation', pdfId],
@@ -36,8 +34,6 @@ export const useCitation = (pdfId: string) =>
         enabled: !!pdfId,
         retry: false, // 404 is expected when no citation exists yet
     });
-
-// Mutations
 
 export const useAutoExtractCitation = (pdfId: string) => {
     const qc = useQueryClient();
@@ -63,8 +59,6 @@ export const useUpdateCitation = (pdfId: string) => {
         },
     });
 };
-
-// Bulk Operations
 
 interface BulkExportRequest {
     pdf_ids: string[];
@@ -97,7 +91,6 @@ export const useBulkExportCitations = () => {
             });
         },
         onSuccess: (blob) => {
-            // Trigger browser download using utility
             downloadBlob(blob, `citations-${new Date().toISOString().split('T')[0]}.bib`);
         },
     });

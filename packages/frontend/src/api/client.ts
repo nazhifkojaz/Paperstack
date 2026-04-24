@@ -77,7 +77,6 @@ export async function apiFetch<T>(
     path: string,
     options: RequestInit & { authRequired?: boolean } = {},
 ): Promise<T> {
-    // Content-Type: application/json is auto-added unless body is FormData.
     const { accessToken } = useAuthStore.getState()
     const { authRequired = true, ...fetchOptions } = options
 
