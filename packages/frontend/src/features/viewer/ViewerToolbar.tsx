@@ -12,7 +12,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { useParams } from 'react-router-dom';
-import { apiFetchBlob } from '@/api/client';
+import { apiFetchBlob, ApiError } from '@/api/client';
 import { downloadBlob } from '@/lib/download-utils';
 import { toast } from 'sonner';
 
@@ -46,8 +46,8 @@ export const ViewerToolbar = () => {
             const blob = await apiFetchBlob(`/pdfs/${pdfId}/export-annotated`);
             downloadBlob(blob, `annotated_${pdfId}.pdf`);
         } catch (error) {
-            console.error('Failed to export annotated PDF:', error);
-            toast.error('Failed to export annotated PDF.');
+            const msg = error instanceof ApiError ? error.message : 'Failed to export annotated PDF.';
+            toast.error(msg);
         } finally {
             setIsExporting(false);
         }

@@ -10,6 +10,7 @@ export function SharedViewerPage() {
     const { token } = useParams<{ token: string }>();
     const { data, isLoading, isError } = useSharedAnnotations(token ?? '');
     const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+    const [pdfError, setPdfError] = useState(false);
 
     useEffect(() => {
         if (!data?.pdf_id) return;
@@ -24,6 +25,7 @@ export function SharedViewerPage() {
                 if (isMounted) setPdfDocument(doc);
             } catch (e) {
                 console.error('Failed to load shared PDF:', e);
+                if (isMounted) setPdfError(true);
             }
         };
 
@@ -46,6 +48,18 @@ export function SharedViewerPage() {
                 <h2 className="text-xl font-semibold">Share not found</h2>
                 <p className="text-sm text-muted-foreground text-center max-w-xs">
                     This share link is invalid or has been revoked.
+                </p>
+            </div>
+        );
+    }
+
+    if (pdfError) {
+        return (
+            <div className="flex flex-col items-center justify-center h-screen gap-4 bg-background">
+                <AlertCircle className="h-12 w-12 text-destructive" />
+                <h2 className="text-xl font-semibold">Failed to load PDF</h2>
+                <p className="text-sm text-muted-foreground text-center max-w-xs">
+                    Could not load the PDF content. The share link may be invalid.
                 </p>
             </div>
         );
