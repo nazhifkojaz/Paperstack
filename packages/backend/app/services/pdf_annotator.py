@@ -1,10 +1,11 @@
 import io
-from typing import List, Dict, Any
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import HexColor
 
-def export_annotated_pdf(original_pdf_bytes: bytes, annotations: List[Dict[str, Any]]) -> bytes:
+from app.schemas.types import AnnotationExportDict
+
+def export_annotated_pdf(original_pdf_bytes: bytes, annotations: list[AnnotationExportDict]) -> bytes:
     """
     Bake annotations into a PDF.
     

@@ -1,10 +1,11 @@
 """Chat service: builds RAG context and orchestrates streaming LLM calls."""
 
 import logging
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import tiktoken
 
+from app.schemas.types import ChatMessageDict, ChunkDict, PaperMetadata
 from app.services.llm_service import LLMService, STREAM_PROVIDERS
 
 DEFAULT_CONTEXT_MAX_TOKENS = 4000
@@ -39,7 +40,7 @@ COLLECTION_SYSTEM_PROMPT = (
 CONTEXT_WINDOW = 10  # maximum number of past messages sent as conversation history
 
 
-def _format_paper_metadata(metadata: dict | list[dict] | None) -> str:
+def _format_paper_metadata(metadata: PaperMetadata | list[PaperMetadata] | None) -> str:
     """Format paper metadata into a compact section for the system prompt.
 
     Single-PDF: {"title": "...", "authors": "...", "year": 2024}
@@ -92,8 +93,8 @@ def _truncate_to_tokens(text: str, max_tokens: int) -> str:
 
 
 def _deduplicate_chunks(
-    chunks: list[dict], similarity_threshold: float = 0.9
-) -> list[dict]:
+    chunks: list[ChunkDict], similarity_threshold: float = 0.9
+) -> list[ChunkDict]:
     """Remove chunks with highly overlapping content.
 
     Uses Jaccard similarity on word sets. Keeps the first occurrence
@@ -102,7 +103,7 @@ def _deduplicate_chunks(
     if len(chunks) <= 1:
         return chunks
 
-    unique: list[dict] = []
+    unique: list[ChunkDict] = []
     unique_word_sets: list[set[str]] = []
 
     for chunk in chunks:
@@ -130,7 +131,7 @@ class ChatService:
         self._llm_service = llm_service or LLMService()
 
     def build_context(
-        self, chunks: list[dict], max_tokens: int = DEFAULT_CONTEXT_MAX_TOKENS
+        self, chunks: list[ChunkDict], max_tokens: int = DEFAULT_CONTEXT_MAX_TOKENS
     ) -> str:
         """Format chunks into context string respecting token budget."""
         deduped = _deduplicate_chunks(chunks)
@@ -164,11 +165,11 @@ class ChatService:
     def build_messages(
         self,
         context: str,
-        history: list[dict],
+        history: list[ChatMessageDict],
         user_message: str,
         base_prompt: str | None = None,
-        paper_metadata: dict | list[dict] | None = None,
-    ) -> tuple[str, list[dict]]:
+        paper_metadata: PaperMetadata | list[PaperMetadata] | None = None,
+    ) -> tuple[str, list[ChatMessageDict]]:
         """Build system prompt and message list for LLM."""
         metadata_section = _format_paper_metadata(paper_metadata)
         parts = [base_prompt or SYSTEM_PROMPT]
@@ -176,7 +177,7 @@ class ChatService:
             parts.append(metadata_section)
         parts.append("## Context from the papers:\n\n" + context)
         system = "\n\n".join(parts)
-        msgs: list[dict] = []
+        msgs: list[ChatMessageDict] = []
         for h in history[-CONTEXT_WINDOW:]:
             msgs.append({"role": h["role"], "content": h["content"]})
         msgs.append({"role": "user", "content": user_message})
@@ -185,7 +186,7 @@ class ChatService:
     async def stream_reply(
         self,
         system_prompt: str,
-        messages: list[dict],
+        messages: list[ChatMessageDict],
         provider: str,
         api_key: str,
         model: str | None = None,
@@ -196,7 +197,7 @@ class ChatService:
                 f"Unknown provider '{provider}'. Valid: {list(STREAM_PROVIDERS)}"
             )
         stream_method = getattr(self._llm_service, method_name)
-        kwargs: dict = {"system_prompt": system_prompt, "messages": messages, "api_key": api_key}
+        kwargs: dict[str, Any] = {"system_prompt": system_prompt, "messages": messages, "api_key": api_key}
         if model and provider == "openrouter":
             kwargs["model"] = model
         async for token in stream_method(**kwargs):

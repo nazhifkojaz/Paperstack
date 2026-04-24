@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
 
+from app.schemas.types import ChatMessageDict, HighlightDict
 from app.services.exceptions import LLMRateLimitError, LLMProviderError
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ CRITICAL RULES:
     return system_prompt, user_prompt
 
 
-def parse_llm_response(raw_response: str) -> list[dict[str, Any]]:
+def parse_llm_response(raw_response: str) -> list[HighlightDict]:
     """Parse and validate LLM response into highlight list."""
     cleaned = strip_markdown_fences(raw_response)
 
@@ -315,7 +316,7 @@ class LLMService:
                         continue
 
     async def stream_openai(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
     ) -> AsyncIterator[str]:
         """Stream tokens from OpenAI Chat Completions (SSE)."""
         async for token in self._stream_openai_compatible(
@@ -331,7 +332,7 @@ class LLMService:
             yield token
 
     async def stream_anthropic(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
     ) -> AsyncIterator[str]:
         """Stream tokens from Anthropic Messages API (SSE)."""
         client = self._require_client()
@@ -363,7 +364,7 @@ class LLMService:
                         continue
 
     async def stream_gemini(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
     ) -> AsyncIterator[str]:
         """Stream tokens from Gemini (SSE)."""
         contents = [
@@ -401,7 +402,7 @@ class LLMService:
                         continue
 
     async def stream_glm(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
     ) -> AsyncIterator[str]:
         """Stream tokens from GLM (OpenAI-compatible SSE)."""
         async for token in self._stream_openai_compatible(
@@ -417,7 +418,7 @@ class LLMService:
             yield token
 
     async def stream_openrouter(
-        self, system_prompt: str, messages: list[dict], api_key: str, model: str = DEFAULT_FREE_MODEL
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str, model: str = DEFAULT_FREE_MODEL
     ) -> AsyncIterator[str]:
         """Stream tokens from OpenRouter (OpenAI-compatible SSE)."""
         async for token in self._stream_openai_compatible(
@@ -439,7 +440,7 @@ class LLMService:
         provider: str,
         api_key: str,
         model: Optional[str] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[HighlightDict]:
         """Analyze a paper and return structured highlights."""
         max_chars = OPENROUTER_MAX_CHARS if provider == "openrouter" else 0
         system_prompt, user_prompt = build_prompt(paper_text, categories, max_chars)

@@ -13,12 +13,13 @@ Route handlers translate to appropriate HTTP status codes.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Pdf, User
 from app.core.config import settings
+from app.schemas.types import ContextChunkDict
 from app.services.chat_service import ChatService
 from app.services.embedding_service import EmbeddingService
 from app.services.indexing_service import IndexingService, get_indexing_service
@@ -43,7 +44,7 @@ EXPLAIN_SYSTEM_PROMPT = (
 @dataclass
 class ExplainResult:
     explanation: str
-    context_chunks: list[dict]
+    context_chunks: list[ContextChunkDict]
     note_content: str
 
 
@@ -114,7 +115,7 @@ class ExplainService:
         )
 
         call_method = getattr(self._llm_service, f"call_{provider}")
-        kwargs: dict = {"system_prompt": system_prompt, "user_prompt": user_message, "api_key": api_key}
+        kwargs: dict[str, Any] = {"system_prompt": system_prompt, "user_prompt": user_message, "api_key": api_key}
         if model and provider == "openrouter":
             kwargs["model"] = model
         explanation = await call_method(**kwargs)
