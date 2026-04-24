@@ -83,26 +83,12 @@ class ExplainService:
             str(pdf_row.id), str(user.id), db
         )
 
-        # Handle stale/active indexing
-        await self._indexing_service.reset_if_stale(index_status, db)
-
-        # Handle failed indexing - reset to retry
-        if index_status.status == "failed":
-            index_status.status = "not_indexed"
-            index_status.error_message = None
-            await db.flush()
-
-        # Lazy index if needed
-        if index_status.status == "not_indexed":
-            logger.info("explain: indexing pdf %s for user %s", pdf_row.id, user.id)
-            try:
-                await self._indexing_service.index_pdf(pdf_row, user, index_status, db)
-                await db.commit()
-                logger.info("explain: indexing complete for pdf %s", pdf_row.id)
-            except Exception:
-                # Persist the failed status set by index_pdf before re-raising
-                await db.commit()
-                raise
+        try:
+            await self._indexing_service.ensure_indexed(pdf_row, user, index_status, db)
+            await db.commit()
+        except Exception:
+            await db.commit()
+            raise
 
         query_vector = await self._embedding_service.embed_query(selected_text, db=db)
 

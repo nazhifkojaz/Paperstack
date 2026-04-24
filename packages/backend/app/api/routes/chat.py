@@ -15,6 +15,7 @@ from app.api.deps import (
     get_db,
     get_llm_http_client,
     get_embedding_http_client,
+    resolve_api_key_with_quota,
 )
 from app.core.config import settings
 from app.db.models import (
@@ -25,25 +26,20 @@ from app.db.models import (
     Citation,
     Pdf,
     User,
-    UserLLMPreferences,
 )
 from app.middleware.rate_limit import limiter
-from app.services.api_key_service import api_key_service
 from app.services.chat_service import ChatService, COLLECTION_SYSTEM_PROMPT
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
-    ApiKeyNotFoundError,
     EmbeddingError,
     IndexInProgressError,
     IndexingError,
     LLMRateLimitError,
     OpenRouterQuotaError,
-    QuotaExhaustedError,
 )
 from app.services.explain_service import ExplainService
 from app.services.indexing_service import IndexingService
 from app.services.llm_service import LLMService
-from app.services.openrouter_usage_service import openrouter_usage_service
 from app.services.pdf_download_service import pdf_download_service
 from app.services.vector_search_service import vector_search_service
 from app.schemas.chat import (
@@ -218,32 +214,9 @@ async def stream_message(
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
 
-    chat_prefs_result = await db.execute(
-        select(UserLLMPreferences.chat_model).where(
-            UserLLMPreferences.user_id == current_user.id
-        )
-    )
-    chat_preferred_model = chat_prefs_result.scalar_one_or_none()
-
-    try:
-        resolution = await api_key_service.resolve_for_chat(
-            current_user, db, force_free_model=chat_preferred_model
-        )
-    except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
-        raise HTTPException(status_code=402, detail=str(e))
+    resolution = await resolve_api_key_with_quota(current_user, db, "chat")
     provider = resolution.provider
     api_key = resolution.api_key
-    is_in_house = resolution.is_in_house
-
-    if is_in_house and provider == "openrouter":
-        try:
-            await openrouter_usage_service.record_and_check(db)
-        except OpenRouterQuotaError as exc:
-            raise HTTPException(status_code=503, detail=str(exc))
-
-    # Quota decrement: OpenRouter (free) has no per-user quota.
-    # BYOK users have unlimited usage. In-house paid tiers are gone.
-    # No quota decrement needed anymore.
 
     embedding_svc = EmbeddingService(http_client=embedding_client)
     llm_svc = LLMService(http_client=llm_client)
@@ -275,33 +248,14 @@ async def stream_message(
             str(conv.pdf_id), str(current_user.id), db
         )
 
-
         try:
-            was_reset = await local_indexing_service.reset_if_stale(index_status, db)  # noqa: F841
+            await local_indexing_service.ensure_indexed(pdf_row, current_user, index_status, db)
+            await db.commit()
         except IndexInProgressError as e:
             raise HTTPException(status_code=409, detail=str(e))
-
-
-        if index_status.status == "failed":
-            logger.info(
-                "Resetting failed index status for pdf %s (user %s) to allow re-index retry",
-                conv.pdf_id,
-                current_user.id,
-            )
-            index_status.status = "not_indexed"
-            index_status.error_message = None
-            await db.flush()
-
-
-        if index_status.status == "not_indexed":
-            try:
-                await local_indexing_service.index_pdf(
-                    pdf_row, current_user, index_status, db
-                )
-                await db.commit()
-            except (EmbeddingError, OpenRouterQuotaError, IndexingError) as exc:
-                await db.commit()
-                raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
+        except (EmbeddingError, OpenRouterQuotaError, IndexingError) as exc:
+            await db.commit()
+            raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
 
         top_chunks = await vector_search_service.search_pdf(
             query_vector=query_vector,
@@ -591,28 +545,9 @@ async def explain_annotation(
         raise HTTPException(status_code=404, detail="PDF not found.")
 
 
-    explain_prefs_result = await db.execute(
-        select(UserLLMPreferences.explain_model).where(
-            UserLLMPreferences.user_id == current_user.id
-        )
-    )
-    explain_preferred_model = explain_prefs_result.scalar_one_or_none()
-
-    try:
-        resolution = await api_key_service.resolve_for_explain(
-            current_user, db, force_free_model=explain_preferred_model
-        )
-    except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
-        raise HTTPException(status_code=402, detail=str(e))
+    resolution = await resolve_api_key_with_quota(current_user, db, "explain")
     provider = resolution.provider
     api_key = resolution.api_key
-    is_in_house = resolution.is_in_house
-
-    if is_in_house and provider == "openrouter":
-        try:
-            await openrouter_usage_service.record_and_check(db)
-        except OpenRouterQuotaError as exc:
-            raise HTTPException(status_code=503, detail=str(exc))
 
     # Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
     embedding_svc = EmbeddingService(http_client=embedding_client)
