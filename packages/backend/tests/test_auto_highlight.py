@@ -9,24 +9,6 @@ from tests.fixtures import (
 )
 
 
-@pytest.fixture
-def mock_llm_response():
-    return [
-        {
-            "text": "We found significant improvements in accuracy.",
-            "page": 1,
-            "category": "findings",
-            "reason": "Primary result of the study",
-        },
-        {
-            "text": "The model uses a transformer architecture.",
-            "page": 3,
-            "category": "methods",
-            "reason": "Core methodology description",
-        },
-    ]
-
-
 @pytest.mark.asyncio
 async def test_get_quota_default(admin_client: AsyncClient, auth_headers):
     """New user should have 5 free uses."""
@@ -54,7 +36,7 @@ async def test_get_quota_with_key(admin_client: AsyncClient, auth_headers):
 
 @pytest.mark.asyncio
 async def test_analyze_no_key_no_quota(
-    client: AsyncClient, auth_headers, db_session, test_user, mock_llm_response
+    client: AsyncClient, auth_headers, db_session, test_user
 ):
     """Should fail with 402 if no key and no quota."""
     from app.main import app
