@@ -1,6 +1,7 @@
 """Tests for chat routes."""
 
 import uuid
+from fastapi import HTTPException
 from httpx import AsyncClient
 from unittest.mock import AsyncMock, patch, MagicMock
 from tests.fixtures import (
@@ -398,15 +399,16 @@ class TestStreamMessage:
         mock_indexing.get_or_create_status = AsyncMock(
             return_value=MagicMock(status="indexed")
         )
+        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_chat",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            from app.services.exceptions import ApiKeyNotFoundError
+            from fastapi import HTTPException
 
-            mock_resolve.side_effect = ApiKeyNotFoundError("No API keys available")
+            mock_resolve.side_effect = HTTPException(status_code=402, detail="No API keys available")
 
             with patch(
                 "app.api.routes.chat.IndexingService",
@@ -469,6 +471,7 @@ class TestStreamMessage:
         mock_indexing.get_or_create_status = AsyncMock(
             return_value=MagicMock(status="indexed")
         )
+        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
@@ -483,7 +486,7 @@ class TestStreamMessage:
         )
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_chat",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
@@ -549,6 +552,7 @@ class TestStreamMessageOpenRouterRateLimit:
         mock_indexing.get_or_create_status = AsyncMock(
             return_value=MagicMock(status="indexed")
         )
+        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
@@ -565,13 +569,9 @@ class TestStreamMessageOpenRouterRateLimit:
         )
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_chat",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.chat.openrouter_usage_service.record_and_check",
-            new_callable=AsyncMock,
-            return_value=1,
-        ):
+        ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
                 provider="openrouter",
                 api_key="openrouter-key",
@@ -625,6 +625,7 @@ class TestStreamMessageOpenRouterRateLimit:
         mock_indexing.get_or_create_status = AsyncMock(
             return_value=MagicMock(status="indexed")
         )
+        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
@@ -639,7 +640,7 @@ class TestStreamMessageOpenRouterRateLimit:
         )
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_chat",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
@@ -851,15 +852,11 @@ class TestExplainOpenRouterRateLimit:
         await db_session.commit()
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_explain",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve, patch(
             "app.api.routes.chat.ExplainService"
-        ) as mock_explain_cls, patch(
-            "app.api.routes.chat.openrouter_usage_service.record_and_check",
-            new_callable=AsyncMock,
-            return_value=1,
-        ):
+        ) as mock_explain_cls:
             mock_resolve.return_value = MagicMock(
                 provider="openrouter",
                 api_key="openrouter-key",
@@ -916,7 +913,7 @@ class TestExplainOpenRouterRateLimit:
         mock_explain_result.note_content = "## Note\nExplained via user key."
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_explain",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve, patch(
             "app.api.routes.chat.ExplainService"
@@ -976,6 +973,7 @@ class TestOpenRouterQuotaGating:
         mock_indexing.get_or_create_status = AsyncMock(
             return_value=MagicMock(status="indexed")
         )
+        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
@@ -984,13 +982,9 @@ class TestOpenRouterQuotaGating:
         )
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_chat",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.chat.openrouter_usage_service.record_and_check",
-            new_callable=AsyncMock,
-            return_value=1,
-        ):
+        ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
                 provider="openrouter",
                 api_key="openrouter-key",
@@ -1042,8 +1036,6 @@ class TestOpenRouterQuotaGating:
         """When LLM gate triggers for server OpenRouter key, returns 503."""
         _setup_stream_mocks()
 
-        from app.services.exceptions import OpenRouterQuotaError
-
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
         await db_session.commit()
 
@@ -1058,6 +1050,7 @@ class TestOpenRouterQuotaGating:
         mock_indexing.get_or_create_status = AsyncMock(
             return_value=MagicMock(status="indexed")
         )
+        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
@@ -1066,20 +1059,12 @@ class TestOpenRouterQuotaGating:
         )
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_chat",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.chat.openrouter_usage_service.record_and_check",
-            new_callable=AsyncMock,
-        ) as mock_gate:
-            mock_resolve.return_value = MagicMock(
-                provider="openrouter",
-                api_key="openrouter-key",
-                is_in_house=True,
-                quota_remaining=10,
-            )
-            mock_gate.side_effect = OpenRouterQuotaError(
-                limit=1000, count_today=900
+        ) as mock_resolve:
+            mock_resolve.side_effect = HTTPException(
+                status_code=503,
+                detail="OpenRouter free-tier usage limit reached (900/1000). Please try again tomorrow.",
             )
 
             with patch(
@@ -1120,6 +1105,7 @@ class TestOpenRouterQuotaGating:
         mock_indexing.get_or_create_status = AsyncMock(
             return_value=MagicMock(status="indexed")
         )
+        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
@@ -1135,12 +1121,9 @@ class TestOpenRouterQuotaGating:
         )
 
         with patch(
-            "app.api.routes.chat.api_key_service.resolve_for_chat",
+            "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.chat.openrouter_usage_service.record_and_check",
-            new_callable=AsyncMock,
-        ) as mock_gate:
+        ) as mock_resolve:
             # BYOK — is_in_house=False
             mock_resolve.return_value = MagicMock(
                 provider="openai",
@@ -1169,4 +1152,3 @@ class TestOpenRouterQuotaGating:
                 )
 
                 assert response.status_code == 200
-                mock_gate.assert_not_called()

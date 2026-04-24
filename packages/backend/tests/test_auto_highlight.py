@@ -196,7 +196,7 @@ class TestAutoHighlightOpenRouterRateLimit:
             mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
 
             with patch(
-                "app.api.routes.auto_highlight.api_key_service.resolve_for_auto_highlight",
+                "app.api.routes.auto_highlight.resolve_api_key_with_quota",
                 new_callable=AsyncMock,
             ) as mock_resolve, patch(
                 "app.services.storage.factory.get_storage_backend",
@@ -268,7 +268,7 @@ class TestAutoHighlightOpenRouterRateLimit:
             mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
 
             with patch(
-                "app.api.routes.auto_highlight.api_key_service.resolve_for_auto_highlight",
+                "app.api.routes.auto_highlight.resolve_api_key_with_quota",
                 new_callable=AsyncMock,
             ) as mock_resolve, patch(
                 "app.services.storage.factory.get_storage_backend",
