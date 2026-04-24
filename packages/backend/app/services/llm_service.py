@@ -2,7 +2,7 @@
 import json
 import logging
 import re
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
 
@@ -142,6 +142,18 @@ def parse_llm_response(raw_response: str) -> list[dict[str, Any]]:
     return highlights
 
 
+def _check_openrouter_error(data: dict) -> None:
+    """Check OpenRouter response for error objects and raise if found."""
+    if "error" in data:
+        err = data["error"]
+        logger.error("OpenRouter error response: %s", err)
+        error_msg = err.get("message", str(err))
+        metadata = err.get("metadata", {})
+        if metadata:
+            error_msg = f"{error_msg} | {metadata}"
+        raise LLMProviderError("openrouter", 0, error_msg)
+
+
 class LLMService:
     """Service for calling LLM providers.
 
@@ -164,156 +176,133 @@ class LLMService:
             provider, exc.response.status_code, exc.response.text[:200]
         ) from exc
 
-    async def call_glm(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
-        """Call Zhipu AI GLM API and return extracted text content."""
+    async def _call_provider(
+        self,
+        url: str,
+        headers: dict[str, str],
+        json_body: dict[str, Any],
+        extract_fn: Callable[[dict], str],
+        provider_name: str,
+        timeout_msg: str = "Request timed out.",
+        pre_check_fn: Callable[[dict], None] | None = None,
+    ) -> str:
         client = self._require_client()
         try:
-            resp = await client.post(
-                "https://api.z.ai/api/paas/v4/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": "glm-4.7-flash",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.1,
-                },
-            )
+            resp = await client.post(url, headers=headers, json=json_body)
         except httpx.TimeoutException:
-            raise LLMProviderError("glm", 0, "Request timed out. The paper may be too large for this model.")
+            raise LLMProviderError(provider_name, 0, timeout_msg)
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "glm")
-        return resp.json()["choices"][0]["message"]["content"]
+            self._handle_http_error(exc, provider_name)
+        data = resp.json()
+        if pre_check_fn:
+            pre_check_fn(data)
+        return extract_fn(data)
+
+    async def call_glm(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        """Call Zhipu AI GLM API and return extracted text content."""
+        return await self._call_provider(
+            url="https://api.z.ai/api/paas/v4/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json_body={
+                "model": "glm-4.7-flash",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.1,
+            },
+            extract_fn=lambda d: d["choices"][0]["message"]["content"],
+            provider_name="glm",
+            timeout_msg="Request timed out. The paper may be too large for this model.",
+        )
 
     async def call_gemini(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
         """Call Google Gemini API and return extracted text content."""
-        client = self._require_client()
-        try:
-            resp = await client.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-                headers={"x-goog-api-key": api_key},
-                json={
-                    "system_instruction": {"parts": [{"text": system_prompt}]},
-                    "contents": [{"parts": [{"text": user_prompt}]}],
-                    "generationConfig": {"temperature": 0.1},
-                },
-            )
-        except httpx.TimeoutException:
-            raise LLMProviderError("gemini", 0, "Request timed out. The paper may be too large for this model.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "gemini")
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return await self._call_provider(
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            headers={"x-goog-api-key": api_key},
+            json_body={
+                "system_instruction": {"parts": [{"text": system_prompt}]},
+                "contents": [{"parts": [{"text": user_prompt}]}],
+                "generationConfig": {"temperature": 0.1},
+            },
+            extract_fn=lambda d: d["candidates"][0]["content"]["parts"][0]["text"],
+            provider_name="gemini",
+            timeout_msg="Request timed out. The paper may be too large for this model.",
+        )
 
     async def call_openai(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
         """Call OpenAI Chat Completions API and return text content."""
-        client = self._require_client()
-        try:
-            resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.2,
-                },
-            )
-        except httpx.TimeoutException:
-            raise LLMProviderError("openai", 0, "Request timed out.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "openai")
-        return resp.json()["choices"][0]["message"]["content"]
+        return await self._call_provider(
+            url="https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json_body={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.2,
+            },
+            extract_fn=lambda d: d["choices"][0]["message"]["content"],
+            provider_name="openai",
+        )
 
     async def call_anthropic(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
         """Call Anthropic Messages API and return text content."""
-        client = self._require_client()
-        try:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 4096,
-                    "system": system_prompt,
-                    "messages": [{"role": "user", "content": user_prompt}],
-                },
-            )
-        except httpx.TimeoutException:
-            raise LLMProviderError("anthropic", 0, "Request timed out.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "anthropic")
-        return resp.json()["content"][0]["text"]
+        return await self._call_provider(
+            url="https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            json_body={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 4096,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}],
+            },
+            extract_fn=lambda d: d["content"][0]["text"],
+            provider_name="anthropic",
+        )
 
     async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str, model: str = DEFAULT_FREE_MODEL) -> str:
         """Call OpenRouter API (OpenAI-compatible) and return text content."""
-        client = self._require_client()
         logger.info(
             "Calling OpenRouter %s (prompt: %d chars, key: ...%s)",
             model, len(user_prompt), api_key[-4:],
         )
-        try:
-            resp = await client.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.2,
-                },
-            )
-        except httpx.TimeoutException:
-            raise LLMProviderError("openrouter", 0, "Request timed out.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "openrouter")
-        logger.info("OpenRouter responded: status=%d, body=%s", resp.status_code, resp.text[:500])
-        data = resp.json()
-        if "error" in data:
-            err = data["error"]
-            logger.error("OpenRouter error response: %s", err)
-            error_msg = err.get("message", str(err))
-            metadata = err.get("metadata", {})
-            if metadata:
-                error_msg = f"{error_msg} | {metadata}"
-            raise LLMProviderError("openrouter", resp.status_code, error_msg)
-        return data["choices"][0]["message"]["content"]
+        result = await self._call_provider(
+            url=f"{OPENROUTER_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json_body={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.2,
+            },
+            extract_fn=lambda d: d["choices"][0]["message"]["content"],
+            provider_name="openrouter",
+            pre_check_fn=_check_openrouter_error,
+        )
+        logger.info("OpenRouter responded successfully")
+        return result
 
     # --- Streaming methods for chat ---
 
-    async def stream_openai(
-        self, system_prompt: str, messages: list[dict], api_key: str
+    async def _stream_openai_compatible(
+        self,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
     ) -> AsyncIterator[str]:
-        """Stream tokens from OpenAI Chat Completions (SSE)."""
+        """Stream tokens from an OpenAI-compatible SSE endpoint."""
         client = self._require_client()
-        async with client.stream(
-            "POST",
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "system", "content": system_prompt}] + messages,
-                "temperature": 0.3,
-                "stream": True,
-            },
-        ) as resp:
+        async with client.stream("POST", url, headers=headers, json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if line.startswith("data: ") and line != "data: [DONE]":
@@ -324,6 +313,22 @@ class LLMService:
                             yield delta["content"]
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
+
+    async def stream_openai(
+        self, system_prompt: str, messages: list[dict], api_key: str
+    ) -> AsyncIterator[str]:
+        """Stream tokens from OpenAI Chat Completions (SSE)."""
+        async for token in self._stream_openai_compatible(
+            url="https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            payload={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "system", "content": system_prompt}] + messages,
+                "temperature": 0.3,
+                "stream": True,
+            },
+        ):
+            yield token
 
     async def stream_anthropic(
         self, system_prompt: str, messages: list[dict], api_key: str
@@ -399,55 +404,33 @@ class LLMService:
         self, system_prompt: str, messages: list[dict], api_key: str
     ) -> AsyncIterator[str]:
         """Stream tokens from GLM (OpenAI-compatible SSE)."""
-        client = self._require_client()
-        async with client.stream(
-            "POST",
-            "https://api.z.ai/api/paas/v4/chat/completions",
+        async for token in self._stream_openai_compatible(
+            url="https://api.z.ai/api/paas/v4/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={
+            payload={
                 "model": "glm-4.7-flash",
                 "messages": [{"role": "system", "content": system_prompt}] + messages,
                 "temperature": 0.3,
                 "stream": True,
             },
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        chunk = json.loads(line[6:])
-                        delta = chunk["choices"][0].get("delta", {})
-                        if "content" in delta and delta["content"]:
-                            yield delta["content"]
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+        ):
+            yield token
 
     async def stream_openrouter(
         self, system_prompt: str, messages: list[dict], api_key: str, model: str = DEFAULT_FREE_MODEL
     ) -> AsyncIterator[str]:
         """Stream tokens from OpenRouter (OpenAI-compatible SSE)."""
-        client = self._require_client()
-        async with client.stream(
-            "POST",
-            f"{OPENROUTER_BASE_URL}/chat/completions",
+        async for token in self._stream_openai_compatible(
+            url=f"{OPENROUTER_BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={
+            payload={
                 "model": model,
                 "messages": [{"role": "system", "content": system_prompt}] + messages,
                 "temperature": 0.3,
                 "stream": True,
             },
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        chunk = json.loads(line[6:])
-                        delta = chunk["choices"][0].get("delta", {})
-                        if "content" in delta and delta["content"]:
-                            yield delta["content"]
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+        ):
+            yield token
 
     async def analyze_paper(
         self,
