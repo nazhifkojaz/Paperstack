@@ -1,3 +1,4 @@
+import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -121,7 +122,7 @@ def _validate_model(value: Optional[str], field: str) -> None:
 
 
 async def _get_or_create_prefs(
-    user_id, db: AsyncSession
+    user_id: uuid.UUID, db: AsyncSession
 ) -> UserLLMPreferences:
     result = await db.execute(
         select(UserLLMPreferences).where(UserLLMPreferences.user_id == user_id)

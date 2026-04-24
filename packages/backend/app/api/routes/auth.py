@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -29,7 +29,7 @@ async def _upsert_oauth_user(
     encrypted_access_token: str,
     encrypted_refresh_token: Optional[str],
     token_expires_at: Optional[datetime],
-    extra_data: dict,
+    extra_data: dict[str, Any],
 ) -> User:
     """Upsert user and linked OAuth account. Returns existing or new User."""
     stmt = select(UserOAuthAccount).where(

@@ -336,7 +336,7 @@ async def stream_message(
                 if not c.pdf_id or c.pdf_title in seen_titles:
                     continue
                 seen_titles.add(c.pdf_title)
-                entry: dict = {"title": c.pdf_title}
+                entry: dict[str, str] = {"title": c.pdf_title}
                 cit = citation_by_pdf.get(str(c.pdf_id))
                 if cit:
                     if cit.authors:
