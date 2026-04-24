@@ -32,20 +32,21 @@ class OpenRouterUsageService:
         threshold = int(limit * _GATE_THRESHOLD)
 
         stmt = text("""
-            UPDATE openrouter_usage_cache
-            SET
+            INSERT INTO openrouter_usage_cache (id, request_count_today, day_started_at)
+            VALUES (1, 1, (now() AT TIME ZONE 'UTC')::date)
+            ON CONFLICT (id) DO UPDATE SET
                 request_count_today = CASE
-                    WHEN day_started_at < (now() AT TIME ZONE 'UTC')::date THEN 1
-                    ELSE request_count_today + 1
+                    WHEN openrouter_usage_cache.day_started_at < (now() AT TIME ZONE 'UTC')::date
+                    THEN 1
+                    ELSE openrouter_usage_cache.request_count_today + 1
                 END,
                 day_started_at = CASE
-                    WHEN day_started_at < (now() AT TIME ZONE 'UTC')::date
-                        THEN (now() AT TIME ZONE 'UTC')::date
-                    ELSE day_started_at
+                    WHEN openrouter_usage_cache.day_started_at < (now() AT TIME ZONE 'UTC')::date
+                    THEN (now() AT TIME ZONE 'UTC')::date
+                    ELSE openrouter_usage_cache.day_started_at
                 END,
                 last_request_at = now()
-            WHERE id = 1
-            RETURNING request_count_today
+            RETURNING openrouter_usage_cache.request_count_today
         """)
         result = await db.execute(stmt)
         new_count = result.scalar_one()
