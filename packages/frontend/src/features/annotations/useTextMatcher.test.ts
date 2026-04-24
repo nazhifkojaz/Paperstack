@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { collectTextNodes } from '@/features/viewer/pdfTextUtils'
+import { collectTextNodes } from '@/lib/pdfTextUtils'
 import {
     buildNormMap,
     normalize,

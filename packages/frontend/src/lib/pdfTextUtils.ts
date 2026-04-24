@@ -11,26 +11,8 @@
  * for proportional offsets within partially-selected spans.
  */
 
-/** PDF text item with position/width data from page.getTextContent() */
-export interface PdfTextItem {
-    str: string;
-    width: number;
-    height: number;
-    transform: number[];
-}
-
-/** Optional PDF coordinate data for precise rect computation */
-export interface PdfRectData {
-    textItems: PdfTextItem[];
-    spanToItemMap: Map<Element, number>;
-    viewportScale: number;
-}
-
-/** Normalized 0-1 rect relative to the text layer container */
-export type Rect = { x: number; y: number; w: number; h: number };
-
-/** A DOM Text node with its character range in the concatenated fullText */
-export type TextNode = { node: Text; start: number; end: number };
+import type { Rect } from '@/types/annotation';
+import type { PdfRectData, TextNode } from '@/types/viewer';
 
 let _measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
