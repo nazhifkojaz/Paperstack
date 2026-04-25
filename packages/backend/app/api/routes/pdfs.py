@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
 import httpx
@@ -9,15 +11,53 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.config import settings
-from app.db.models import Annotation, AnnotationSet, Collection, Pdf, PdfCollection, PdfTag, User
+from app.db.engine import SessionLocal
+from app.db.models import Annotation, AnnotationSet, Collection, Pdf, PdfCollection, PdfTag, PdfIndexStatus, User
 from app.middleware.rate_limit import limiter
-from app.schemas.pdf import PdfLinkCreate, PdfListParams, PdfResponse, PdfUpdate, PdfUrlCheckRequest, PdfUrlCheckResponse
+from app.schemas.pdf import PdfIndexStatusResponse, PdfLinkCreate, PdfListParams, PdfResponse, PdfUpdate, PdfUrlCheckRequest, PdfUrlCheckResponse
 from app.services import pdf_metadata
+from app.services.pdf_download_service import pdf_download_service
+from app.services.indexing_service import IndexingService
 from app.services.storage.factory import get_storage_backend
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _run_index_background(pdf_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    """Fire-and-forget background indexing task."""
+    async with SessionLocal() as db:
+        try:
+            pdf_row = await db.get(Pdf, pdf_id)
+            user_row = await db.get(User, user_id)
+            if not pdf_row or not user_row:
+                return
+            svc = IndexingService(download_service=pdf_download_service)
+            status = await svc.get_or_create_status(str(pdf_id), str(user_id), db)
+            await db.commit()
+            if status.status == "indexed":
+                return
+            await svc.index_pdf(pdf_row, user_row, status, db)
+            await db.commit()
+        except Exception as exc:
+            logger.exception("Background indexing failed for pdf %s", pdf_id)
+            try:
+                await db.rollback()
+                result = await db.execute(
+                    select(PdfIndexStatus).where(
+                        PdfIndexStatus.pdf_id == pdf_id,
+                        PdfIndexStatus.user_id == user_id,
+                    )
+                )
+                row = result.scalar_one_or_none()
+                if row and row.status != "failed":
+                    row.status = "failed"
+                    row.error_message = str(exc)[:500]
+                    row.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+            except Exception:
+                logger.exception("Failed to mark indexing status=failed for pdf %s", pdf_id)
 
 
 def _has_stored_content(pdf: Pdf) -> bool:
@@ -87,6 +127,7 @@ async def upload_pdf(
 
     await db.commit()
     await db.refresh(pdf)
+    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
     return pdf
 
 
@@ -195,6 +236,7 @@ async def link_pdf(
 
     await db.commit()
     await db.refresh(pdf)
+    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
     return pdf
 
 
@@ -241,6 +283,49 @@ async def get_pdf(
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
     return pdf
+
+
+@router.get("/{pdf_id}/index-status", response_model=PdfIndexStatusResponse)
+async def get_index_status(
+    pdf_id: uuid.UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> PdfIndexStatusResponse:
+    """Return the indexing status of a PDF."""
+    pdf = await db.get(Pdf, pdf_id)
+    if not pdf or pdf.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
+    svc = IndexingService(download_service=pdf_download_service)
+    row = await svc.get_or_create_status(str(pdf_id), str(current_user.id), db)
+    await db.commit()
+    return row
+
+
+@router.post("/{pdf_id}/reindex", status_code=202)
+@limiter.limit(settings.RATE_LIMIT_REINDEX)
+async def reindex_pdf(
+    request: Request,
+    pdf_id: uuid.UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict[str, str]:
+    """Re-trigger indexing for a PDF (manual retry or forced re-index)."""
+    pdf = await db.get(Pdf, pdf_id)
+    if not pdf or pdf.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
+    svc = IndexingService(download_service=pdf_download_service)
+    status = await svc.get_or_create_status(str(pdf_id), str(current_user.id), db)
+    if status.status == "indexing":
+        raise HTTPException(status_code=409, detail="Indexing already in progress.")
+
+    status.status = "not_indexed"
+    status.error_message = None
+    await db.commit()
+
+    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
+    return {"status": "accepted"}
 
 
 @router.patch("/{pdf_id}", response_model=PdfResponse)

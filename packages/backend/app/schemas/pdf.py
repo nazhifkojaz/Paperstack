@@ -49,6 +49,14 @@ class PdfResponse(PdfBase):
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
+class PdfIndexStatusResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str  # 'not_indexed' | 'indexing' | 'indexed' | 'failed'
+    chunk_count: Optional[int] = None
+    error_message: Optional[str] = None
+    indexed_at: Optional[datetime] = None
+
 class PdfListParams(BaseModel):
     collection_id: Optional[uuid.UUID] = None
     tag_id: Optional[uuid.UUID] = None
