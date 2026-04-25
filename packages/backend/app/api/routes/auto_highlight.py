@@ -1,16 +1,15 @@
-"""Auto-highlight routes: LLM-powered paper analysis."""
+"""Auto-highlight routes: retrieve-then-extract paper analysis."""
 import asyncio
 import logging
 import uuid
-from pathlib import Path
 from typing import Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user, resolve_api_key_with_quota
+from app.services.exceptions import IndexingError
 from app.core.config import settings
 from app.core.http_client import HTTPClientState
 from app.db.engine import SessionLocal
@@ -24,40 +23,16 @@ from app.schemas.auto_highlight import (
     AutoHighlightCacheResponse, QuotaResponse,
 )
 from app.services.llm_service import LLMService, CATEGORY_COLORS
-from app.services.text_extractor import extract_text_with_pages, is_text_pdf
+from app.services.highlight_shortlist_service import highlight_shortlist_service
+from app.services.pdf_download_service import pdf_download_service
+from app.services.indexing_service import IndexingService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 _MAX_PAGES = 100
-_CHUNK_SIZE = 5  # Pages per LLM call (conservative for free-tier models)
-
-
-def _split_text_by_pages(
-    full_text: str, chunk_pages: list[list[int]]
-) -> list[str]:
-    """Split extracted text into per-chunk strings using PAGE markers."""
-    import re
-
-    # Parse all page blocks from the full text
-    pattern = re.compile(r"--- PAGE (\d+) ---\n")
-    splits = list(pattern.finditer(full_text))
-
-    # Map page number → its text block
-    page_blocks: dict[int, str] = {}
-    for i, match in enumerate(splits):
-        page_num = int(match.group(1))
-        start = match.start()
-        end = splits[i + 1].start() if i + 1 < len(splits) else len(full_text)
-        page_blocks[page_num] = full_text[start:end].strip()
-
-    chunks: list[str] = []
-    for pages in chunk_pages:
-        parts = [page_blocks[p] for p in pages if p in page_blocks]
-        chunks.append("\n\n".join(parts))
-
-    return chunks
+_BATCH_SIZE_THOROUGH = 5
 
 
 def _build_set_name(categories: list[str]) -> str:
@@ -82,124 +57,172 @@ async def _run_analysis_background(
     provider: str,
     api_key: str,
     model: Optional[str],
-    llm_client: httpx.AsyncClient,
+    tier: str,
+    llm_client,
 ) -> None:
-    """Background task: download PDF, call LLM, create annotations.
-
-    Creates its own DB session. Updates cache status to 'complete' or 'failed'.
-    """
-    tmp_path: Path | None = None
+    """Background task: ensure indexed → shortlist → LLM extract → annotations."""
     async with SessionLocal() as db:
         try:
-
             user_result = await db.execute(
                 select(User).where(User.id == user_id)
             )
             user = user_result.scalar_one_or_none()
             if not user:
-                raise ValueError("User not found")
+                raise IndexingError("User not found.")
 
             pdf_result = await db.execute(
                 select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == user_id)
             )
             pdf_row = pdf_result.scalar_one_or_none()
             if not pdf_row:
-                raise ValueError("PDF not found")
+                raise IndexingError("PDF not found.")
 
-
-            from app.services.pdf_download_service import pdf_download_service
-            from app.services.indexing_service import IndexingService
-
+            # Step 1: ensure indexed
             idx_service = IndexingService(download_service=pdf_download_service)
-            tmp_path = await idx_service.download_pdf_for_row(pdf_row, user, db)
-
-            with open(tmp_path, "rb") as f:
-                paper_text, total_pages, pages_analyzed = extract_text_with_pages(
-                    f, pages=pages
-                )
-
-            if not is_text_pdf(paper_text):
-                raise ValueError(
-                    "This PDF doesn't contain selectable text. "
-                    "Auto-highlight requires text-based PDFs."
-                )
-
-            # Split pages into chunks to avoid upstream LLM timeouts
-            sorted_pages = sorted(pages)
-            page_chunks = [
-                sorted_pages[i : i + _CHUNK_SIZE]
-                for i in range(0, len(sorted_pages), _CHUNK_SIZE)
-            ]
-
-            llm_svc = LLMService(http_client=llm_client)
-
-            if len(page_chunks) <= 1:
-                highlights = await llm_svc.analyze_paper(
-                    paper_text, categories, provider, api_key, model=model,
-                )
-            else:
-                text_chunks = _split_text_by_pages(paper_text, page_chunks)
-                tasks = [
-                    llm_svc.analyze_paper(
-                        chunk, categories, provider, api_key, model=model,
-                    )
-                    for chunk in text_chunks
-                ]
-                chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                highlights = []
-                for i, result in enumerate(chunk_results):
-                    if isinstance(result, Exception):
-                        logger.warning(
-                            "Chunk %d (pages %s) failed: %s",
-                            i, page_chunks[i], result,
-                        )
-                    else:
-                        highlights.extend(result)
-
-                if not highlights:
-                    raise ValueError(
-                        "All analysis chunks failed. Try fewer pages or a different model."
-                    )
-
-            annotation_set = AnnotationSet(
-                pdf_id=pdf_id,
-                user_id=user_id,
-                name=_build_set_name(categories),
-                color="#a855f7",
-                source="auto_highlight",
+            idx_status = await idx_service.get_or_create_status(
+                str(pdf_id), str(user_id), db,
             )
-            db.add(annotation_set)
-            await db.flush()
+            await db.commit()
+            await idx_service.ensure_indexed(pdf_row, user, idx_status, db)
+            await db.commit()
 
-            for h in highlights:
-                ann = Annotation(
-                    set_id=annotation_set.id,
-                    page_number=max(1, h["page"]),
-                    type="highlight",
-                    rects=[],
-                    selected_text=h["text"],
-                    note_content=h["reason"],
-                    color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
-                    ann_metadata={"category": h["category"]},
+            # Step 2: shortlist candidate chunks
+            shortlist = await highlight_shortlist_service.shortlist_chunks(
+                pdf_id=str(pdf_id),
+                user_id=str(user_id),
+                categories=categories,
+                pages=pages,
+                tier=tier,
+                db=db,
+            )
+
+            if not shortlist:
+                raise IndexingError(
+                    "No indexed text found for the selected pages. "
+                    "Make sure the PDF is indexed and the pages contain text."
                 )
-                db.add(ann)
 
+            # Fetch cache row for progress updates
             cache_result = await db.execute(
                 select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
             )
             cache_row = cache_result.scalar_one()
-            cache_row.status = "complete"
-            cache_row.llm_response = highlights
-            cache_row.annotation_set_id = annotation_set.id
 
-            await db.commit()
-            logger.info("Background analysis complete: cache_id=%s", cache_id)
+            llm_svc = LLMService(http_client=llm_client)
+
+            if tier == "quick":
+                # Quick: single call, all at once
+                highlights = await llm_svc.extract_highlights_from_passages(
+                    shortlist, categories, provider, api_key, model=model, db=db,
+                )
+
+                if not highlights:
+                    cache_row.status = "failed"
+                    cache_row.progress_pct = 100
+                    cache_row.llm_response = {
+                        "error": "No highlight-worthy passages found. "
+                                 "Try a wider page range or different categories.",
+                    }
+                    await db.commit()
+                    return
+
+                annotation_set = AnnotationSet(
+                    pdf_id=pdf_id,
+                    user_id=user_id,
+                    name=_build_set_name(categories),
+                    color="#a855f7",
+                    source="auto_highlight",
+                )
+                db.add(annotation_set)
+                await db.flush()
+
+                for h in highlights:
+                    db.add(Annotation(
+                        set_id=annotation_set.id,
+                        page_number=max(1, h["page"]),
+                        type="highlight",
+                        rects=[],
+                        selected_text=h["text"],
+                        note_content=h["reason"],
+                        color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
+                        ann_metadata={"category": h["category"]},
+                    ))
+
+                cache_row.status = "complete"
+                cache_row.progress_pct = 100
+                cache_row.llm_response = highlights
+                cache_row.annotation_set_id = annotation_set.id
+                await db.commit()
+
+            else:
+                # Thorough: sequential batches with progressive saves
+                batches = [
+                    shortlist[i:i + _BATCH_SIZE_THOROUGH]
+                    for i in range(0, len(shortlist), _BATCH_SIZE_THOROUGH)
+                ]
+                total = len(batches)
+                all_highlights = []
+                annotation_set = None
+
+                for idx, batch in enumerate(batches, 1):
+                    batch_highlights = await llm_svc.extract_highlights_from_passages(
+                        batch, categories, provider, api_key, model=model, db=db,
+                    )
+                    all_highlights.extend(batch_highlights)
+
+                    if annotation_set is None and batch_highlights:
+                        annotation_set = AnnotationSet(
+                            pdf_id=pdf_id,
+                            user_id=user_id,
+                            name=_build_set_name(categories),
+                            color="#a855f7",
+                            source="auto_highlight",
+                        )
+                        db.add(annotation_set)
+                        await db.flush()
+
+                    for h in batch_highlights:
+                        db.add(Annotation(
+                            set_id=annotation_set.id,
+                            page_number=max(1, h["page"]),
+                            type="highlight",
+                            rects=[],
+                            selected_text=h["text"],
+                            note_content=h["reason"],
+                            color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
+                            ann_metadata={"category": h["category"]},
+                        ))
+
+                    cache_row.progress_pct = int(idx / total * 100)
+                    if annotation_set:
+                        cache_row.annotation_set_id = annotation_set.id
+                    await db.commit()
+
+                if not all_highlights:
+                    cache_row.status = "failed"
+                    cache_row.progress_pct = 100
+                    cache_row.llm_response = {
+                        "error": "No highlight-worthy passages found. "
+                                 "Try a wider page range or different categories.",
+                    }
+                    await db.commit()
+                    return
+
+                cache_row.status = "complete"
+                cache_row.progress_pct = 100
+                cache_row.llm_response = all_highlights
+                if annotation_set:
+                    cache_row.annotation_set_id = annotation_set.id
+                await db.commit()
+
+            logger.info(
+                "Background analysis complete: cache_id=%s, tier=%s",
+                cache_id, tier,
+            )
 
         except Exception as e:
             logger.exception("Background analysis failed: cache_id=%s", cache_id)
             try:
-
                 await db.rollback()
                 cache_result = await db.execute(
                     select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
@@ -213,9 +236,6 @@ async def _run_analysis_background(
                 logger.exception(
                     "Failed to update cache status for cache_id=%s", cache_id
                 )
-        finally:
-            if tmp_path:
-                tmp_path.unlink(missing_ok=True)
 
 
 @router.post("/analyze", response_model=AutoHighlightResponse, status_code=202)
@@ -265,11 +285,12 @@ async def analyze_paper(
     if pending_cache:
         if pending_cache.status == "pending":
             raise HTTPException(status_code=409, detail="Analysis already in progress.")
-        # Reuse failed/complete entry
         pending_cache.status = "pending"
         pending_cache.provider = provider
         pending_cache.llm_response = None
         pending_cache.annotation_set_id = None
+        pending_cache.progress_pct = 0
+        pending_cache.tier = data.tier
     else:
         pending_cache = AutoHighlightCache(
             pdf_id=data.pdf_id,
@@ -278,6 +299,7 @@ async def analyze_paper(
             pages=resolved_pages,
             status="pending",
             provider=provider,
+            tier=data.tier,
         )
         db.add(pending_cache)
 
@@ -298,6 +320,7 @@ async def analyze_paper(
             provider=provider,
             api_key=api_key,
             model=model,
+            tier=data.tier,
             llm_client=llm_client,
         )
     )
@@ -362,14 +385,8 @@ async def delete_cache(
         raise HTTPException(status_code=404, detail="Cache entry not found")
 
     if cache_row.annotation_set_id:
-        await db.execute(
-            delete(AnnotationSet).where(AnnotationSet.id == cache_row.annotation_set_id)
-        )
-    else:
-        await db.execute(
-            delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
-        )
-
+        await db.execute(delete(AnnotationSet).where(AnnotationSet.id == cache_row.annotation_set_id))
+    await db.execute(delete(AutoHighlightCache).where(AutoHighlightCache.id == cache_id))
     await db.commit()
 
 

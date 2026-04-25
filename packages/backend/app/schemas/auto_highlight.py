@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,6 +14,10 @@ class AutoHighlightRequest(BaseModel):
     pages: Optional[list[int]] = Field(
         default=None,
         description="Page numbers to analyze (1-indexed). None = pages 1-10.",
+    )
+    tier: Literal["quick", "thorough"] = Field(
+        default="quick",
+        description="Quick: single-call retrieve-then-extract. Thorough: sequential batches.",
     )
 
 
@@ -32,6 +36,8 @@ class AutoHighlightCacheResponse(BaseModel):
     categories: list[str]  # JSONB
     pages: list[int]  # JSONB
     status: str
+    progress_pct: int = 0
+    tier: str = "quick"
     created_at: datetime
     annotation_set_id: Optional[UUID] = None
 
