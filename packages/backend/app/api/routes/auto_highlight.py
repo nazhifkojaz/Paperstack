@@ -1,6 +1,9 @@
 """Auto-highlight routes: retrieve-then-extract paper analysis."""
 import asyncio
+import difflib
 import logging
+import re
+import unicodedata
 import uuid
 from typing import Optional
 
@@ -15,7 +18,7 @@ from app.core.http_client import HTTPClientState
 from app.db.engine import SessionLocal
 from app.db.models import (
     User, Pdf, Annotation, AnnotationSet, AutoHighlightCache,
-    UserUsageQuota, UserApiKey,
+    UserUsageQuota, UserApiKey, PdfChunk,
 )
 from app.middleware.rate_limit import limiter
 from app.schemas.auto_highlight import (
@@ -46,6 +49,116 @@ def _build_set_name(categories: list[str]) -> str:
     }
     names = [display.get(c, c.title()) for c in categories]
     return "AI: " + ", ".join(names)
+
+
+async def _extract_abstract_text(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db: AsyncSession,
+) -> str:
+    """Extract abstract text from indexed chunks.
+
+    First tries chunks tagged with section_title="Abstract", then falls back
+    to the first 3 chunks (which typically cover abstract + introduction).
+    """
+    # Try chunks with explicit "Abstract" section heading
+    result = await db.execute(
+        select(PdfChunk).where(
+            PdfChunk.pdf_id == pdf_id,
+            PdfChunk.user_id == user_id,
+            PdfChunk.section_title.ilike("abstract"),
+        ).order_by(PdfChunk.chunk_index).limit(3)
+    )
+    abstract_chunks = result.scalars().all()
+
+    if abstract_chunks:
+        return " ".join(c.content for c in abstract_chunks)[:3000]
+
+    # Fall back to first chunks by index (usually cover abstract + introduction)
+    result = await db.execute(
+        select(PdfChunk).where(
+            PdfChunk.pdf_id == pdf_id,
+            PdfChunk.user_id == user_id,
+        ).order_by(PdfChunk.chunk_index).limit(3)
+    )
+    first_chunks = result.scalars().all()
+
+    if first_chunks:
+        return " ".join(c.content for c in first_chunks)[:3000]
+
+    return ""
+
+
+_HIGHLIGHT_MIN_TEXT_LEN = 10
+_HIGHLIGHT_MIN_RATIO = 0.75
+
+_re_whitespace = re.compile(r"\s+")
+
+
+def _norm_for_match(text: str) -> str:
+    """Normalize text for fuzzy comparison: lowercase, collapse whitespace,
+    NFKC unicode normalization, strip non-alphanumeric edges."""
+    text = text.lower()
+    text = unicodedata.normalize("NFKC", text)
+    text = _re_whitespace.sub(" ", text).strip()
+    return text
+
+
+def _validate_highlights_against_chunks(
+    highlights: list[dict],
+    passages: list,
+) -> list[dict]:
+    """Filter highlights to only those textually present in source passages.
+
+    Uses difflib longest-contiguous-match to verify each quote appears
+    as a near-substring of the passages fed to the LLM. Quotes below the
+    minimum ratio threshold are logged and dropped.
+    """
+    if not highlights or not passages:
+        return []
+
+    norm_passages = [_norm_for_match(p.content) for p in passages]
+
+    valid: list[dict] = []
+    for h in highlights:
+        norm_quote = _norm_for_match(h["text"])
+        if len(norm_quote) < _HIGHLIGHT_MIN_TEXT_LEN:
+            continue
+
+        # Try exact substring across all passages (fast path)
+        found = any(norm_quote in np for np in norm_passages)
+        if found:
+            valid.append(h)
+            continue
+
+        # Fuzzy: find longest contiguous match in each passage
+        best_size = 0
+        for np in norm_passages:
+            if len(np) == 0:
+                continue
+            match = difflib.SequenceMatcher(
+                None, np, norm_quote, autojunk=False,
+            ).find_longest_match(0, len(np), 0, len(norm_quote))
+            if match.size > best_size:
+                best_size = match.size
+
+        ratio = best_size / len(norm_quote) if norm_quote else 0.0
+        if ratio >= _HIGHLIGHT_MIN_RATIO:
+            valid.append(h)
+        else:
+            logger.warning(
+                "Dropped highlight not found in source passages "
+                "(ratio=%.2f): %s",
+                ratio, h["text"][:120],
+            )
+
+    if len(valid) < len(highlights):
+        logger.info(
+            "Validated highlights: %d/%d passed (dropped %d)",
+            len(valid), len(highlights), len(highlights) - len(valid),
+        )
+
+    return valid
 
 
 async def _run_analysis_background(
@@ -86,6 +199,35 @@ async def _run_analysis_background(
             await idx_service.ensure_indexed(pdf_row, user, idx_status, db)
             await db.commit()
 
+            # Create LLM service early — reused for query generation + extraction
+            llm_svc = LLMService(http_client=llm_client)
+
+            # Step 1.5: generate paper-specific search queries from title + abstract
+            custom_queries: dict[str, str] | None = None
+            try:
+                abstract_text = await _extract_abstract_text(
+                    pdf_id, user_id, db,
+                )
+                if len(abstract_text) >= 50:
+                    custom_queries = await llm_svc.generate_paper_queries(
+                        title=pdf_row.title,
+                        abstract=abstract_text,
+                        categories=categories,
+                        provider=provider,
+                        api_key=api_key,
+                        model=model,
+                    )
+                    if custom_queries:
+                        logger.info(
+                            "Generated paper-specific queries for %d categories",
+                            len(custom_queries),
+                        )
+            except Exception:
+                logger.exception(
+                    "Failed to generate paper-specific queries, "
+                    "falling back to canned queries"
+                )
+
             # Step 2: shortlist candidate chunks
             shortlist = await highlight_shortlist_service.shortlist_chunks(
                 pdf_id=str(pdf_id),
@@ -94,6 +236,7 @@ async def _run_analysis_background(
                 pages=pages,
                 tier=tier,
                 db=db,
+                custom_queries=custom_queries,
             )
 
             if not shortlist:
@@ -108,13 +251,12 @@ async def _run_analysis_background(
             )
             cache_row = cache_result.scalar_one()
 
-            llm_svc = LLMService(http_client=llm_client)
-
             if tier == "quick":
                 # Quick: single call, all at once
                 highlights = await llm_svc.extract_highlights_from_passages(
                     shortlist, categories, provider, api_key, model=model, db=db,
                 )
+                highlights = _validate_highlights_against_chunks(highlights, shortlist)
 
                 if not highlights:
                     cache_row.status = "failed"
@@ -167,6 +309,9 @@ async def _run_analysis_background(
                 for idx, batch in enumerate(batches, 1):
                     batch_highlights = await llm_svc.extract_highlights_from_passages(
                         batch, categories, provider, api_key, model=model, db=db,
+                    )
+                    batch_highlights = _validate_highlights_against_chunks(
+                        batch_highlights, batch,
                     )
                     all_highlights.extend(batch_highlights)
 

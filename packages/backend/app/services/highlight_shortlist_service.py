@@ -43,6 +43,7 @@ class HighlightShortlistService:
         pages: list[int],
         tier: Tier,
         db: AsyncSession,
+        custom_queries: dict[str, str] | None = None,
     ) -> list[CandidateChunk]:
         k = _K_PER_CAT[tier]
         pages_set = set(pages)
@@ -52,6 +53,10 @@ class HighlightShortlistService:
             query = CATEGORY_QUERIES.get(cat)
             if not query:
                 continue
+            # Augment with paper-specific query if available
+            custom = (custom_queries or {}).get(cat)
+            if custom:
+                query = f"{query} | {custom}"
             vec = await self._embeddings.embed_query(query, db=db)
             results: list[SearchResult] = await vector_search_service.search_pdf(
                 query_vector=vec,

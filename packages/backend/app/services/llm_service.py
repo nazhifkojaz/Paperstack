@@ -65,8 +65,10 @@ CATEGORY_DEFINITIONS = {
 }
 
 
-def strip_markdown_fences(text: str) -> str:
+def strip_markdown_fences(text: str | None) -> str:
     """Strip markdown code fences from LLM response."""
+    if not text:
+        return ""
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```\w*\n?", "", text)
@@ -75,8 +77,11 @@ def strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
-def _parse_highlights_json(raw_response: str) -> list[HighlightDict]:
+def _parse_highlights_json(raw_response: str | None) -> list[HighlightDict]:
     """Parse and validate LLM response into highlight list."""
+    if not raw_response:
+        logger.warning("Empty LLM response in highlight extraction")
+        return []
     cleaned = strip_markdown_fences(raw_response)
 
     # Sanitize literal newlines inside JSON string values (some LLMs emit these)
@@ -114,6 +119,33 @@ def _check_openrouter_error(data: dict) -> None:
         if metadata:
             error_msg = f"{error_msg} | {metadata}"
         raise LLMProviderError("openrouter", 0, error_msg)
+
+
+def _parse_queries_json(raw_response: str | None, categories: list[str]) -> dict[str, str]:
+    """Parse LLM response into a {category: query} dict."""
+    if not raw_response:
+        logger.warning("Empty LLM response in query generation")
+        return {}
+    cleaned = strip_markdown_fences(raw_response)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', ' ', cleaned)
+        try:
+            data = json.loads(sanitized)
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse query-generation JSON: %s", e)
+            return {}
+
+    if not isinstance(data, dict):
+        logger.warning("Expected dict from query generation, got %s", type(data))
+        return {}
+
+    result: dict[str, str] = {}
+    for cat in categories:
+        if cat in data and isinstance(data[cat], str) and data[cat].strip():
+            result[cat] = data[cat].strip()
+    return result
 
 
 class LLMService:
@@ -478,6 +510,68 @@ CRITICAL:
             raise ValueError(f"Unknown provider: {provider}")
 
         return _parse_highlights_json(raw)
+
+    async def generate_paper_queries(
+        self,
+        title: str,
+        abstract: str,
+        categories: list[str],
+        provider: str,
+        api_key: str,
+        model: str | None = None,
+    ) -> dict[str, str]:
+        """Generate paper-specific search queries for highlight category retrieval.
+
+        Uses the paper's title and abstract to produce category-specific search
+        queries that match the paper's actual vocabulary, named entities, and
+        key phrases. Falls back to empty dict on any error.
+        """
+        cat_defs = "\n".join(
+            f"- {k}: {CATEGORY_DEFINITIONS[k]}"
+            for k in categories
+            if k in CATEGORY_DEFINITIONS
+        )
+
+        system_prompt = (
+            "You are an academic research assistant. Generate expanded search queries "
+            "for vector similarity search to find relevant passages within a specific paper. "
+            "Incorporate the paper's own terminology, named entities, and key phrases."
+        )
+
+        user_prompt = (
+            f"Paper Title: {title}\n\n"
+            f"Abstract:\n{abstract[:3000]}\n\n"
+            f"For each category below, generate a search query (10-30 words) that "
+            f"includes key terms, proper nouns, and technical vocabulary from THIS paper:\n\n"
+            f"{cat_defs}\n\n"
+            f"Return JSON (no markdown fences):\n"
+            f'{{"findings": "query...", "methods": "query...", ...}}\n\n'
+            f"CRITICAL: Use the paper's actual model names, datasets, metrics, "
+            f"and domain terms. Do not use generic placeholder terms."
+        )
+
+        try:
+            if provider == "glm":
+                raw = await self.call_glm(system_prompt, user_prompt, api_key)
+            elif provider == "gemini":
+                raw = await self.call_gemini(system_prompt, user_prompt, api_key)
+            elif provider == "openai":
+                raw = await self.call_openai(system_prompt, user_prompt, api_key)
+            elif provider == "anthropic":
+                raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
+            elif provider == "openrouter":
+                raw = await self.call_openrouter(
+                    system_prompt, user_prompt, api_key,
+                    model=model or DEFAULT_FREE_MODEL,
+                )
+            else:
+                logger.warning("Unknown provider for query generation: %s", provider)
+                return {}
+        except Exception:
+            logger.exception("Failed to generate paper-specific queries")
+            return {}
+
+        return _parse_queries_json(raw, categories)
 
 
 # Registry mapping provider name → streaming method name on LLMService
