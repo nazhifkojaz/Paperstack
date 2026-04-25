@@ -3,7 +3,7 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, patch
 from app.services.llm_service import (
-    LLMService, parse_llm_response, build_prompt, strip_markdown_fences,
+    LLMService, _parse_highlights_json, strip_markdown_fences,
     CATEGORY_COLORS,
 )
 
@@ -23,55 +23,41 @@ def test_strip_markdown_fences_plain_backticks():
     assert strip_markdown_fences(raw) == '[{"text": "x"}]'
 
 
-def test_parse_llm_response_valid():
+def test_parse_highlights_json_valid():
     raw = json.dumps([
         {"text": "Some finding", "page": 1, "category": "findings", "reason": "Important result"},
         {"text": "A method", "page": 3, "category": "methods", "reason": "Core technique"},
     ])
-    highlights = parse_llm_response(raw)
+    highlights = _parse_highlights_json(raw)
     assert len(highlights) == 2
     assert highlights[0]["text"] == "Some finding"
     assert highlights[0]["category"] == "findings"
 
 
-def test_parse_llm_response_with_fences():
+def test_parse_highlights_json_with_fences():
     raw = '```json\n[{"text": "x", "page": 1, "category": "findings", "reason": "y"}]\n```'
-    highlights = parse_llm_response(raw)
+    highlights = _parse_highlights_json(raw)
     assert len(highlights) == 1
 
 
-def test_parse_llm_response_invalid_json():
+def test_parse_highlights_json_invalid_json():
     with pytest.raises(ValueError, match="Failed to parse"):
-        parse_llm_response("not json at all")
+        _parse_highlights_json("not json at all")
 
 
-def test_parse_llm_response_missing_fields():
+def test_parse_highlights_json_missing_fields():
     raw = json.dumps([{"text": "hello"}])  # missing page, category, reason
-    highlights = parse_llm_response(raw)
+    highlights = _parse_highlights_json(raw)
     assert len(highlights) == 1
     assert highlights[0]["page"] == 0
     assert highlights[0]["category"] == "unknown"
     assert highlights[0]["reason"] == ""
 
 
-def test_parse_llm_response_not_list():
+def test_parse_highlights_json_not_list():
     raw = json.dumps({"text": "not a list"})
     with pytest.raises(ValueError, match="Expected JSON array"):
-        parse_llm_response(raw)
-
-
-def test_build_prompt_contains_categories():
-    system, user = build_prompt("Some paper text", ["findings", "methods"])
-    assert "findings" in user
-    assert "methods" in user
-    assert "EXACT" in system or "character" in system.lower()
-    assert "Some paper text" in user
-
-
-def test_build_prompt_only_selected_categories():
-    system, user = build_prompt("text", ["findings"])
-    assert "findings" in user
-    assert "limitations" not in user
+        _parse_highlights_json(raw)
 
 
 def test_category_colors():
@@ -85,47 +71,41 @@ def test_category_colors():
         assert len(color) == 7
 
 
+# --- extract_highlights_from_passages ---
+
+
 @pytest.mark.asyncio
-async def test_llm_service_analyze_paper_glm():
+async def test_extract_highlights_from_passages_glm():
     service = LLMService()
     mock_response = json.dumps([
         {"text": "Key result", "page": 1, "category": "findings", "reason": "Primary finding"},
     ])
+    passage = type("P", (), {"content": "some text", "page_number": 1, "categories": ["findings"]})()
     with patch.object(service, "call_glm", new=AsyncMock(return_value=mock_response)):
-        highlights = await service.analyze_paper("paper text", ["findings"], "glm", "fake-key")
+        highlights = await service.extract_highlights_from_passages(
+            [passage], ["findings"], "glm", "fake-key",
+        )
     assert len(highlights) == 1
     assert highlights[0]["text"] == "Key result"
 
 
 @pytest.mark.asyncio
-async def test_llm_service_analyze_paper_gemini():
+async def test_extract_highlights_from_passages_empty():
     service = LLMService()
-    mock_response = json.dumps([
-        {"text": "A method", "page": 2, "category": "methods", "reason": "Core approach"},
-    ])
-    with patch.object(service, "call_gemini", new=AsyncMock(return_value=mock_response)):
-        highlights = await service.analyze_paper("paper text", ["methods"], "gemini", "fake-key")
-    assert len(highlights) == 1
-    assert highlights[0]["category"] == "methods"
+    result = await service.extract_highlights_from_passages(
+        [], ["findings"], "glm", "fake-key",
+    )
+    assert result == []
 
 
 @pytest.mark.asyncio
-async def test_llm_service_analyze_paper_openrouter():
+async def test_extract_highlights_from_passages_unknown_provider():
     service = LLMService()
-    mock_response = json.dumps([
-        {"text": "OpenRouter finding", "page": 5, "category": "findings", "reason": "Via free model"},
-    ])
-    with patch.object(service, "call_openrouter", new=AsyncMock(return_value=mock_response)):
-        highlights = await service.analyze_paper("paper text", ["findings"], "openrouter", "fake-key")
-    assert len(highlights) == 1
-    assert highlights[0]["text"] == "OpenRouter finding"
-
-
-@pytest.mark.asyncio
-async def test_llm_service_unknown_provider():
-    service = LLMService()
+    passage = type("P", (), {"content": "text", "page_number": 1, "categories": ["findings"]})()
     with pytest.raises(ValueError, match="Unknown provider"):
-        await service.analyze_paper("text", ["findings"], "unknown_provider", "key")
+        await service.extract_highlights_from_passages(
+            [passage], ["findings"], "unknown_provider", "key",
+        )
 
 
 # --- Direct OpenRouter method tests (Phase 7.1) ---

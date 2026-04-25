@@ -1,6 +1,4 @@
 import pytest
-import tempfile
-from pathlib import Path
 from httpx import AsyncClient
 from unittest.mock import AsyncMock, MagicMock, patch
 from tests.fixtures import (
@@ -168,12 +166,12 @@ def _init_http_clients():
 
 
 class TestAutoHighlightOpenRouterRateLimit:
-    """Tests for OpenRouter 429 handling in auto-highlight."""
+    """Tests for OpenRouter error handling in auto-highlight."""
 
-    async def test_analyze_openrouter_429_returns_429(
+    async def test_analyze_openrouter_429_returns_202(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
-        """When OpenRouter 429s in background, cache entry is marked failed."""
+        """When OpenRouter 429s in background, POST still returns 202."""
         _init_http_clients()
 
         from app.services.exceptions import LLMRateLimitError
@@ -187,53 +185,41 @@ class TestAutoHighlightOpenRouterRateLimit:
         )
         await db_session.commit()
 
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(b"%PDF-1.4 test content")
-            tmp_path = Path(tmp.name)
+        with patch(
+            "app.api.routes.auto_highlight.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
+        ) as mock_resolve, patch(
+            "app.api.routes.auto_highlight.LLMService",
+        ) as mock_llm_cls, patch(
+            "app.api.routes.auto_highlight.IndexingService",
+        ) as mock_idx_cls:
+            mock_resolve.return_value = MagicMock(
+                provider="openrouter",
+                api_key="openrouter-key",
+                is_in_house=True,
+                quota_remaining=5,
+            )
 
-        try:
-            mock_backend = AsyncMock()
-            mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
+            mock_llm = MagicMock()
+            mock_llm.extract_highlights_from_passages = AsyncMock(
+                side_effect=LLMRateLimitError("openrouter")
+            )
+            mock_llm_cls.return_value = mock_llm
 
-            with patch(
-                "app.api.routes.auto_highlight.resolve_api_key_with_quota",
-                new_callable=AsyncMock,
-            ) as mock_resolve, patch(
-                "app.services.storage.factory.get_storage_backend",
-                new_callable=AsyncMock,
-                return_value=mock_backend,
-            ), patch(
-                "app.api.routes.auto_highlight.extract_text_with_pages",
-                return_value=("Paper text content", 5, "5"),
-            ), patch(
-                "app.api.routes.auto_highlight.is_text_pdf",
-                return_value=True,
-            ), patch(
-                "app.api.routes.auto_highlight.LLMService",
-            ) as mock_llm_cls:
-                mock_resolve.return_value = MagicMock(
-                    provider="openrouter",
-                    api_key="openrouter-key",
-                    is_in_house=True,
-                    quota_remaining=5,
-                )
+            mock_idx_svc = MagicMock()
+            mock_idx_status = MagicMock()
+            mock_idx_status.status = "indexed"
+            mock_idx_svc.get_or_create_status = AsyncMock(return_value=mock_idx_status)
+            mock_idx_svc.ensure_indexed = AsyncMock(return_value=mock_idx_status)
+            mock_idx_cls.return_value = mock_idx_svc
 
-                mock_llm = MagicMock()
-                mock_llm.analyze_paper = AsyncMock(
-                    side_effect=LLMRateLimitError("openrouter")
-                )
-                mock_llm_cls.return_value = mock_llm
+            resp = await client.post(
+                "/v1/auto-highlight/analyze",
+                json={"pdf_id": str(pdf.id), "categories": ["findings"]},
+                headers=auth_headers,
+            )
 
-                resp = await client.post(
-                    "/v1/auto-highlight/analyze",
-                    json={"pdf_id": str(pdf.id), "categories": ["findings"]},
-                    headers=auth_headers,
-                )
-
-                # Now returns 202 immediately; LLM error handled in background
-                assert resp.status_code == 202
-        finally:
-            tmp_path.unlink(missing_ok=True)
+            assert resp.status_code == 202
 
     async def test_analyze_user_own_key_skips_openrouter(
         self, client: AsyncClient, auth_headers, db_session, test_user
@@ -250,57 +236,45 @@ class TestAutoHighlightOpenRouterRateLimit:
         )
         await db_session.commit()
 
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(b"%PDF-1.4 test content")
-            tmp_path = Path(tmp.name)
+        mock_highlights = [
+            {
+                "text": "User key finding",
+                "page": 1,
+                "category": "findings",
+                "reason": "Found by user's model",
+            },
+        ]
 
-        try:
-            mock_highlights = [
-                {
-                    "text": "User key finding",
-                    "page": 1,
-                    "category": "findings",
-                    "reason": "Found by user's model",
-                },
-            ]
+        with patch(
+            "app.api.routes.auto_highlight.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
+        ) as mock_resolve, patch(
+            "app.api.routes.auto_highlight.LLMService",
+        ) as mock_llm_cls, patch(
+            "app.api.routes.auto_highlight.IndexingService",
+        ) as mock_idx_cls:
+            mock_resolve.return_value = MagicMock(
+                provider="anthropic",
+                api_key="user-own-key",
+                is_in_house=False,
+                quota_remaining=None,
+            )
 
-            mock_backend = AsyncMock()
-            mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
+            mock_llm = MagicMock()
+            mock_llm.extract_highlights_from_passages = AsyncMock(return_value=mock_highlights)
+            mock_llm_cls.return_value = mock_llm
 
-            with patch(
-                "app.api.routes.auto_highlight.resolve_api_key_with_quota",
-                new_callable=AsyncMock,
-            ) as mock_resolve, patch(
-                "app.services.storage.factory.get_storage_backend",
-                new_callable=AsyncMock,
-                return_value=mock_backend,
-            ), patch(
-                "app.api.routes.auto_highlight.extract_text_with_pages",
-                return_value=("Paper text content", 5, "5"),
-            ), patch(
-                "app.api.routes.auto_highlight.is_text_pdf",
-                return_value=True,
-            ), patch(
-                "app.api.routes.auto_highlight.LLMService",
-            ) as mock_llm_cls:
-                mock_resolve.return_value = MagicMock(
-                    provider="anthropic",
-                    api_key="user-own-key",
-                    is_in_house=False,
-                    quota_remaining=None,
-                )
+            mock_idx_svc = MagicMock()
+            mock_idx_status = MagicMock()
+            mock_idx_status.status = "indexed"
+            mock_idx_svc.get_or_create_status = AsyncMock(return_value=mock_idx_status)
+            mock_idx_svc.ensure_indexed = AsyncMock(return_value=mock_idx_status)
+            mock_idx_cls.return_value = mock_idx_svc
 
-                mock_llm = MagicMock()
-                mock_llm.analyze_paper = AsyncMock(return_value=mock_highlights)
-                mock_llm_cls.return_value = mock_llm
+            resp = await client.post(
+                "/v1/auto-highlight/analyze",
+                json={"pdf_id": str(pdf.id), "categories": ["findings"]},
+                headers=auth_headers,
+            )
 
-                resp = await client.post(
-                    "/v1/auto-highlight/analyze",
-                    json={"pdf_id": str(pdf.id), "categories": ["findings"]},
-                    headers=auth_headers,
-                )
-
-                # Now returns 202 immediately; analysis runs in background
-                assert resp.status_code == 202
-        finally:
-            tmp_path.unlink(missing_ok=True)
+            assert resp.status_code == 202
