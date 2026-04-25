@@ -15,6 +15,7 @@ import { AnnotationsContext } from '../annotations/AnnotationsContext';
 import { ViewerToolbar } from './ViewerToolbar';
 import { VirtualPdfPage } from './VirtualPdfPage';
 import { FpsCounter } from './FpsCounter';
+import { IndexStatusBadge } from './IndexStatusBadge';
 import { AnnotationSidebar } from '../annotations/AnnotationSidebar';
 import { CitationPanel } from '../citations/CitationPanel';
 import { ChatPanel } from '../chat/ChatPanel';
@@ -182,8 +183,11 @@ export function ViewerPage() {
                     <ArrowLeft className="h-4 w-4 mr-2" />
                     Library
                 </Button>
-                <div className="flex-1 truncate font-medium">
-                    {pdfMetadata.title || pdfMetadata.filename}
+                <div className="flex-1 flex items-center gap-3 min-w-0">
+                    <span className="truncate font-medium">
+                        {pdfMetadata.title || pdfMetadata.filename}
+                    </span>
+                    <IndexStatusBadge pdfId={id!} />
                 </div>
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSettingsOpen(true)}>
                     <Settings className="h-4 w-4" />
