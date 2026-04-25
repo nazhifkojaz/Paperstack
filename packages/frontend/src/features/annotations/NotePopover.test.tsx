@@ -137,4 +137,62 @@ describe('NotePopover', () => {
 
         expect(mockOnClose).toHaveBeenCalled()
     })
+
+    it('renders AI badge and strips header for AI-generated explanations', () => {
+        const annotation = createMockAnnotation({
+            type: 'highlight',
+            note_content: '[AI Explanation — 2026-04-25 13:20 UTC] This passage explains that **attention mechanisms** are a core part.',
+        })
+
+        render(
+            <NotePopover
+                annotation={annotation}
+                containerDims={mockContainerDims}
+                onClose={mockOnClose}
+            />
+        )
+
+        expect(screen.getByText('AI Explanation')).toBeInTheDocument()
+        expect(screen.getByText('2026-04-25 13:20 UTC')).toBeInTheDocument()
+        expect(screen.getByText(/attention mechanisms/i)).toBeInTheDocument()
+        expect(screen.queryByText(/\[AI Explanation/)).not.toBeInTheDocument()
+    })
+
+    it('does not render AI badge for regular user notes', () => {
+        const annotation = createMockAnnotation({
+            type: 'note',
+            note_content: 'This is a regular user note without AI header.',
+        })
+
+        render(
+            <NotePopover
+                annotation={annotation}
+                containerDims={mockContainerDims}
+                onClose={mockOnClose}
+            />
+        )
+
+        expect(screen.queryByText('AI Explanation')).not.toBeInTheDocument()
+        expect(screen.getByText(/regular user note/i)).toBeInTheDocument()
+    })
+
+    it('uses responsive width when container is narrower than preferred card width', () => {
+        const annotation = createMockAnnotation({
+            type: 'note',
+            note_content: 'short note',
+        })
+
+        const narrowContainer = { width: 300, height: 400 }
+
+        render(
+            <NotePopover
+                annotation={annotation}
+                containerDims={narrowContainer}
+                onClose={mockOnClose}
+            />
+        )
+
+        const card = screen.getByTestId('note-popover-card')
+        expect(card).toHaveStyle({ width: '284px' }) // 300 - 8*2
+    })
 })

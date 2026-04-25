@@ -1,8 +1,8 @@
-import React from 'react'
+import React, { useState, useCallback } from 'react'
 import { useAnnotationStore } from '@/stores/annotationStore'
 import { useAnnotations, Annotation } from '@/api/annotations'
 import { usePdfViewerStore } from '@/stores/pdfViewerStore'
-import { AlertTriangle, Highlighter, Square, StickyNote } from 'lucide-react'
+import { AlertTriangle, Highlighter, Square, StickyNote, ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 type AnnotationGroup = {
@@ -94,10 +94,24 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
   const setSelectedAnnotationId = useAnnotationStore((state) => state.setSelectedAnnotationId)
   const setSelectedSetId = useAnnotationStore((state) => state.setSelectedSetId)
 
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set())
+
+  const toggleGroup = useCallback((key: string) => {
+    setCollapsedKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }, [])
+
   const handleAnnotationClick = (annotation: Annotation) => {
     setSelectedSetId(setId)
     setCurrentPage(annotation.page_number)
-    setSelectedAnnotationId(annotation.id)  // Set last since setSelectedSetId resets it
+    setSelectedAnnotationId(annotation.id)
   }
 
   const groupedAnnotations: AnnotationGroup[] = React.useMemo(() => {
@@ -129,67 +143,82 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
 
   return (
     <div className="pb-1">
-      {groupedAnnotations.map((group) => (
-        <div key={group.key} className="mb-1 last:mb-0">
-          <div className="px-4 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-            {group.label}
-            <span className="text-[9px] bg-muted px-1 py-0.5 rounded-full">
-              {group.count}
-            </span>
-          </div>
-          <div className="space-y-0.5 px-1">
-            {group.annotations.map((annotation) => {
-              const isSelected = annotation.id === selectedAnnotationId
-              const preview = getAnnotationPreview(annotation)
-              const typeIcon = TYPE_ICONS[annotation.type]
-              const isUnlocated = annotation.rects.length === 0 && !!annotation.selected_text
+      {groupedAnnotations.map((group) => {
+        const isCollapsed = collapsedKeys.has(group.key)
 
-              return (
-                <button
-                  key={annotation.id}
-                  data-annotation-id={annotation.id}
-                  onClick={() => handleAnnotationClick(annotation)}
-                  className={cn(
-                    'w-full text-left px-3 py-1.5 rounded-md text-sm flex items-start gap-2 transition-colors',
-                    isSelected
-                      ? 'bg-primary/10 border border-primary/20'
-                      : 'hover:bg-muted/50'
-                  )}
-                >
-                  <div className="shrink-0 mt-0.5">
-                    {typeIcon}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className={cn(
-                      'truncate text-xs',
-                      isSelected ? 'text-foreground font-medium' : 'text-muted-foreground'
-                    )}>
-                      {preview}
-                    </p>
-                    {isUnlocated && (
-                      <span className="text-[10px] text-amber-500 flex items-center gap-0.5">
-                        <AlertTriangle className="h-2.5 w-2.5" />
-                        Could not locate in PDF
-                      </span>
-                    )}
-                    {groupBy === 'type' && !isUnlocated && (
-                      <span className="text-[10px] text-muted-foreground">
-                        Page {annotation.page_number}
-                      </span>
-                    )}
-                  </div>
-                  {annotation.color && (
-                    <div
-                      className="shrink-0 w-2 h-2 rounded-full mt-1"
-                      style={{ backgroundColor: annotation.color }}
-                    />
-                  )}
-                </button>
-              )
-            })}
+        return (
+          <div key={group.key} className="mb-2 last:mb-0">
+            <button
+              onClick={() => toggleGroup(group.key)}
+              className="w-full flex items-center gap-1 px-4 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide hover:bg-muted/40 rounded-md transition-colors"
+            >
+              {isCollapsed ? (
+                <ChevronRight className="h-3 w-3 shrink-0" />
+              ) : (
+                <ChevronDown className="h-3 w-3 shrink-0" />
+              )}
+              <span className="flex-1 text-left">{group.label}</span>
+              <span className="text-[9px] bg-muted px-1.5 py-0.5 rounded-full shrink-0">
+                {group.count}
+              </span>
+            </button>
+
+            {!isCollapsed && (
+              <div className="space-y-1 px-1 mt-1">
+                {group.annotations.map((annotation) => {
+                  const isSelected = annotation.id === selectedAnnotationId
+                  const preview = getAnnotationPreview(annotation)
+                  const typeIcon = TYPE_ICONS[annotation.type]
+                  const isUnlocated = annotation.rects.length === 0 && !!annotation.selected_text
+
+                  return (
+                    <button
+                      key={annotation.id}
+                      data-annotation-id={annotation.id}
+                      onClick={() => handleAnnotationClick(annotation)}
+                      className={cn(
+                        'w-full text-left px-3 py-2 rounded-md text-sm flex items-start gap-2 transition-colors',
+                        isSelected
+                          ? 'bg-primary/10 border border-primary/20'
+                          : 'hover:bg-muted/50'
+                      )}
+                    >
+                      <div className="shrink-0 mt-0.5">
+                        {typeIcon}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className={cn(
+                          'text-xs break-words leading-relaxed',
+                          isSelected ? 'text-foreground font-medium' : 'text-muted-foreground'
+                        )}>
+                          {preview}
+                        </p>
+                        {isUnlocated && (
+                          <span className="text-[10px] text-amber-500 flex items-center gap-0.5 mt-0.5">
+                            <AlertTriangle className="h-2.5 w-2.5" />
+                            Could not locate in PDF
+                          </span>
+                        )}
+                        {groupBy === 'type' && !isUnlocated && (
+                          <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                            Page {annotation.page_number}
+                          </span>
+                        )}
+                      </div>
+                      {annotation.color && (
+                        <div
+                          className="shrink-0 w-2 h-2 rounded-full mt-1"
+                          style={{ backgroundColor: annotation.color }}
+                        />
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
