@@ -59,6 +59,7 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId, onAnalysisS
     const [pageEnd, setPageEnd] = useState(DEFAULT_END);
     const [advancedMode, setAdvancedMode] = useState(false);
     const [freeformInput, setFreeformInput] = useState('');
+    const [tier, setTier] = useState<'quick' | 'thorough'>('quick');
 
     const totalPages = usePdfViewerStore(state => state.totalPages);
     const analyzeMutation = useAnalyzePaper();
@@ -111,6 +112,7 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId, onAnalysisS
                 pdf_id: pdfId,
                 categories: Array.from(selected),
                 pages: pagesToSend,
+                tier,
             });
 
             toast.success('Analysis started — this may take 10-60 seconds');
@@ -233,6 +235,39 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId, onAnalysisS
                             )}
                         </label>
                     ))}
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-medium">Mode</label>
+                    <div className="flex rounded-md border overflow-hidden">
+                        <button
+                            type="button"
+                            className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                                tier === 'quick'
+                                    ? 'bg-purple-600 text-white'
+                                    : 'bg-background text-muted-foreground hover:bg-accent'
+                            }`}
+                            onClick={() => setTier('quick')}
+                        >
+                            Quick
+                        </button>
+                        <button
+                            type="button"
+                            className={`flex-1 px-3 py-2 text-xs font-medium transition-colors border-l ${
+                                tier === 'thorough'
+                                    ? 'bg-purple-600 text-white'
+                                    : 'bg-background text-muted-foreground hover:bg-accent'
+                            }`}
+                            onClick={() => setTier('thorough')}
+                        >
+                            Thorough
+                        </button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                        {tier === 'quick'
+                            ? 'Fast, focused highlights from the most relevant passages (~15s).'
+                            : 'Reads the whole paper in batches for comprehensive coverage (~30s, progressive results).'}
+                    </p>
                 </div>
 
                 <DialogFooter>

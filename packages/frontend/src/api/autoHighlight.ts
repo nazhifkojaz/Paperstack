@@ -5,6 +5,7 @@ interface AutoHighlightRequest {
     pdf_id: string;
     categories: string[];
     pages?: number[];
+    tier?: 'quick' | 'thorough';
 }
 
 interface AutoHighlightResponse {
@@ -21,6 +22,8 @@ interface AutoHighlightCacheEntry {
     categories: string[];
     pages: number[];
     status: 'pending' | 'complete' | 'failed';
+    progress_pct: number;
+    tier: string;
     created_at: string;
     annotation_set_id: string | null;
 }

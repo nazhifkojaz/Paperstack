@@ -15,6 +15,7 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
     const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
     const [activeCacheId, setActiveCacheId] = useState<string | null>(null);
     const notifiedRef = useRef<string | null>(null);
+    const lastProgressRef = useRef<number>(0);
     const { data: quota } = useAutoHighlightQuota();
     const queryClient = useQueryClient();
 
@@ -25,6 +26,16 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
 
     // Derive "is analyzing" from state + query data (no setState in effect needed)
     const isAnalyzing = activeCacheId !== null && (!statusData || statusData.status === 'pending');
+    const progressPct = statusData?.progress_pct ?? 0;
+
+    // Progressive invalidation: when progress_pct increases in thorough mode, invalidate annotations
+    useEffect(() => {
+        if (!statusData || !activeCacheId) return;
+        if (statusData.progress_pct > lastProgressRef.current && statusData.annotation_set_id) {
+            lastProgressRef.current = statusData.progress_pct;
+            queryClient.invalidateQueries({ queryKey: ['annotations', statusData.annotation_set_id] });
+        }
+    }, [statusData, activeCacheId, queryClient]);
 
     // Fire toast + invalidation exactly once per cache ID on terminal status
     useEffect(() => {
@@ -45,27 +56,36 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
 
     const handleAnalysisStarted = (cacheId: string) => {
         setActiveCacheId(cacheId);
+        lastProgressRef.current = 0;
     };
 
     return (
         <div className="px-4 py-3 border-b border-border">
-            <Button
-                className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white"
-                onClick={() => canAnalyze ? setShowCategoryDialog(true) : setShowApiKeyDialog(true)}
-                disabled={isAnalyzing}
-            >
-                {isAnalyzing ? (
-                    <>
-                        <span className="mr-1.5 animate-spin">✦</span>
-                        Analyzing...
-                    </>
-                ) : (
-                    <>
-                        <span className="mr-1.5">✦</span>
-                        Auto-Highlight Paper
-                    </>
+            <div className="relative">
+                <Button
+                    className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white"
+                    onClick={() => canAnalyze ? setShowCategoryDialog(true) : setShowApiKeyDialog(true)}
+                    disabled={isAnalyzing}
+                >
+                    {isAnalyzing ? (
+                        <>
+                            <span className="mr-1.5 animate-spin">✦</span>
+                            Analyzing... {progressPct > 0 ? `${progressPct}%` : ''}
+                        </>
+                    ) : (
+                        <>
+                            <span className="mr-1.5">✦</span>
+                            Auto-Highlight Paper
+                        </>
+                    )}
+                </Button>
+                {isAnalyzing && progressPct > 0 && (
+                    <div
+                        className="absolute bottom-0 left-0 h-0.5 bg-white/30 transition-all duration-500 rounded-b"
+                        style={{ width: `${progressPct}%` }}
+                    />
                 )}
-            </Button>
+            </div>
 
             {quota && (
                 <div className="mt-1.5 text-xs text-muted-foreground text-center">
