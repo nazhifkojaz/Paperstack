@@ -333,6 +333,12 @@ class AutoHighlightCache(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
     )  # 'pending' | 'complete' | 'failed'
+    progress_pct: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    tier: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'quick'")
+    )  # 'quick' | 'thorough'
     provider: Mapped[Optional[str]] = mapped_column(String(20))
     llm_response: Mapped[Optional[Any]] = mapped_column(JSONB)
     annotation_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(
