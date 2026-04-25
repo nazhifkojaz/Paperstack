@@ -1,18 +1,22 @@
 """LLM service for auto-highlight paper analysis and chat streaming."""
+from __future__ import annotations
+
 import json
 import logging
 import re
-from typing import Any, AsyncIterator, Callable, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 import httpx
 
 from app.schemas.types import ChatMessageDict, HighlightDict
 from app.services.exceptions import LLMRateLimitError, LLMProviderError
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MAX_CHARS = 200_000
 
 FREE_MODELS = [
     {
@@ -24,6 +28,21 @@ FREE_MODELS = [
         "id": "google/gemma-4-31b-it:free",
         "label": "Gemma 4 31B",
         "description": "Google's instruction-tuned model, strong reasoning",
+    },
+    {
+        "id": "tencent/hy3-preview:free",
+        "label": "Hunyuan 3 Preview",
+        "description": "Tencent's large preview model",
+    },
+    {
+        "id": "google/gemma-4-26b-a4b-it:free",
+        "label": "Gemma 4 26B",
+        "description": "Google's compact instruction-tuned Gemma 4 variant",
+    },
+    {
+        "id": "minimax/minimax-m2.5:free",
+        "label": "MiniMax M2.5",
+        "description": "MiniMax's efficient long-context model",
     },
 ]
 
@@ -56,65 +75,7 @@ def strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
-def build_prompt(paper_text: str, categories: list[str], max_chars: int = 0) -> tuple[str, str]:
-    """Build system and user prompts for paper analysis."""
-    if max_chars and len(paper_text) > max_chars:
-        paper_text = paper_text[:max_chars] + "\n\n[TRUNCATED: paper text exceeded model context limit]"
-
-    cat_defs = "\n".join(
-        f"- {k}: {v}" for k, v in CATEGORY_DEFINITIONS.items() if k in categories
-    )
-
-    system_prompt = (
-        "You are an academic paper analysis assistant. Your task is to identify "
-        "the most important passages in a research paper and copy them CHARACTER "
-        "FOR CHARACTER from the source text. You are a copy-paste machine — "
-        "never rephrase, summarize, or reconstruct what you read."
-    )
-
-    user_prompt = f"""Below is the full text of an academic paper. Page boundaries are marked with "--- PAGE {{n}} ---".
-
-Categories to identify: {", ".join(categories)}
-
-Category definitions:
-{cat_defs}
-
-Instructions:
-1. Read the entire paper carefully
-2. Select 10-20 of the most important passages matching the requested categories
-3. For each passage, copy the text EXACTLY as it appears — character for character, including spacing and punctuation
-4. Identify which page it appears on (look at the nearest "--- PAGE N ---" marker above the passage)
-5. Classify it into one of the requested categories
-6. Write a brief reason explaining WHY this passage is important
-
-Return a JSON array (no markdown fencing):
-[
-  {{
-    "text": "exact verbatim quote from the paper",
-    "page": 1,
-    "category": "findings",
-    "reason": "This presents the primary result showing X improves Y by Z%"
-  }}
-]
-
-CRITICAL RULES:
-- The "text" field must be a character-for-character copy from the paper text below
-- Find the passage in the text, then copy it by selecting and reproducing it exactly
-- Do NOT reconstruct from memory — look at the text and copy it
-- Do NOT include passages you cannot find verbatim in the text below
-- Do not combine sentences from different paragraphs
-- Prefer complete sentences (1-3 sentences max per entry)
-- NEVER change even a single word — "agentic" must stay "agentic", not "agent"
-- If you cannot find the exact text, skip that passage entirely
-- VERIFY: before including any quote, search the paper text above to confirm it appears exactly
-
---- PAPER TEXT ---
-{paper_text}"""
-
-    return system_prompt, user_prompt
-
-
-def parse_llm_response(raw_response: str) -> list[HighlightDict]:
+def _parse_highlights_json(raw_response: str) -> list[HighlightDict]:
     """Parse and validate LLM response into highlight list."""
     cleaned = strip_markdown_fences(raw_response)
 
@@ -433,17 +394,75 @@ class LLMService:
         ):
             yield token
 
-    async def analyze_paper(
+    async def extract_highlights_from_passages(
         self,
-        paper_text: str,
+        passages: list,
         categories: list[str],
         provider: str,
         api_key: str,
         model: Optional[str] = None,
+        db: AsyncSession | None = None,
     ) -> list[HighlightDict]:
-        """Analyze a paper and return structured highlights."""
-        max_chars = OPENROUTER_MAX_CHARS if provider == "openrouter" else 0
-        system_prompt, user_prompt = build_prompt(paper_text, categories, max_chars)
+        """Given pre-filtered passages, pick verbatim highlight-worthy quotes.
+
+        Each passage must have: content, page_number, categories (list[str]).
+        Always a single non-streaming call. For OpenRouter, records usage.
+        """
+        from app.services.openrouter_usage_service import openrouter_usage_service
+
+        if not passages:
+            return []
+
+        cat_defs = "\n".join(
+            f"- {k}: {CATEGORY_DEFINITIONS[k]}" for k in categories if k in CATEGORY_DEFINITIONS
+        )
+
+        numbered = []
+        for i, p in enumerate(passages, 1):
+            cats = ",".join(p.categories)
+            numbered.append(
+                f"[Passage {i}] (page {p.page_number}; candidate categories: {cats})\n"
+                f"{p.content}"
+            )
+        passages_block = "\n\n".join(numbered)
+
+        system_prompt = (
+            "You are an academic paper analysis assistant. You will be given a set of "
+            "pre-filtered passages from a research paper. Your job is to select the most "
+            "highlight-worthy VERBATIM sentences and classify them. You must copy text "
+            "character-for-character from the provided passages — never paraphrase."
+        )
+
+        user_prompt = f"""Below are passages from an academic paper, each pre-tagged with candidate categories.
+
+Categories to surface: {", ".join(categories)}
+
+Category definitions:
+{cat_defs}
+
+Instructions:
+1. From each passage, select 0-3 verbatim sentences that are highlight-worthy.
+2. Aim for 2-4 quotes per requested category across the whole set.
+3. Copy each quote EXACTLY as written. Preserve punctuation, spacing, casing.
+4. Use the page number from the passage header.
+5. Classify each quote into exactly one of the requested categories.
+6. Write a short reason (under 20 words).
+
+Return JSON (no markdown fencing):
+[
+  {{"text": "exact verbatim quote", "page": 3, "category": "findings", "reason": "..."}}
+]
+
+CRITICAL:
+- text must be a substring of a passage above. Do NOT invent or rephrase.
+- Skip any quote you cannot copy exactly.
+- Prefer complete single sentences (1-3 sentences max).
+
+--- PASSAGES ---
+{passages_block}"""
+
+        if provider == "openrouter" and db is not None:
+            await openrouter_usage_service.record_and_check(db)
 
         if provider == "glm":
             raw = await self.call_glm(system_prompt, user_prompt, api_key)
@@ -458,7 +477,7 @@ class LLMService:
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
-        return parse_llm_response(raw)
+        return _parse_highlights_json(raw)
 
 
 # Registry mapping provider name → streaming method name on LLMService
