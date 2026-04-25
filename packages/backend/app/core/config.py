@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_AUTO_HIGHLIGHT_CACHE: str = "30/minute"
     RATE_LIMIT_API_KEYS: str = "10/minute"
     RATE_LIMIT_PDF_CHECK_URL: str = "10/minute"
+    RATE_LIMIT_REINDEX: str = "5/minute"
 
     # Embedding — server key reused from OPENROUTER_API_KEY
 
