@@ -12,6 +12,7 @@ interface AnnotationStore {
     hiddenSetIds: Set<string>;          // Sets the user has hidden via eye toggle
     selectedAnnotationId: string | null;
     isAnnotationSidebarOpen: boolean;
+    isAnnotationSidebarCollapsed: boolean;
     sidebarGroupBy: 'page' | 'type';
     contextMenu: ContextMenuState | null;
 
@@ -23,6 +24,7 @@ interface AnnotationStore {
     isSetVisible: (id: string) => boolean;
     toggleAnnotationSidebar: () => void;
     setAnnotationSidebarOpen: (open: boolean) => void;
+    setAnnotationSidebarCollapsed: (collapsed: boolean) => void;
     setSidebarGroupBy: (groupBy: 'page' | 'type') => void;
     setContextMenu: (menu: ContextMenuState | null) => void;
 }
@@ -33,6 +35,7 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
     hiddenSetIds: new Set<string>(),
     selectedAnnotationId: null,
     isAnnotationSidebarOpen: true,
+    isAnnotationSidebarCollapsed: false,
     sidebarGroupBy: 'page',
     contextMenu: null,
 
@@ -52,8 +55,23 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
         return { hiddenSetIds: next };
     }),
     isSetVisible: (id) => !get().hiddenSetIds.has(id),
-    toggleAnnotationSidebar: () => set((state) => ({ isAnnotationSidebarOpen: !state.isAnnotationSidebarOpen })),
-    setAnnotationSidebarOpen: (open) => set({ isAnnotationSidebarOpen: open }),
+    toggleAnnotationSidebar: () => set((state) => {
+        const nextCollapsed = !state.isAnnotationSidebarCollapsed;
+        return {
+            isAnnotationSidebarCollapsed: nextCollapsed,
+            // When expanding, ensure sidebar is marked as open
+            ...(nextCollapsed === false ? { isAnnotationSidebarOpen: true } : {}),
+        };
+    }),
+    setAnnotationSidebarOpen: (open) => set({
+        isAnnotationSidebarOpen: open,
+        // If closing entirely, also collapse
+        ...(open === false ? { isAnnotationSidebarCollapsed: true } : {}),
+    }),
+    setAnnotationSidebarCollapsed: (collapsed) => set({
+        isAnnotationSidebarCollapsed: collapsed,
+        ...(collapsed === false ? { isAnnotationSidebarOpen: true } : {}),
+    }),
     setSidebarGroupBy: (groupBy) => set({ sidebarGroupBy: groupBy }),
     setContextMenu: (menu) => set({ contextMenu: menu }),
 }));

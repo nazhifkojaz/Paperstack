@@ -49,6 +49,7 @@ interface UseChatStreamReturn {
 
     // Actions
     handleSend: (overrideMessage?: string) => Promise<void>;
+    handleStop: () => void;
     handleRetry: () => void;
     handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
     clearStreaming: () => void;
@@ -78,6 +79,7 @@ export function useChatStream({
 
     const bottomRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
+    const tempUserIdRef = useRef<string | null>(null);
 
     const [input, setInput] = useState('');
     const [isSending, setIsSending] = useState(false);
@@ -94,6 +96,10 @@ export function useChatStream({
         clearStoreStreaming();
     };
 
+    const handleStop = () => {
+        abortControllerRef.current?.abort();
+    };
+
     const handleSend = async (overrideMessage?: string) => {
         const message = (overrideMessage ?? input).trim();
         if (!message || isSending || !conversationId) return;
@@ -106,6 +112,29 @@ export function useChatStream({
 
         const tempId = `temp-${Date.now()}`;
         startStreaming(tempId);
+
+        // Optimistically add the user message to the history cache so it
+        // appears immediately instead of showing only a loading spinner.
+        const tempUserId = `temp-user-${Date.now()}`;
+        tempUserIdRef.current = tempUserId;
+        queryClient.setQueryData<ChatMessage[]>(
+            ['chat-history', conversationId],
+            (old = []) => [
+                ...old,
+                {
+                    id: tempUserId,
+                    role: 'user' as const,
+                    content: message,
+                    context_chunks: null,
+                    created_at: new Date().toISOString(),
+                },
+            ]
+        );
+
+        // Scroll to bottom so the new user message is visible
+        setTimeout(() => {
+            bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 0);
 
         const abortController = new AbortController();
         abortControllerRef.current = abortController;
@@ -158,21 +187,24 @@ export function useChatStream({
                     onError?.(errorMsg, isQuotaError, isIndexError);
                 },
             });
-
-            // Stream is fully done — invalidate queries
+        } catch (err) {
+            clearStreaming();
+            if (err instanceof Error && err.name === 'AbortError') {
+                toast.info('Message generation stopped.');
+            } else {
+                const errorMsg = err instanceof Error ? err.message : 'Failed to send message';
+                setIndexError(errorMsg);
+                toast.error(errorMsg);
+                onError?.(errorMsg, false, errorMsg.toLowerCase().includes('index'));
+            }
+        } finally {
+            setIsSending(false);
+            tempUserIdRef.current = null;
+            // Always invalidate to sync with server state (replaces the
+            // optimistic user message with the real history).
             for (const key of invalidateQueryKeys) {
                 queryClient.invalidateQueries({ queryKey: key });
             }
-        } catch (err) {
-            clearStreaming();
-            // Ignore aborts caused by component unmount or navigation
-            if (err instanceof Error && err.name === 'AbortError') return;
-            const errorMsg = err instanceof Error ? err.message : 'Failed to send message';
-            setIndexError(errorMsg);
-            toast.error(errorMsg);
-            onError?.(errorMsg, false, errorMsg.toLowerCase().includes('index'));
-        } finally {
-            setIsSending(false);
         }
     };
 
@@ -202,6 +234,7 @@ export function useChatStream({
         setLastMessage,
         streamingMessage,
         handleSend,
+        handleStop,
         handleRetry,
         handleKeyDown,
         clearStreaming,

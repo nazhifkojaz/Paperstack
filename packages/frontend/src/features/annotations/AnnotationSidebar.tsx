@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-    Plus, Share2, Eye, EyeOff, ChevronRight, ChevronDown, Trash2
+    Plus, Share2, Eye, EyeOff, ChevronRight, ChevronDown, Trash2,
+    PanelLeft, PanelLeftOpen
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { ShareDialog } from '../sharing/ShareDialog';
@@ -18,12 +19,13 @@ import { AutoHighlightButton } from './AutoHighlightButton';
 export const AnnotationSidebar = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
     const selectedSetId = useAnnotationStore(s => s.selectedSetId);
-    const isAnnotationSidebarOpen = useAnnotationStore(s => s.isAnnotationSidebarOpen);
+    const isAnnotationSidebarCollapsed = useAnnotationStore(s => s.isAnnotationSidebarCollapsed);
     const sidebarGroupBy = useAnnotationStore(s => s.sidebarGroupBy);
     const setSelectedSetId = useAnnotationStore(s => s.setSelectedSetId);
     const setSidebarGroupBy = useAnnotationStore(s => s.setSidebarGroupBy);
     const toggleSetVisibility = useAnnotationStore(s => s.toggleSetVisibility);
     const isSetVisible = useAnnotationStore(s => s.isSetVisible);
+    const toggleAnnotationSidebar = useAnnotationStore(s => s.toggleAnnotationSidebar);
 
     const { data: annotationSets, isLoading } = useAnnotationSets(pdfId || '');
     const { mutate: createSet, isPending: isCreatingSet } = useCreateAnnotationSet();
@@ -99,14 +101,38 @@ export const AnnotationSidebar = () => {
     }, [selectedSetId]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
-    if (!isAnnotationSidebarOpen) return null;
+    // Collapsed thin strip
+    if (isAnnotationSidebarCollapsed) {
+        return (
+            <div className="w-12 h-full border-r bg-background flex flex-col items-center py-3 shrink-0 gap-2">
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={toggleAnnotationSidebar}
+                    title="Open annotations sidebar (Ctrl+\\)"
+                >
+                    <PanelLeftOpen className="h-4 w-4" />
+                </Button>
+            </div>
+        );
+    }
 
     return (
         <>
-            <div className="w-80 h-full border-r bg-background flex flex-col shrink-0">
+            <div className="w-96 h-full border-r bg-background flex flex-col shrink-0">
                 {/* Header */}
-                <div className="p-4 border-b flex items-center">
+                <div className="p-4 border-b flex items-center justify-between">
                     <h2 className="font-semibold">Annotations</h2>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={toggleAnnotationSidebar}
+                        title="Collapse sidebar (Ctrl+\\)"
+                    >
+                        <PanelLeft className="h-4 w-4" />
+                    </Button>
                 </div>
 
                 {/* Group Toggle */}
@@ -253,7 +279,7 @@ export const AnnotationSidebar = () => {
 
                                         {/* Nested annotations (collapsible) */}
                                         {isExpanded && (
-                                            <div className={`border-l-2 ml-[18px] ${
+                                            <div className={`border-l-2 ml-3 ${
                                                 isAiSet ? 'border-purple-500/20' : 'border-muted'
                                             }`}>
                                                 <SetAnnotationList
