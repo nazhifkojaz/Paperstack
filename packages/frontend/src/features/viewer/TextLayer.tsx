@@ -15,9 +15,10 @@ interface SelectionState {
 interface TextLayerProps {
     pageProxy: PDFPageProxy | null;
     className?: string;
+    onRenderComplete?: (renderId: number) => void;
 }
 
-export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProxy, className = '' }, ref) => {
+export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProxy, className = '', onRenderComplete }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const zoom = usePdfViewerStore(s => s.zoom);
     const rotation = usePdfViewerStore(s => s.rotation);
@@ -26,6 +27,7 @@ export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProx
     const textLayerInstanceRef = useRef<PdfjsTextLayer | null>(null);
     const renderReadyResolveRef = useRef<() => void>(() => {});
     const renderReadyPromiseRef = useRef<Promise<void>>(Promise.resolve());
+    const renderIdRef = useRef(0);
     // PDF text content items for precise rect computation (bypasses DOM measurement)
     const textItemsRef = useRef<PdfTextItem[]>([]);
     const spanToItemRef = useRef<Map<Element, number>>(new Map());
@@ -36,6 +38,7 @@ export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProx
         getTextItems: () => textItemsRef.current,
         getSpanToItemMap: () => spanToItemRef.current,
         getViewportScale: () => zoom,
+        getRenderId: () => renderIdRef.current,
     }));
 
     // Render text layer using pdfjs TextLayer class (v5+)
@@ -94,6 +97,9 @@ export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProx
                         map.set(spans[i], i);
                     }
                     spanToItemRef.current = map;
+
+                    renderIdRef.current++;
+                    onRenderComplete?.(renderIdRef.current);
                 });
             })
             .then(() => {

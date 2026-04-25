@@ -23,4 +23,5 @@ export interface TextLayerHandle {
     getTextItems: () => PdfTextItem[];
     getSpanToItemMap: () => Map<Element, number>;
     getViewportScale: () => number;
+    getRenderId: () => number;
 }

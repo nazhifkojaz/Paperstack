@@ -17,10 +17,11 @@ interface AnnotationOverlayProps {
     pageNumber: number;
     pdfId: string;
     textLayerHandle?: React.RefObject<TextLayerHandle | null>;
+    renderId?: number;
     className?: string;
 }
 
-export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, className = '' }: AnnotationOverlayProps) => {
+export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, renderId = 0, className = '' }: AnnotationOverlayProps) => {
     const isDrawingRect = useAnnotationStore(s => s.isDrawingRect);
     const selectedSetId = useAnnotationStore(s => s.selectedSetId);
     const selectedAnnotationId = useAnnotationStore(s => s.selectedAnnotationId);
@@ -86,7 +87,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
     } = useAnnotationDrag(containerRef as React.RefObject<HTMLDivElement>);
 
     // Resolve empty-rect auto-highlight annotations via TextLayer DOM matching
-    const resolvedAnnotations = useTextMatcher(matcherAnnotations, pageNumber, textLayerHandle);
+    const resolvedAnnotations = useTextMatcher(matcherAnnotations, pageNumber, textLayerHandle, renderId);
 
     const pageAnnotations = useMemo(() => {
         return resolvedAnnotations.filter(a => a.page_number === pageNumber);
