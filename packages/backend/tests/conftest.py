@@ -503,3 +503,11 @@ def set_test_env_vars(monkeypatch) -> None:
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test_github_client_id")
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test_github_client_secret")
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:5173/Paperstack")
+    # Clear LLM API keys to prevent real API calls during tests
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # Also patch the settings object directly since pydantic-settings may cache values
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)

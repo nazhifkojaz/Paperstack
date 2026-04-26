@@ -1,13 +1,17 @@
+import logging
 from uuid import UUID, uuid4
-from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+
 import httpx
+from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
 from app.db.models import User, Pdf, Citation
 from app.schemas.citation import CitationResponse, CitationUpdate, BulkExportRequest, LookupRequest, LookupResponse, ValidateRequest
 from app.services import citation_extractor
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 global_router = APIRouter()
@@ -92,8 +96,9 @@ async def auto_extract_citation(
             pdf_bytes = await backend.download_bytes(file_id, pdf.filename)
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=502, detail=f"Could not fetch linked PDF: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not fetch PDF: {e}")
+    except Exception:
+        logger.exception("Failed to fetch PDF bytes for citation extraction, pdf_id=%s", pdf_id)
+        raise HTTPException(status_code=502, detail="Could not fetch PDF")
 
     extracted = await citation_extractor.auto_extract_citation(
         pdf_bytes=pdf_bytes,

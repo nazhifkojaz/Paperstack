@@ -32,7 +32,7 @@ class AnnotationSetResponse(AnnotationSetBase):
 class AnnotationBase(BaseModel):
     page_number: int
     type: str = Field(..., max_length=20) # 'highlight', 'rect', 'note'
-    rects: Any # JSON array of normalized device coordinates
+    rects: list[dict[str, float]]  # JSON array of {x, y, w, h} normalized rects
     selected_text: Optional[str] = None
     note_content: Optional[str] = None
     color: Optional[str] = Field(None, max_length=7)
@@ -41,7 +41,7 @@ class AnnotationCreate(AnnotationBase):
     set_id: UUID
 
 class AnnotationUpdate(BaseModel):
-    rects: Optional[Any] = None
+    rects: Optional[list[dict[str, float]]] = None
     selected_text: Optional[str] = None
     note_content: Optional[str] = None
     color: Optional[str] = Field(None, max_length=7)

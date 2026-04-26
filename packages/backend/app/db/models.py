@@ -1,10 +1,14 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, Any
 import uuid
+
+from app.schemas.types import ContextChunkDict
 from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Computed,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -15,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import HALFVEC
 
 
 class Base(DeclarativeBase):
@@ -28,14 +32,14 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    # Legacy GitHub fields — kept nullable for rollback safety; moved to UserOAuthAccount
+    # Deprecated: GitHub OAuth moved to UserOAuthAccount
     github_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, unique=True, nullable=True
     )
     github_login: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     access_token: Mapped[Optional[str]] = mapped_column(
         String, nullable=True
-    )  # legacy encrypted token
+    )  # deprecated encrypted token
     repo_created: Mapped[bool] = mapped_column(Boolean, default=False)
     # Provider-agnostic fields
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -152,7 +156,7 @@ class Annotation(Base):
     )
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     type: Mapped[str] = mapped_column(String(20), nullable=False)
-    rects: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    rects: Mapped[list[dict[str, float]]] = mapped_column(JSONB, nullable=False)
     selected_text: Mapped[Optional[str]] = mapped_column(Text)
     note_content: Mapped[Optional[str]] = mapped_column(Text)
     color: Mapped[Optional[str]] = mapped_column(String(7))
@@ -310,7 +314,8 @@ class AutoHighlightCache(Base):
             "pdf_id",
             "user_id",
             "categories",
-            name="uq_auto_highlight_cache_pdf_user_cats",
+            "pages",
+            name="uq_auto_highlight_cache_pdf_user_cats_pages",
         ),
     )
 
@@ -323,10 +328,17 @@ class AutoHighlightCache(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    categories: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    categories: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    pages: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
-    )  # 'pending' | 'complete'
+    )  # 'pending' | 'complete' | 'failed'
+    progress_pct: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    tier: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'quick'")
+    )  # 'quick' | 'thorough'
     provider: Mapped[Optional[str]] = mapped_column(String(20))
     llm_response: Mapped[Optional[Any]] = mapped_column(JSONB)
     annotation_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -400,10 +412,10 @@ class PdfChunk(Base):
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     end_page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Optional[Any]] = mapped_column(Vector(768))
+    embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(2048))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     section_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    search_vector = Column(TSVECTOR, nullable=True)  # GENERATED column, managed by DB
+    search_vector = Column(TSVECTOR, Computed("to_tsvector('english', content)"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )
@@ -446,9 +458,36 @@ class ChatMessage(Base):
         String(10), nullable=False
     )  # 'user' | 'assistant'
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    context_chunks: Mapped[Optional[Any]] = mapped_column(
+    context_chunks: Mapped[Optional[list[ContextChunkDict]]] = mapped_column(
         JSONB
     )  # [{chunk_id, page_number, snippet}]
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )
+
+
+class UserLLMPreferences(Base):
+    __tablename__ = "user_llm_preferences"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    chat_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    auto_highlight_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    explain_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
+    )
+
+
+class OpenrouterUsageCache(Base):
+    __tablename__ = "openrouter_usage_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_count_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    day_started_at: Mapped[date] = mapped_column(Date, nullable=False)
+    last_request_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_key_response: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)
+    last_key_fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

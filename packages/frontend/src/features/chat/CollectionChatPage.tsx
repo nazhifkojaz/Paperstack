@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Plus, Send, Loader2, Trash2, ArrowLeft } from 'lucide-react';
+import { MessageSquare, Plus, Send, Square, Loader2, Trash2, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -19,11 +19,13 @@ import { useChatStream } from '@/hooks/useChatStream';
 import { ChatMessageList } from '@/components/chat/ChatMessageList';
 import { DeleteConversationDialog } from './DeleteConversationDialog';
 import { BASE_URL } from '@/lib/config';
+import { useAuthStore } from '@/stores/authStore';
 
 export function CollectionChatPage() {
     const { collectionId } = useParams<{ collectionId: string }>();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const userAvatarUrl = useAuthStore((s) => s.user?.avatar_url);
 
     const [activeConvId, setActiveConvId] = useState<string | null>(null);
     const [deletingConv, setDeletingConv] = useState<{ id: string; title: string } | null>(null);
@@ -39,6 +41,7 @@ export function CollectionChatPage() {
         setInput,
         isSending,
         handleSend,
+        handleStop,
         handleKeyDown,
         clearStreaming,
         bottomRef,
@@ -193,6 +196,7 @@ export function CollectionChatPage() {
                             <ChatMessageList
                                 messages={displayMessages}
                                 isSending={isSending}
+                                userAvatarUrl={userAvatarUrl}
                                 emptyMessage="Ask a question about the papers in this collection."
                                 onChunkClickUrl={(chunk) => {
                                     if (chunk.pdf_id) {
@@ -212,16 +216,27 @@ export function CollectionChatPage() {
                                 onKeyDown={handleKeyDown}
                                 placeholder="Ask about papers in this collection… (Enter to send)"
                                 className="resize-none text-sm min-h-[72px] max-h-[160px]"
-                                disabled={isSending}
                             />
-                            <Button
-                                size="icon"
-                                onClick={() => handleSend()}
-                                disabled={!input.trim() || isSending}
-                                className="shrink-0 h-10 w-10"
-                            >
-                                {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                            </Button>
+                            {isSending ? (
+                                <Button
+                                    size="icon"
+                                    onClick={handleStop}
+                                    variant="destructive"
+                                    className="shrink-0 h-10 w-10"
+                                    title="Stop generating"
+                                >
+                                    <Square className="h-4 w-4 fill-current" />
+                                </Button>
+                            ) : (
+                                <Button
+                                    size="icon"
+                                    onClick={() => handleSend()}
+                                    disabled={!input.trim()}
+                                    className="shrink-0 h-10 w-10"
+                                >
+                                    <Send className="h-4 w-4" />
+                                </Button>
+                            )}
                         </div>
                     </>
                 )}

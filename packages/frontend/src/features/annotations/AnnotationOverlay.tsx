@@ -3,9 +3,10 @@ import { StickyNote } from 'lucide-react';
 import { useAnnotationStore } from '@/stores/annotationStore';
 import { useCreateAnnotation } from '@/api/annotations';
 import { useAnnotationsContext } from './AnnotationsContext';
-import type { TextLayerHandle } from '@/features/viewer/TextLayer';
+import type { TextLayerHandle } from '@/types/viewer';
+import type { Rect } from '@/types/annotation';
 import { useTextMatcher } from './useTextMatcher';
-import { useRectCreate, type Rect } from './useRectCreate';
+import { useRectCreate } from './useRectCreate';
 import { useAnnotationExplain } from './useAnnotationExplain';
 import { NotePopover } from './NotePopover';
 import { AnnotationToolbar } from './AnnotationToolbar';
@@ -16,10 +17,11 @@ interface AnnotationOverlayProps {
     pageNumber: number;
     pdfId: string;
     textLayerHandle?: React.RefObject<TextLayerHandle | null>;
+    renderId?: number;
     className?: string;
 }
 
-export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, className = '' }: AnnotationOverlayProps) => {
+export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, renderId = 0, className = '' }: AnnotationOverlayProps) => {
     const isDrawingRect = useAnnotationStore(s => s.isDrawingRect);
     const selectedSetId = useAnnotationStore(s => s.selectedSetId);
     const selectedAnnotationId = useAnnotationStore(s => s.selectedAnnotationId);
@@ -85,7 +87,7 @@ export const AnnotationOverlay = ({ pageNumber, pdfId, textLayerHandle, classNam
     } = useAnnotationDrag(containerRef as React.RefObject<HTMLDivElement>);
 
     // Resolve empty-rect auto-highlight annotations via TextLayer DOM matching
-    const resolvedAnnotations = useTextMatcher(matcherAnnotations, pageNumber, textLayerHandle);
+    const resolvedAnnotations = useTextMatcher(matcherAnnotations, pageNumber, textLayerHandle, renderId);
 
     const pageAnnotations = useMemo(() => {
         return resolvedAnnotations.filter(a => a.page_number === pageNumber);

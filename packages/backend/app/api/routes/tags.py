@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, List
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -19,7 +19,7 @@ async def create_tag(
     tag_in: TagCreate,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> TagResponse:
     """Create a new tag."""
     tag = Tag(
         user_id=current_user.id,
@@ -42,7 +42,7 @@ async def create_tag(
 async def list_tags(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> List[TagResponse]:
     """List all tags for the user."""
     query = select(Tag).where(Tag.user_id == current_user.id).order_by(Tag.name)
     result = await db.execute(query)
@@ -54,7 +54,7 @@ async def update_tag(
     tag_in: TagUpdate,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> TagResponse:
     """Update a tag."""
     tag = await db.get(Tag, tag_id)
     if not tag or tag.user_id != current_user.id:
@@ -81,7 +81,7 @@ async def delete_tag(
     tag_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, str]:
     """Delete a tag."""
     tag = await db.get(Tag, tag_id)
     if not tag or tag.user_id != current_user.id:
@@ -97,7 +97,7 @@ async def add_tag_to_pdf(
     tag_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, str]:
     """Add a tag to a PDF."""
     tag = await db.get(Tag, tag_id)
     if not tag or tag.user_id != current_user.id:
@@ -126,7 +126,7 @@ async def remove_tag_from_pdf(
     tag_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, str]:
     """Remove a tag from a PDF."""
     # Verify ownership of both the PDF and the tag
     tag = await db.get(Tag, tag_id)

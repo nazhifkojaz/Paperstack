@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
-import type { Rect } from '@/features/annotations/useRectCreate';
+import type { Rect } from '@/types/annotation';
 
 export interface AnnotationSet {
     id: string;
@@ -27,8 +27,6 @@ export interface Annotation {
     created_at: string;
     updated_at: string;
 }
-
-// Queries
 
 export const useAnnotationSets = (pdfId: string) => {
     return useQuery({
@@ -74,8 +72,6 @@ export const useMultiSetAnnotations = (setIds: string[]) => {
 
     return { data: allAnnotations, isLoading };
 };
-
-// Mutations
 
 export const useCreateAnnotationSet = () => {
     const queryClient = useQueryClient();

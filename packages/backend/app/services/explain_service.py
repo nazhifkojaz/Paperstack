@@ -13,12 +13,13 @@ Route handlers translate to appropriate HTTP status codes.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Pdf, User
 from app.core.config import settings
+from app.schemas.types import ContextChunkDict
 from app.services.chat_service import ChatService
 from app.services.embedding_service import EmbeddingService
 from app.services.indexing_service import IndexingService, get_indexing_service
@@ -43,7 +44,7 @@ EXPLAIN_SYSTEM_PROMPT = (
 @dataclass
 class ExplainResult:
     explanation: str
-    context_chunks: list[dict]
+    context_chunks: list[ContextChunkDict]
     note_content: str
 
 
@@ -76,34 +77,21 @@ class ExplainService:
         provider: str,
         api_key: str,
         db: AsyncSession,
+        model: Optional[str] = None,
     ) -> ExplainResult:
         """Generate explanation with explicit provider and API key. Main entry point for routes."""
         index_status = await self._indexing_service.get_or_create_status(
             str(pdf_row.id), str(user.id), db
         )
 
-        # Handle stale/active indexing
-        await self._indexing_service.reset_if_stale(index_status, db)
+        try:
+            await self._indexing_service.ensure_indexed(pdf_row, user, index_status, db)
+            await db.commit()
+        except Exception:
+            await db.commit()
+            raise
 
-        # Handle failed indexing - reset to retry
-        if index_status.status == "failed":
-            index_status.status = "not_indexed"
-            index_status.error_message = None
-            await db.flush()
-
-        # Lazy index if needed
-        if index_status.status == "not_indexed":
-            logger.info("explain: indexing pdf %s for user %s", pdf_row.id, user.id)
-            try:
-                await self._indexing_service.index_pdf(pdf_row, user, index_status, db)
-                await db.commit()
-                logger.info("explain: indexing complete for pdf %s", pdf_row.id)
-            except Exception:
-                # Persist the failed status set by index_pdf before re-raising
-                await db.commit()
-                raise
-
-        query_vector = await self._embedding_service.embed_query(selected_text)
+        query_vector = await self._embedding_service.embed_query(selected_text, db=db)
 
         # Vector search for context (top 4 — tighter than chat's 6)
         top_chunks = await vector_search_service.search_pdf(
@@ -127,7 +115,10 @@ class ExplainService:
         )
 
         call_method = getattr(self._llm_service, f"call_{provider}")
-        explanation = await call_method(system_prompt, user_message, api_key)
+        kwargs: dict[str, Any] = {"system_prompt": system_prompt, "user_prompt": user_message, "api_key": api_key}
+        if model and provider == "openrouter":
+            kwargs["model"] = model
+        explanation = await call_method(**kwargs)
 
         context_chunks_payload = [
             {

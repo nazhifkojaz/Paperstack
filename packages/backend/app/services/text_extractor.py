@@ -1,13 +1,16 @@
 """PDF text extraction with page markers, using PyMuPDF for layout-aware extraction."""
 
+import logging
 import re
 from dataclasses import dataclass
 from io import BytesIO
-from typing import BinaryIO, Union
+from typing import BinaryIO, Optional, Union
 
 import pymupdf  # PyMuPDF >= 1.27
 
-MAX_TEXT_LENGTH = 120_000
+logger = logging.getLogger(__name__)
+
+MAX_TEXT_LENGTH = 500_000
 
 _FIGURE_CAPTION_RE = re.compile(
     r"^((?:Figure|Fig\.?)\s*\d+[.:)\-]\s*.+)", re.IGNORECASE | re.MULTILINE
@@ -17,26 +20,49 @@ _TABLE_CAPTION_RE = re.compile(
 )
 
 
-def extract_text_with_pages(pdf_file: Union[BinaryIO, BytesIO]) -> tuple[str, int, str]:
+def extract_text_with_pages(
+    pdf_file: Union[BinaryIO, BytesIO],
+    pages: Optional[list[int]] = None,
+) -> tuple[str, int, str]:
     """Extract text from PDF with page markers, respecting column layout.
+
+    Args:
+        pages: Specific page numbers to extract (1-indexed). None = all pages.
 
     Returns:
         tuple of (text_with_page_markers, total_pages, pages_analyzed_note)
-        pages_analyzed_note is "all" or "1-N of M" if truncated.
+        pages_analyzed_note is "all" or a description like "1, 4, 5 of 20".
     """
     with pymupdf.open(stream=pdf_file.read(), filetype="pdf") as doc:
         total_pages = len(doc)
         parts: list[str] = []
 
-        for page_idx in range(total_pages):
+        if pages is not None:
+            page_indices = sorted({max(0, min(p - 1, total_pages - 1)) for p in pages})
+        else:
+            page_indices = list(range(total_pages))
+
+        for page_idx in page_indices:
             page = doc[page_idx]
             page_text = _extract_page_in_reading_order(page)
             parts.append(f"--- PAGE {page_idx + 1} ---\n{page_text}")
 
         full_text = "\n\n".join(parts)
-        truncated_text, pages_note = _truncate_text(
-            full_text, MAX_TEXT_LENGTH, total_pages
-        )
+
+        if pages is not None and len(page_indices) < total_pages:
+            page_nums = sorted(set(pages))
+            count = len(page_nums)
+            if count <= 5:
+                pages_note = f"{count} pages ({', '.join(str(p) for p in page_nums)} of {total_pages})"
+            else:
+                pages_note = f"{count} pages ({page_nums[0]}–{page_nums[-1]} of {total_pages})"
+        else:
+            truncated_text, pages_note = _truncate_text(
+                full_text, MAX_TEXT_LENGTH, total_pages
+            )
+            return truncated_text, total_pages, pages_note
+
+        truncated_text, _ = _truncate_text(full_text, MAX_TEXT_LENGTH, total_pages)
         return truncated_text, total_pages, pages_note
 
 
@@ -145,9 +171,8 @@ def _extract_tables_from_page(page: pymupdf.Page) -> list[dict]:
                     "markdown": md,
                 }
             )
-    except Exception:
-        # Table detection is best-effort; fall back to plain text extraction
-        pass
+    except Exception as exc:
+        logger.debug("Table detection failed on page: %s", exc)
 
     return tables
 
@@ -416,9 +441,9 @@ def validate_extraction(text: str) -> ExtractionQuality:
         )
 
     # Check average line length (interleaved columns produce very short lines)
-    lines = [l for l in clean.split("\n") if l.strip()]
+    lines = [ln for ln in clean.split("\n") if ln.strip()]
     if lines:
-        avg_line_len = sum(len(l) for l in lines) / len(lines)
+        avg_line_len = sum(len(ln) for ln in lines) / len(lines)
         if avg_line_len < 30:
             warnings.append(
                 f"Short average line length ({avg_line_len:.0f} chars) — possible column interleaving"

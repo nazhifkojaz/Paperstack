@@ -1,14 +1,52 @@
 """LLM service for auto-highlight paper analysis and chat streaming."""
+from __future__ import annotations
+
 import json
+import logging
 import re
-from typing import Any, AsyncIterator, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 import httpx
 
+from app.schemas.types import ChatMessageDict, HighlightDict
 from app.services.exceptions import LLMRateLimitError, LLMProviderError
 
-OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+FREE_MODELS = [
+    {
+        "id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "label": "Nemotron 3 Super 120B",
+        "description": "NVIDIA's large model, good general-purpose quality",
+    },
+    {
+        "id": "google/gemma-4-31b-it:free",
+        "label": "Gemma 4 31B",
+        "description": "Google's instruction-tuned model, strong reasoning",
+    },
+    {
+        "id": "tencent/hy3-preview:free",
+        "label": "Hunyuan 3 Preview",
+        "description": "Tencent's large preview model",
+    },
+    {
+        "id": "google/gemma-4-26b-a4b-it:free",
+        "label": "Gemma 4 26B",
+        "description": "Google's compact instruction-tuned Gemma 4 variant",
+    },
+    {
+        "id": "minimax/minimax-m2.5:free",
+        "label": "MiniMax M2.5",
+        "description": "MiniMax's efficient long-context model",
+    },
+]
+
+DEFAULT_FREE_MODEL = FREE_MODELS[0]["id"]
 
 CATEGORY_COLORS = {
     "findings": "#22c55e",
@@ -27,8 +65,10 @@ CATEGORY_DEFINITIONS = {
 }
 
 
-def strip_markdown_fences(text: str) -> str:
+def strip_markdown_fences(text: str | None) -> str:
     """Strip markdown code fences from LLM response."""
+    if not text:
+        return ""
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```\w*\n?", "", text)
@@ -37,63 +77,11 @@ def strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
-def build_prompt(paper_text: str, categories: list[str]) -> tuple[str, str]:
-    """Build system and user prompts for paper analysis."""
-    cat_defs = "\n".join(
-        f"- {k}: {v}" for k, v in CATEGORY_DEFINITIONS.items() if k in categories
-    )
-
-    system_prompt = (
-        "You are an academic paper analysis assistant. Your task is to identify "
-        "the most important passages in a research paper and copy them CHARACTER "
-        "FOR CHARACTER from the source text. You are a copy-paste machine — "
-        "never rephrase, summarize, or reconstruct what you read."
-    )
-
-    user_prompt = f"""Below is the full text of an academic paper. Page boundaries are marked with "--- PAGE {{n}} ---".
-
-Categories to identify: {", ".join(categories)}
-
-Category definitions:
-{cat_defs}
-
-Instructions:
-1. Read the entire paper carefully
-2. Select 10-20 of the most important passages matching the requested categories
-3. For each passage, copy the text EXACTLY as it appears — character for character, including spacing and punctuation
-4. Identify which page it appears on (look at the nearest "--- PAGE N ---" marker above the passage)
-5. Classify it into one of the requested categories
-6. Write a brief reason explaining WHY this passage is important
-
-Return a JSON array (no markdown fencing):
-[
-  {{
-    "text": "exact verbatim quote from the paper",
-    "page": 1,
-    "category": "findings",
-    "reason": "This presents the primary result showing X improves Y by Z%"
-  }}
-]
-
-CRITICAL RULES:
-- The "text" field must be a character-for-character copy from the paper text below
-- Find the passage in the text, then copy it by selecting and reproducing it exactly
-- Do NOT reconstruct from memory — look at the text and copy it
-- Do NOT include passages you cannot find verbatim in the text below
-- Do not combine sentences from different paragraphs
-- Prefer complete sentences (1-3 sentences max per entry)
-- NEVER change even a single word — "agentic" must stay "agentic", not "agent"
-- If you cannot find the exact text, skip that passage entirely
-- VERIFY: before including any quote, search the paper text above to confirm it appears exactly
-
---- PAPER TEXT ---
-{paper_text}"""
-
-    return system_prompt, user_prompt
-
-
-def parse_llm_response(raw_response: str) -> list[dict[str, Any]]:
+def _parse_highlights_json(raw_response: str | None) -> list[HighlightDict]:
     """Parse and validate LLM response into highlight list."""
+    if not raw_response:
+        logger.warning("Empty LLM response in highlight extraction")
+        return []
     cleaned = strip_markdown_fences(raw_response)
 
     # Sanitize literal newlines inside JSON string values (some LLMs emit these)
@@ -121,6 +109,45 @@ def parse_llm_response(raw_response: str) -> list[dict[str, Any]]:
     return highlights
 
 
+def _check_openrouter_error(data: dict) -> None:
+    """Check OpenRouter response for error objects and raise if found."""
+    if "error" in data:
+        err = data["error"]
+        logger.error("OpenRouter error response: %s", err)
+        error_msg = err.get("message", str(err))
+        metadata = err.get("metadata", {})
+        if metadata:
+            error_msg = f"{error_msg} | {metadata}"
+        raise LLMProviderError("openrouter", 0, error_msg)
+
+
+def _parse_queries_json(raw_response: str | None, categories: list[str]) -> dict[str, str]:
+    """Parse LLM response into a {category: query} dict."""
+    if not raw_response:
+        logger.warning("Empty LLM response in query generation")
+        return {}
+    cleaned = strip_markdown_fences(raw_response)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', ' ', cleaned)
+        try:
+            data = json.loads(sanitized)
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse query-generation JSON: %s", e)
+            return {}
+
+    if not isinstance(data, dict):
+        logger.warning("Expected dict from query generation, got %s", type(data))
+        return {}
+
+    result: dict[str, str] = {}
+    for cat in categories:
+        if cat in data and isinstance(data[cat], str) and data[cat].strip():
+            result[cat] = data[cat].strip()
+    return result
+
+
 class LLMService:
     """Service for calling LLM providers.
 
@@ -143,142 +170,133 @@ class LLMService:
             provider, exc.response.status_code, exc.response.text[:200]
         ) from exc
 
-    async def call_glm(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
-        """Call Zhipu AI GLM API and return extracted text content."""
+    async def _call_provider(
+        self,
+        url: str,
+        headers: dict[str, str],
+        json_body: dict[str, Any],
+        extract_fn: Callable[[dict], str],
+        provider_name: str,
+        timeout_msg: str = "Request timed out.",
+        pre_check_fn: Callable[[dict], None] | None = None,
+    ) -> str:
         client = self._require_client()
         try:
-            resp = await client.post(
-                "https://api.z.ai/api/paas/v4/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": "glm-4.7-flash",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.1,
-                },
-            )
+            resp = await client.post(url, headers=headers, json=json_body)
         except httpx.TimeoutException:
-            raise LLMProviderError("glm", 0, "Request timed out. The paper may be too large for this model.")
+            raise LLMProviderError(provider_name, 0, timeout_msg)
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "glm")
-        return resp.json()["choices"][0]["message"]["content"]
+            self._handle_http_error(exc, provider_name)
+        data = resp.json()
+        if pre_check_fn:
+            pre_check_fn(data)
+        return extract_fn(data)
+
+    async def call_glm(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        """Call Zhipu AI GLM API and return extracted text content."""
+        return await self._call_provider(
+            url="https://api.z.ai/api/paas/v4/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json_body={
+                "model": "glm-4.7-flash",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.1,
+            },
+            extract_fn=lambda d: d["choices"][0]["message"]["content"],
+            provider_name="glm",
+            timeout_msg="Request timed out. The paper may be too large for this model.",
+        )
 
     async def call_gemini(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
         """Call Google Gemini API and return extracted text content."""
-        client = self._require_client()
-        try:
-            resp = await client.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-                headers={"x-goog-api-key": api_key},
-                json={
-                    "system_instruction": {"parts": [{"text": system_prompt}]},
-                    "contents": [{"parts": [{"text": user_prompt}]}],
-                    "generationConfig": {"temperature": 0.1},
-                },
-            )
-        except httpx.TimeoutException:
-            raise LLMProviderError("gemini", 0, "Request timed out. The paper may be too large for this model.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "gemini")
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return await self._call_provider(
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            headers={"x-goog-api-key": api_key},
+            json_body={
+                "system_instruction": {"parts": [{"text": system_prompt}]},
+                "contents": [{"parts": [{"text": user_prompt}]}],
+                "generationConfig": {"temperature": 0.1},
+            },
+            extract_fn=lambda d: d["candidates"][0]["content"]["parts"][0]["text"],
+            provider_name="gemini",
+            timeout_msg="Request timed out. The paper may be too large for this model.",
+        )
 
     async def call_openai(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
         """Call OpenAI Chat Completions API and return text content."""
-        client = self._require_client()
-        try:
-            resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.2,
-                },
-            )
-        except httpx.TimeoutException:
-            raise LLMProviderError("openai", 0, "Request timed out.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "openai")
-        return resp.json()["choices"][0]["message"]["content"]
+        return await self._call_provider(
+            url="https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json_body={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.2,
+            },
+            extract_fn=lambda d: d["choices"][0]["message"]["content"],
+            provider_name="openai",
+        )
 
     async def call_anthropic(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
         """Call Anthropic Messages API and return text content."""
-        client = self._require_client()
-        try:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 4096,
-                    "system": system_prompt,
-                    "messages": [{"role": "user", "content": user_prompt}],
-                },
-            )
-        except httpx.TimeoutException:
-            raise LLMProviderError("anthropic", 0, "Request timed out.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "anthropic")
-        return resp.json()["content"][0]["text"]
+        return await self._call_provider(
+            url="https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            json_body={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 4096,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}],
+            },
+            extract_fn=lambda d: d["content"][0]["text"],
+            provider_name="anthropic",
+        )
 
-    async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+    async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str, model: str = DEFAULT_FREE_MODEL) -> str:
         """Call OpenRouter API (OpenAI-compatible) and return text content."""
-        client = self._require_client()
-        try:
-            resp = await client.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": OPENROUTER_MODEL,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.2,
-                },
-            )
-        except httpx.TimeoutException:
-            raise LLMProviderError("openrouter", 0, "Request timed out.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._handle_http_error(exc, "openrouter")
-        return resp.json()["choices"][0]["message"]["content"]
+        logger.info(
+            "Calling OpenRouter %s (prompt: %d chars, key: ...%s)",
+            model, len(user_prompt), api_key[-4:],
+        )
+        result = await self._call_provider(
+            url=f"{OPENROUTER_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json_body={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.2,
+            },
+            extract_fn=lambda d: d["choices"][0]["message"]["content"],
+            provider_name="openrouter",
+            pre_check_fn=_check_openrouter_error,
+        )
+        logger.info("OpenRouter responded successfully")
+        return result
 
     # --- Streaming methods for chat ---
 
-    async def stream_openai(
-        self, system_prompt: str, messages: list[dict], api_key: str
+    async def _stream_openai_compatible(
+        self,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
     ) -> AsyncIterator[str]:
-        """Stream tokens from OpenAI Chat Completions (SSE)."""
+        """Stream tokens from an OpenAI-compatible SSE endpoint."""
         client = self._require_client()
-        async with client.stream(
-            "POST",
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "system", "content": system_prompt}] + messages,
-                "temperature": 0.3,
-                "stream": True,
-            },
-        ) as resp:
+        async with client.stream("POST", url, headers=headers, json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if line.startswith("data: ") and line != "data: [DONE]":
@@ -290,8 +308,24 @@ class LLMService:
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
 
+    async def stream_openai(
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
+    ) -> AsyncIterator[str]:
+        """Stream tokens from OpenAI Chat Completions (SSE)."""
+        async for token in self._stream_openai_compatible(
+            url="https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            payload={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "system", "content": system_prompt}] + messages,
+                "temperature": 0.3,
+                "stream": True,
+            },
+        ):
+            yield token
+
     async def stream_anthropic(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
     ) -> AsyncIterator[str]:
         """Stream tokens from Anthropic Messages API (SSE)."""
         client = self._require_client()
@@ -323,7 +357,7 @@ class LLMService:
                         continue
 
     async def stream_gemini(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
     ) -> AsyncIterator[str]:
         """Stream tokens from Gemini (SSE)."""
         contents = [
@@ -361,68 +395,106 @@ class LLMService:
                         continue
 
     async def stream_glm(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
     ) -> AsyncIterator[str]:
         """Stream tokens from GLM (OpenAI-compatible SSE)."""
-        client = self._require_client()
-        async with client.stream(
-            "POST",
-            "https://api.z.ai/api/paas/v4/chat/completions",
+        async for token in self._stream_openai_compatible(
+            url="https://api.z.ai/api/paas/v4/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={
+            payload={
                 "model": "glm-4.7-flash",
                 "messages": [{"role": "system", "content": system_prompt}] + messages,
                 "temperature": 0.3,
                 "stream": True,
             },
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        chunk = json.loads(line[6:])
-                        delta = chunk["choices"][0].get("delta", {})
-                        if "content" in delta and delta["content"]:
-                            yield delta["content"]
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+        ):
+            yield token
 
     async def stream_openrouter(
-        self, system_prompt: str, messages: list[dict], api_key: str
+        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str, model: str = DEFAULT_FREE_MODEL
     ) -> AsyncIterator[str]:
         """Stream tokens from OpenRouter (OpenAI-compatible SSE)."""
-        client = self._require_client()
-        async with client.stream(
-            "POST",
-            f"{OPENROUTER_BASE_URL}/chat/completions",
+        async for token in self._stream_openai_compatible(
+            url=f"{OPENROUTER_BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": OPENROUTER_MODEL,
+            payload={
+                "model": model,
                 "messages": [{"role": "system", "content": system_prompt}] + messages,
                 "temperature": 0.3,
                 "stream": True,
             },
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        chunk = json.loads(line[6:])
-                        delta = chunk["choices"][0].get("delta", {})
-                        if "content" in delta and delta["content"]:
-                            yield delta["content"]
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+        ):
+            yield token
 
-    async def analyze_paper(
+    async def extract_highlights_from_passages(
         self,
-        paper_text: str,
+        passages: list,
         categories: list[str],
         provider: str,
         api_key: str,
-    ) -> list[dict[str, Any]]:
-        """Analyze a paper and return structured highlights."""
-        system_prompt, user_prompt = build_prompt(paper_text, categories)
+        model: Optional[str] = None,
+        db: AsyncSession | None = None,
+    ) -> list[HighlightDict]:
+        """Given pre-filtered passages, pick verbatim highlight-worthy quotes.
+
+        Each passage must have: content, page_number, categories (list[str]).
+        Always a single non-streaming call. For OpenRouter, records usage.
+        """
+        from app.services.openrouter_usage_service import openrouter_usage_service
+
+        if not passages:
+            return []
+
+        cat_defs = "\n".join(
+            f"- {k}: {CATEGORY_DEFINITIONS[k]}" for k in categories if k in CATEGORY_DEFINITIONS
+        )
+
+        numbered = []
+        for i, p in enumerate(passages, 1):
+            cats = ",".join(p.categories)
+            numbered.append(
+                f"[Passage {i}] (page {p.page_number}; candidate categories: {cats})\n"
+                f"{p.content}"
+            )
+        passages_block = "\n\n".join(numbered)
+
+        system_prompt = (
+            "You are an academic paper analysis assistant. You will be given a set of "
+            "pre-filtered passages from a research paper. Your job is to select the most "
+            "highlight-worthy VERBATIM sentences and classify them. You must copy text "
+            "character-for-character from the provided passages — never paraphrase."
+        )
+
+        user_prompt = f"""Below are passages from an academic paper, each pre-tagged with candidate categories.
+
+Categories to surface: {", ".join(categories)}
+
+Category definitions:
+{cat_defs}
+
+Instructions:
+1. From each passage, select 0-3 verbatim sentences that are highlight-worthy.
+2. Aim for 2-4 quotes per requested category across the whole set.
+3. Copy each quote EXACTLY as written. Preserve punctuation, spacing, casing.
+4. Use the page number from the passage header.
+5. Classify each quote into exactly one of the requested categories.
+6. Write a short reason (under 20 words).
+
+Return JSON (no markdown fencing):
+[
+  {{"text": "exact verbatim quote", "page": 3, "category": "findings", "reason": "..."}}
+]
+
+CRITICAL:
+- text must be a substring of a passage above. Do NOT invent or rephrase.
+- Skip any quote you cannot copy exactly.
+- Prefer complete single sentences (1-3 sentences max).
+
+--- PASSAGES ---
+{passages_block}"""
+
+        if provider == "openrouter" and db is not None:
+            await openrouter_usage_service.record_and_check(db)
 
         if provider == "glm":
             raw = await self.call_glm(system_prompt, user_prompt, api_key)
@@ -433,11 +505,73 @@ class LLMService:
         elif provider == "anthropic":
             raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
         elif provider == "openrouter":
-            raw = await self.call_openrouter(system_prompt, user_prompt, api_key)
+            raw = await self.call_openrouter(system_prompt, user_prompt, api_key, model=model or DEFAULT_FREE_MODEL)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
-        return parse_llm_response(raw)
+        return _parse_highlights_json(raw)
+
+    async def generate_paper_queries(
+        self,
+        title: str,
+        abstract: str,
+        categories: list[str],
+        provider: str,
+        api_key: str,
+        model: str | None = None,
+    ) -> dict[str, str]:
+        """Generate paper-specific search queries for highlight category retrieval.
+
+        Uses the paper's title and abstract to produce category-specific search
+        queries that match the paper's actual vocabulary, named entities, and
+        key phrases. Falls back to empty dict on any error.
+        """
+        cat_defs = "\n".join(
+            f"- {k}: {CATEGORY_DEFINITIONS[k]}"
+            for k in categories
+            if k in CATEGORY_DEFINITIONS
+        )
+
+        system_prompt = (
+            "You are an academic research assistant. Generate expanded search queries "
+            "for vector similarity search to find relevant passages within a specific paper. "
+            "Incorporate the paper's own terminology, named entities, and key phrases."
+        )
+
+        user_prompt = (
+            f"Paper Title: {title}\n\n"
+            f"Abstract:\n{abstract[:3000]}\n\n"
+            f"For each category below, generate a search query (10-30 words) that "
+            f"includes key terms, proper nouns, and technical vocabulary from THIS paper:\n\n"
+            f"{cat_defs}\n\n"
+            f"Return JSON (no markdown fences):\n"
+            f'{{"findings": "query...", "methods": "query...", ...}}\n\n'
+            f"CRITICAL: Use the paper's actual model names, datasets, metrics, "
+            f"and domain terms. Do not use generic placeholder terms."
+        )
+
+        try:
+            if provider == "glm":
+                raw = await self.call_glm(system_prompt, user_prompt, api_key)
+            elif provider == "gemini":
+                raw = await self.call_gemini(system_prompt, user_prompt, api_key)
+            elif provider == "openai":
+                raw = await self.call_openai(system_prompt, user_prompt, api_key)
+            elif provider == "anthropic":
+                raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
+            elif provider == "openrouter":
+                raw = await self.call_openrouter(
+                    system_prompt, user_prompt, api_key,
+                    model=model or DEFAULT_FREE_MODEL,
+                )
+            else:
+                logger.warning("Unknown provider for query generation: %s", provider)
+                return {}
+        except Exception:
+            logger.exception("Failed to generate paper-specific queries")
+            return {}
+
+        return _parse_queries_json(raw, categories)
 
 
 # Registry mapping provider name → streaming method name on LLMService

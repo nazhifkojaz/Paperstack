@@ -15,11 +15,15 @@ import { AnnotationsContext } from '../annotations/AnnotationsContext';
 import { ViewerToolbar } from './ViewerToolbar';
 import { VirtualPdfPage } from './VirtualPdfPage';
 import { FpsCounter } from './FpsCounter';
+import { IndexStatusBadge } from './IndexStatusBadge';
 import { AnnotationSidebar } from '../annotations/AnnotationSidebar';
 import { CitationPanel } from '../citations/CitationPanel';
 import { ChatPanel } from '../chat/ChatPanel';
-import { Loader2, ArrowLeft, ExternalLink } from 'lucide-react';
+import { RightToolsPanel } from './RightToolsPanel';
+import { Loader2, ArrowLeft, ExternalLink, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { SettingsDialog } from '@/features/settings/SettingsDialog';
+import { UserNav } from '@/components/UserNav';
 
 const EMPTY_SETS: AnnotationSet[] = [];
 const EMPTY_ANNOTATIONS: Annotation[] = [];
@@ -29,6 +33,7 @@ export function ViewerPage() {
     const navigate = useNavigate();
     const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
+    const [settingsOpen, setSettingsOpen] = useState(false);
 
     const currentPage = usePdfViewerStore(s => s.currentPage);
     const totalPages = usePdfViewerStore(s => s.totalPages);
@@ -61,9 +66,7 @@ export function ViewerPage() {
     useKeyboardShortcuts();
     useGlobalSelectionClear();
 
-    // Dev-only FPS counter: show in dev mode, or when `?fps=1` is in the URL
-    const showFps = import.meta.env.DEV ||
-        new URLSearchParams(window.location.search).get('fps') === '1';
+    const showFps = new URLSearchParams(window.location.search).get('fps') === '1';
 
     const { data: pdfMetadata, isLoading: isLoadingMetadata } = usePdf(id!);
     const { blob, sourceUrl, isLoading: isLoadingContent, error, isLinked } = usePdfSource(pdfMetadata);
@@ -124,7 +127,6 @@ export function ViewerPage() {
         const el = document.getElementById(`pdf-page-${currentPage}`);
         if (el) {
             const rect = el.getBoundingClientRect();
-            // Optional: if it's already visible or close, do not scroll (avoids interrupting manual scroll)
             if (rect.top >= -rect.height && rect.bottom <= window.innerHeight + rect.height) {
                 return;
             }
@@ -176,22 +178,36 @@ export function ViewerPage() {
 
     return (
         <div className="flex flex-col h-screen overflow-hidden bg-muted/30">
-            <div className="flex items-center px-4 h-14 bg-background border-b shrink-0 gap-4">
-                <Button variant="ghost" size="sm" onClick={() => navigate('/library')}>
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Library
+            {/* Unified Top Header */}
+            <header className="flex items-center px-4 h-14 bg-background border-b shrink-0 gap-3">
+                <Button variant="ghost" size="sm" onClick={() => navigate('/library')} className="gap-1.5 shrink-0">
+                    <ArrowLeft className="h-4 w-4" />
+                    <span className="hidden sm:inline">Library</span>
                 </Button>
-                <div className="flex-1 truncate font-medium">
-                    {pdfMetadata.title || pdfMetadata.filename}
-                </div>
-            </div>
 
-            <div className="flex flex-1 overflow-hidden">
+                <div className="flex-1 flex items-center gap-3 min-w-0">
+                    <span className="truncate font-medium text-sm">
+                        {pdfMetadata.title || pdfMetadata.filename}
+                    </span>
+                    <IndexStatusBadge pdfId={id!} />
+                </div>
+
+                <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setSettingsOpen(true)} title="Settings">
+                    <Settings className="h-4 w-4" />
+                </Button>
+
+                <div className="shrink-0">
+                    <UserNav />
+                </div>
+            </header>
+
+            {/* Main content area */}
+            <div className="flex flex-1 overflow-hidden relative">
+                {/* Left: Annotation sidebar (expanded or collapsed strip) */}
                 <AnnotationSidebar />
 
-                <div className="flex flex-col flex-1 overflow-hidden">
-                    <ViewerToolbar />
-
+                {/* Center: PDF viewer */}
+                <div className="flex flex-col flex-1 overflow-hidden relative">
                     <div className="flex-1 overflow-auto relative block p-4 md:p-8 custom-scrollbar bg-neutral-100 dark:bg-neutral-900 border-x border-b">
                         {pdfDocument && totalPages > 0 ? (
                             <AnnotationsContext.Provider value={annotationsCtxValue}>
@@ -212,13 +228,21 @@ export function ViewerPage() {
                             </div>
                         )}
                     </div>
+
+                    {/* Floating Bottom Bar */}
+                    <ViewerToolbar />
                 </div>
 
-                <CitationPanel />
-                <ChatPanel pdfId={id!} />
+                {/* Right: Tools panel strip */}
+                <RightToolsPanel />
             </div>
 
+            {/* Overlay Drawers */}
+            <CitationPanel />
+            <ChatPanel pdfId={id!} />
+
             {showFps && <FpsCounter />}
+            <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
         </div>
     );
 }

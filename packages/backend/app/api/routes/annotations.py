@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -12,14 +12,13 @@ from app.schemas.annotation import (
 
 router = APIRouter()
 
-# Annotation Sets
 
 @router.get("/sets", response_model=List[AnnotationSetResponse])
 async def list_annotation_sets(
     pdf_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
-) -> Any:
+) -> List[AnnotationSetResponse]:
     # First verify user has access to this PDF
     pdf = await db.scalar(select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == current_user.id))
     if not pdf:
@@ -37,7 +36,7 @@ async def create_annotation_set(
     set_in: AnnotationSetCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
-) -> Any:
+) -> AnnotationSetResponse:
     pdf = await db.scalar(select(Pdf).where(Pdf.id == set_in.pdf_id, Pdf.user_id == current_user.id))
     if not pdf:
         raise HTTPException(status_code=404, detail="PDF not found")
@@ -59,13 +58,13 @@ async def update_annotation_set(
     set_in: AnnotationSetUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
-) -> Any:
+) -> AnnotationSetResponse:
     db_set = await db.scalar(
         select(AnnotationSet).where(AnnotationSet.id == set_id, AnnotationSet.user_id == current_user.id)
     )
     if not db_set:
         raise HTTPException(status_code=404, detail="Annotation set not found")
-        
+
     update_data = set_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(db_set, field, value)
@@ -89,21 +88,20 @@ async def delete_annotation_set(
     await db.delete(db_set)
     await db.commit()
 
-# Annotations
 
 @router.get("/sets/{set_id}/items", response_model=List[AnnotationResponse])
 async def list_annotations(
     set_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
-) -> Any:
+) -> List[AnnotationResponse]:
     # Verify set ownership
     db_set = await db.scalar(
         select(AnnotationSet).where(AnnotationSet.id == set_id, AnnotationSet.user_id == current_user.id)
     )
     if not db_set:
         raise HTTPException(status_code=404, detail="Annotation set not found")
-        
+
     result = await db.scalars(
         select(Annotation).where(Annotation.set_id == set_id)
     )
@@ -114,14 +112,14 @@ async def create_annotation(
     ann_in: AnnotationCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
-) -> Any:
+) -> AnnotationResponse:
     # Verify set ownership
     db_set = await db.scalar(
         select(AnnotationSet).where(AnnotationSet.id == ann_in.set_id, AnnotationSet.user_id == current_user.id)
     )
     if not db_set:
         raise HTTPException(status_code=404, detail="Annotation set not found")
-        
+
     db_ann = Annotation(
         set_id=ann_in.set_id,
         page_number=ann_in.page_number,
@@ -142,7 +140,7 @@ async def update_annotation(
     ann_in: AnnotationUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
-) -> Any:
+) -> AnnotationResponse:
     # Need to join with set to verify user ownership
     db_ann = await db.scalar(
         select(Annotation)

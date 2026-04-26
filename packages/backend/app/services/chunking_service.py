@@ -18,11 +18,6 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 
-CHUNK_SIZE = (
-    800  # characters (~200 words, ~160 tokens) — deprecated, use settings.CHUNK_SIZE
-)
-CHUNK_OVERLAP = 150  # characters — deprecated, use settings.CHUNK_OVERLAP
-
 _REFERENCE_HEADINGS = {
     "references",
     "bibliography",
@@ -430,7 +425,6 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
     chunk_overlap = settings.CHUNK_OVERLAP
 
     # Track paragraph list for overlap computation
-    all_paras = paragraphs  # list of (start, end, text)
 
     # Detect reference section start to skip bibliography content
     in_references = False
@@ -512,13 +506,16 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
                     overlap_parts.insert(0, p_text)
                 if overlap_parts:
                     current_text = "\n\n".join(overlap_parts) + "\n\n" + para_text
+                    overlap_count = len(overlap_parts)
                     chunk_start_page = _get_page_for_offset(
-                        current_chunk_paras[0][0], page_boundaries
+                        current_chunk_paras[-overlap_count][0], page_boundaries
                     )
                 else:
                     # Fallback: if no single paragraph fits, take the last few chars
                     # of the last paragraph at a sentence boundary
-                    last_para = current_chunk_paras[-1][2] if current_chunk_paras else ""
+                    last_para = (
+                        current_chunk_paras[-1][2] if current_chunk_paras else ""
+                    )
                     if len(last_para) > chunk_overlap:
                         overlap_start = _compute_overlap_start(
                             last_para, len(last_para), chunk_overlap

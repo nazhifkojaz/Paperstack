@@ -26,7 +26,7 @@ class AnnotationData(BaseModel):
     set_id: str
     page_number: int
     type: str
-    rects: list
+    rects: list[dict[str, float]]
     selected_text: Optional[str] = None
     note_content: Optional[str] = None
     color: Optional[str] = None

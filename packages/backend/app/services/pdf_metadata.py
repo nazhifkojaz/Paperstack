@@ -17,6 +17,15 @@ def extract_page_count(file_bytes: bytes) -> Optional[int]:
         logger.warning("Failed to extract page count from PDF: %s", exc)
         return None
 
+def extract_title_from_bytes(file_bytes: bytes) -> Optional[str]:
+    try:
+        reader = PdfReader(io.BytesIO(file_bytes))
+        if reader.metadata:
+            return reader.metadata.get("/Title")
+    except Exception as exc:
+        logger.debug("Could not extract PDF title: %s", exc)
+    return None
+
 def get_pdf_file_size(file_bytes: bytes) -> int:
     """Returns the size of the PDF byte stream in bytes."""
     return len(file_bytes)

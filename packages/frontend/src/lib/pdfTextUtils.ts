@@ -11,30 +11,8 @@
  * for proportional offsets within partially-selected spans.
  */
 
-// Types
-
-/** PDF text item with position/width data from page.getTextContent() */
-export interface PdfTextItem {
-    str: string;
-    width: number;
-    height: number;
-    transform: number[];
-}
-
-/** Optional PDF coordinate data for precise rect computation */
-export interface PdfRectData {
-    textItems: PdfTextItem[];
-    spanToItemMap: Map<Element, number>;
-    viewportScale: number;
-}
-
-/** Normalized 0-1 rect relative to the text layer container */
-export type Rect = { x: number; y: number; w: number; h: number };
-
-/** A DOM Text node with its character range in the concatenated fullText */
-export type TextNode = { node: Text; start: number; end: number };
-
-// Canvas measurement
+import type { Rect } from '@/types/annotation';
+import type { PdfRectData, TextNode } from '@/types/viewer';
 
 let _measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
@@ -42,16 +20,7 @@ function getMeasureCtx(): CanvasRenderingContext2D {
     return _measureCtx;
 }
 
-// DOM helpers
-
-/**
- * Walk the TextLayer DOM and build a concatenated fullText string with a
- * mapping from character positions back to DOM Text nodes.
- *
- * Inserts a space between text nodes from different parent spans,
- * since pdf.js renders each word/token as a separate <span> with no
- * whitespace between them in the DOM.
- */
+/** Walk TextLayer DOM, build fullText with positions back to Text nodes. */
 export function collectTextNodes(container: HTMLDivElement): {
     textNodes: TextNode[];
     fullText: string;
@@ -88,21 +57,7 @@ export function collectTextNodes(container: HTMLDivElement): {
     return { textNodes, fullText };
 }
 
-// Rect computation
-
-/**
- * Convert a character range in fullText to normalized 0-1 rects.
- *
- * When `pdfData` is provided, computes widths from the PDF text items'
- * coordinate data (item.width × viewportScale) instead of DOM getClientRects(),
- * which are inflated by pdf.js's scaleX transforms. Uses canvas measureText
- * for proportional offsets within partially-selected spans.
- *
- * Also trims trailing/leading whitespace from each node's range to avoid
- * rects extending into empty space (pdf.js uses white-space:pre).
- *
- * Falls back to DOM measurement when pdfData is not available.
- */
+/** Convert character range to normalized 0-1 rects. Uses PDF coordinate data when available, falls back to DOM. */
 export function rangeToRects(
     textNodes: TextNode[],
     matchStart: number,
@@ -199,13 +154,7 @@ export function rangeToRects(
     return rects;
 }
 
-/**
- * Map a DOM Selection Range to character positions in the fullText built by
- * collectTextNodes, then compute precise rects.
- *
- * This is the entry point for TextLayer's manual text selection — it bridges
- * the DOM Range API to the character-position-based rangeToRects.
- */
+/** Map DOM Selection Range to character positions. Compute rects via rangeToRects. */
 export function selectionRangeToRects(
     range: Range,
     textNodes: TextNode[],

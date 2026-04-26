@@ -19,6 +19,18 @@ class PdfLinkCreate(BaseModel):
     doi: Optional[str] = None
     isbn: Optional[str] = None
 
+class PdfUrlCheckRequest(BaseModel):
+    url: HttpUrl
+
+class PdfUrlCheckResponse(BaseModel):
+    valid: bool
+    page_count: Optional[int] = None
+    file_size: Optional[int] = None
+    title: Optional[str] = None
+    cors_blocked: bool = False
+    error: Optional[str] = None
+    suggestions: Optional[List[str]] = None
+
 class PdfUpdate(BaseModel):
     title: Optional[str] = None
     source_url: Optional[str] = None
@@ -36,6 +48,14 @@ class PdfResponse(PdfBase):
     uploaded_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+class PdfIndexStatusResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str  # 'not_indexed' | 'indexing' | 'indexed' | 'failed'
+    chunk_count: Optional[int] = None
+    error_message: Optional[str] = None
+    indexed_at: Optional[datetime] = None
 
 class PdfListParams(BaseModel):
     collection_id: Optional[uuid.UUID] = None

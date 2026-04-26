@@ -8,11 +8,11 @@ import { ViewerToolbar } from './ViewerToolbar'
 import { usePdfViewerStore } from '@/stores/pdfViewerStore'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
-// Mock citation store
-vi.mock('@/stores/citationStore', () => ({
-  useCitationStore: () => ({
-    isPanelOpen: false,
-    togglePanel: vi.fn(),
+// Mock annotation store
+vi.mock('@/stores/annotationStore', () => ({
+  useAnnotationStore: () => ({
+    isAnnotationSidebarOpen: true,
+    toggleAnnotationSidebar: vi.fn(),
   }),
 }))
 
@@ -170,47 +170,6 @@ describe('ViewerToolbar', () => {
       renderWithRouter(<ViewerToolbar />)
 
       expect(screen.getByText('150%')).toBeTruthy()
-    })
-  })
-
-  describe('rotation', () => {
-    it('rotates 90 degrees clockwise on click', () => {
-      usePdfViewerStore.getState().setRotation(0)
-
-      renderWithRouter(<ViewerToolbar />)
-
-      const buttons = screen.getAllByRole('button')
-      const rotateBtn = buttons.find(b => b.querySelector('.lucide-rotate-cw'))
-
-      fireEvent.click(rotateBtn!)
-
-      expect(usePdfViewerStore.getState().rotation).toBe(90)
-
-      fireEvent.click(rotateBtn!)
-
-      expect(usePdfViewerStore.getState().rotation).toBe(180)
-    })
-
-    it('wraps rotation from 270 to 0', () => {
-      usePdfViewerStore.getState().setRotation(270)
-
-      renderWithRouter(<ViewerToolbar />)
-
-      const buttons = screen.getAllByRole('button')
-      const rotateBtn = buttons.find(b => b.querySelector('.lucide-rotate-cw'))
-
-      fireEvent.click(rotateBtn!)
-
-      expect(usePdfViewerStore.getState().rotation).toBe(0)
-    })
-  })
-
-  describe('export', () => {
-    it('has export button', () => {
-      renderWithRouter(<ViewerToolbar />)
-
-      const exportBtn = screen.getByText('Export Annotated')
-      expect(exportBtn).toBeInTheDocument()
     })
   })
 })

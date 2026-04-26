@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import { usePdfViewerStore } from '@/stores/pdfViewerStore';
-import { TextLayer, type TextLayerHandle } from './TextLayer';
+import { TextLayer } from './TextLayer';
+import type { TextLayerHandle } from '@/types/viewer';
 import { AnnotationOverlay } from '../annotations/AnnotationOverlay';
 
 interface PdfCanvasProps {
@@ -19,6 +20,7 @@ export const PdfCanvas = ({ pdfDocument, pageNumber, pdfId, className = '' }: Pd
     const rotation = usePdfViewerStore(s => s.rotation);
     const [pageProxy, setPageProxy] = useState<PDFPageProxy | null>(null);
     const renderTaskRef = useRef<{ cancel: () => void } | null>(null);
+    const [renderId, setRenderId] = useState(0);
 
     // Load the requested page
     useEffect(() => {
@@ -98,8 +100,8 @@ export const PdfCanvas = ({ pdfDocument, pageNumber, pdfId, className = '' }: Pd
             className={`relative inline-block bg-white shadow-md mx-auto my-4 transition-all duration-200 ${className}`}
         >
             <canvas ref={canvasRef} className="block" />
-            <TextLayer ref={textLayerHandleRef} pageProxy={pageProxy} />
-            <AnnotationOverlay pageNumber={pageNumber} pdfId={pdfId} textLayerHandle={textLayerHandleRef} />
+            <TextLayer ref={textLayerHandleRef} pageProxy={pageProxy} onRenderComplete={setRenderId} />
+            <AnnotationOverlay pageNumber={pageNumber} pdfId={pdfId} textLayerHandle={textLayerHandleRef} renderId={renderId} />
         </div>
     );
 };

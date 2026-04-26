@@ -34,7 +34,6 @@ interface PdfLinkPayload {
     isbn?: string;
 }
 
-// Queries
 export const usePdfs = (params: PdfListParams) => {
     return useQuery({
         queryKey: ['pdfs', params],
@@ -81,18 +80,14 @@ export const usePdfContent = (id: string) => {
     });
 };
 
-// Mutations
 export const useUploadPdf = () => {
     const queryClient = useQueryClient();
 
     return useMutation({
         mutationFn: async (formData: FormData): Promise<Pdf> => {
-            // Custom fetch because we are sending FormData, not JSON
             return apiFetch('/pdfs/upload', {
                 method: 'POST',
-                headers: {
-                    // Do not set Content-Type here, let the browser set it with the boundary for multipart/form-data
-                },
+                headers: {},
                 body: formData,
             });
         },
@@ -114,6 +109,27 @@ export const useLinkPdf = () => {
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['pdfs'] });
+        },
+    });
+};
+
+export interface PdfUrlCheckResponse {
+    valid: boolean;
+    page_count?: number | null;
+    file_size?: number | null;
+    title?: string | null;
+    cors_blocked: boolean;
+    error?: string | null;
+    suggestions?: string[] | null;
+}
+
+export const useCheckPdfUrl = () => {
+    return useMutation({
+        mutationFn: async (url: string): Promise<PdfUrlCheckResponse> => {
+            return apiFetch('/pdfs/check-url', {
+                method: 'POST',
+                body: JSON.stringify({ url }),
+            });
         },
     });
 };

@@ -5,7 +5,7 @@ import logging
 import uuid
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from app.api.deps import (
     get_db,
     get_llm_http_client,
     get_embedding_http_client,
+    resolve_api_key_with_quota,
 )
 from app.core.config import settings
 from app.db.models import (
@@ -26,21 +27,17 @@ from app.db.models import (
     User,
 )
 from app.middleware.rate_limit import limiter
-from app.services.api_key_service import QuotaType, api_key_service
-from app.services.chat_service import ChatService, COLLECTION_SYSTEM_PROMPT
+from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
-    ApiKeyNotFoundError,
     EmbeddingError,
     IndexInProgressError,
     IndexingError,
     LLMRateLimitError,
-    QuotaExhaustedError,
+    OpenRouterQuotaError,
 )
 from app.services.explain_service import ExplainService
-from app.services.indexing_service import IndexingService
 from app.services.llm_service import LLMService
-from app.services.pdf_download_service import pdf_download_service
 from app.services.vector_search_service import vector_search_service
 from app.schemas.chat import (
     ConversationCreate,
@@ -58,7 +55,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# Conversation endpoints
 
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
@@ -190,7 +186,6 @@ async def delete_conversation(
     await db.commit()
 
 
-# Streaming endpoint
 
 
 @router.post("/conversations/{conversation_id}/stream")
@@ -199,7 +194,6 @@ async def stream_message(
     request: Request,
     conversation_id: uuid.UUID,
     data: MessageCreate,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     llm_client: httpx.AsyncClient = Depends(get_llm_http_client),
@@ -216,127 +210,39 @@ async def stream_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    try:
-        resolution = await api_key_service.resolve_for_chat(current_user, db)
-    except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
-        raise HTTPException(status_code=402, detail=str(e))
-    provider = resolution.provider
-    api_key = resolution.api_key
-    is_in_house = resolution.is_in_house
-
-    # Decrement quota BEFORE streaming (optimistic decrement)
-    # Skip for OpenRouter (free) — only decrement for paid in-house providers.
-    # If OpenRouter is primary and later 429s, quota is decremented inside
-    # the event_stream() generator when falling back to a paid provider.
-    if is_in_house and provider != "openrouter":
-
-        async def _decrement_chat_quota(user_id: str) -> None:
-            from app.db.engine import SessionLocal  # noqa: PLC0415
-
-            async with SessionLocal() as bg_db:
-                await api_key_service.decrement_quota(user_id, QuotaType.CHAT, bg_db)
-                await bg_db.commit()
-
-        background_tasks.add_task(_decrement_chat_quota, str(current_user.id))
+    resolution = await resolve_api_key_with_quota(current_user, db, "chat")
 
     embedding_svc = EmbeddingService(http_client=embedding_client)
     llm_svc = LLMService(http_client=llm_client)
-    local_chat_service = ChatService(llm_service=llm_svc)
-    local_indexing_service = IndexingService(
-        download_service=pdf_download_service,
+    orchestrator = ChatOrchestrator(
         embedding_service=embedding_svc,
+        llm_service=llm_svc,
     )
 
+    # Prepare RAG context (embedding, indexing, vector search, citations)
     try:
-        query_vector = await embedding_svc.embed_query(data.content)
+        prepared = await orchestrator.prepare_context(
+            query=data.content,
+            pdf_id=conv.pdf_id,
+            collection_id=conv.collection_id,
+            user=current_user,
+            db=db,
+        )
+    except OpenRouterQuotaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
+    except IndexInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except (EmbeddingError, OpenRouterQuotaError, IndexingError) as exc:
+        raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "PDF not found.":
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=422, detail=msg)
 
-    # PDF path: verify ownership, lazy-index if needed, single-PDF search
-    # Collection path: multi-PDF search across indexed collection chunks
-    if conv.pdf_id is not None:
-        pdf_result = await db.execute(
-            select(Pdf).where(Pdf.id == conv.pdf_id, Pdf.user_id == current_user.id)
-        )
-        pdf_row = pdf_result.scalar_one_or_none()
-        if not pdf_row:
-            raise HTTPException(status_code=404, detail="PDF not found.")
-
-        # Get or create index status
-        index_status = await local_indexing_service.get_or_create_status(
-            str(conv.pdf_id), str(current_user.id), db
-        )
-
-        # Handle stale/active indexing
-        try:
-            was_reset = await local_indexing_service.reset_if_stale(index_status, db)  # noqa: F841
-        except IndexInProgressError as e:
-            raise HTTPException(status_code=409, detail=str(e))
-
-        # Handle failed indexing
-        if index_status.status == "failed":
-            logger.info(
-                "Resetting failed index status for pdf %s (user %s) to allow re-index retry",
-                conv.pdf_id,
-                current_user.id,
-            )
-            index_status.status = "not_indexed"
-            index_status.error_message = None
-            await db.flush()
-
-        # Lazy index if needed
-        if index_status.status == "not_indexed":
-            try:
-                await local_indexing_service.index_pdf(
-                    pdf_row, current_user, index_status, db
-                )
-                await db.commit()
-            except (EmbeddingError, IndexingError) as exc:
-                await db.commit()
-                raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
-
-        top_chunks = await vector_search_service.search_pdf(
-            query_vector=query_vector,
-            pdf_id=conv.pdf_id,
-            user_id=current_user.id,
-            top_k=settings.CHAT_TOP_K_SINGLE_PDF,
-            db=db,
-            query_text=data.content,
-        )
-        context = local_chat_service.build_context(
-            [{"page_number": c.page_number, "end_page_number": c.end_page_number, "content": c.content, "section_title": c.section_title} for c in top_chunks]
-        )
-    else:
-        # Collection chat: search across all indexed PDFs in the collection
-        if conv.collection_id is None:
-            raise HTTPException(
-                status_code=422,
-                detail="Conversation has neither pdf_id nor collection_id.",
-            )
-
-        top_chunks = await vector_search_service.search_collection(
-            query_vector=query_vector,
-            collection_id=conv.collection_id,
-            user_id=current_user.id,
-            top_k=settings.CHAT_TOP_K_COLLECTION,
-            db=db,
-            query_text=data.content,
-        )
-        if not top_chunks:
-            raise HTTPException(
-                status_code=422,
-                detail="No indexed PDFs found in this collection. Open each PDF in the viewer and send a message to index it first.",
-            )
-        context_parts = []
-        for c in top_chunks:
-            end_page = getattr(c, "end_page_number", None)
-            if end_page and end_page > c.page_number:
-                page_label = f"Pages {c.page_number}-{end_page}"
-            else:
-                page_label = f"Page {c.page_number}"
-            context_parts.append(f"[{c.pdf_title}, {page_label}]\n{c.content}")
-        context = "\n\n---\n\n".join(context_parts)
-
+    # Fetch history
     history_result = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.conversation_id == conversation_id)
@@ -345,132 +251,37 @@ async def stream_message(
     history = [
         {"role": m.role, "content": m.content} for m in history_result.scalars().all()
     ]
-    system_prompt, messages = local_chat_service.build_messages(
-        context,
-        history,
-        data.content,
-        base_prompt=COLLECTION_SYSTEM_PROMPT if conv.collection_id else None,
+
+    # Build LLM messages
+    prepared_msgs = await orchestrator.build_messages(
+        context=prepared.context,
+        history=history,
+        user_message=data.content,
+        collection_id=conv.collection_id,
+        paper_metadata=prepared.paper_metadata,
     )
 
-    # Save user message and auto-title the conversation on first message
-    user_msg = ChatMessage(
+    # Persist user message
+    await orchestrator.persist_user_message(
         conversation_id=conversation_id,
-        role="user",
         content=data.content,
+        conv=conv,
+        db=db,
     )
-    db.add(user_msg)
-    if not conv.title:
-        truncated = data.content.strip()
-        conv.title = truncated[:60] + ("…" if len(truncated) > 60 else "")
-    await db.commit()
 
-    # Build context_chunks payload for SSE done event
-    context_chunks_payload = [
-        {
-            "chunk_id": c.chunk_id,
-            "page_number": c.page_number,
-            "end_page_number": c.end_page_number,
-            "snippet": c.content[:200],
-            "section_title": c.section_title,
-            "section_level": c.section_level,
-            **({"pdf_id": c.pdf_id, "pdf_title": c.pdf_title} if c.pdf_id else {}),
-        }
-        for c in top_chunks
-    ]
-
+    # Stream response
     async def event_stream():
-        full_reply = []
-        assistant_message_id = str(uuid.uuid4())
-        provider_fallback = False
-        try:
-            try:
-                async for token in local_chat_service.stream_reply(
-                    system_prompt, messages, provider, api_key
-                ):
-                    full_reply.append(token)
-                    yield f"data: {json.dumps({'token': token})}\n\n"
-            except LLMRateLimitError:
-                # Only retry if primary was OpenRouter
-                if provider != "openrouter":
-                    raise
-
-                logger.warning(
-                    "OpenRouter rate limited, falling back for user %s",
-                    current_user.id,
-                )
-
-                try:
-                    paid_resolution = await api_key_service.resolve_paid_fallback(
-                        current_user,
-                        db,
-                        quota_field=QuotaType.CHAT.value,
-                        feature_priority=api_key_service.CHAT_PRIORITY,
-                    )
-                except (QuotaExhaustedError, ApiKeyNotFoundError):
-                    yield f"data: {json.dumps({'error': 'Free tier rate limited and no paid fallback available.', 'code': 'rate_limited'})}\n\n"
-                    return
-
-                fallback_provider = paid_resolution.provider
-                fallback_api_key = paid_resolution.api_key
-                provider_fallback = True
-
-                from app.db.engine import SessionLocal  # noqa: PLC0415
-
-                async with SessionLocal() as fallback_db:
-                    await api_key_service.decrement_quota(
-                        str(current_user.id), QuotaType.CHAT, fallback_db
-                    )
-                    await fallback_db.commit()
-
-                yield f"data: {json.dumps({'notice': 'Free tier rate limited, using backup model.'})}\n\n"
-
-                async for token in local_chat_service.stream_reply(
-                    system_prompt, messages, fallback_provider, fallback_api_key
-                ):
-                    full_reply.append(token)
-                    yield f"data: {json.dumps({'token': token})}\n\n"
-
-            # Persist assistant message synchronously before sending `done`.
-            # Saving as a background task (after the response is sent) created a race
-            # condition: if the user sent a second message before the task ran, the
-            # backend fetched history without the assistant reply and passed an invalid
-            # conversation thread to the LLM.
-            msg = ChatMessage(
-                id=uuid.UUID(assistant_message_id),
-                conversation_id=conversation_id,
-                role="assistant",
-                content="".join(full_reply),
-                context_chunks=[
-                    {
-                        "chunk_id": c["chunk_id"],
-                        "page_number": c["page_number"],
-                        "end_page_number": c.get("end_page_number"),
-                        "snippet": c["snippet"],
-                        "section_title": c.get("section_title"),
-                        "section_level": c.get("section_level"),
-                        **(
-                            {"pdf_id": c["pdf_id"], "pdf_title": c["pdf_title"]}
-                            if c.get("pdf_id")
-                            else {}
-                        ),
-                    }
-                    for c in context_chunks_payload
-                ],
-            )
-            db.add(msg)
-            await db.commit()
-            logger.info(
-                "Saved assistant message for conversation %s (%d chars, %d chunks)",
-                conversation_id,
-                len("".join(full_reply)),
-                len(context_chunks_payload),
-            )
-
-            yield f"data: {json.dumps({'done': True, 'message_id': assistant_message_id, 'context_chunks': context_chunks_payload, 'provider_fallback': provider_fallback})}\n\n"
-
-        except Exception as exc:
-            logger.exception("Streaming error for conversation %s", conversation_id)
-            yield f"data: {json.dumps({'error': str(exc), 'code': 'stream_error'})}\n\n"
+        async for event in orchestrator.stream_and_save(
+            system_prompt=prepared_msgs.system_prompt,
+            messages=prepared_msgs.messages,
+            provider=resolution.provider,
+            api_key=resolution.api_key,
+            model=resolution.model,
+            conversation_id=conversation_id,
+            context_chunks_payload=prepared.context_chunks_payload,
+            db=db,
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -482,7 +293,6 @@ async def stream_message(
     )
 
 
-# Semantic search
 
 
 @router.post("/semantic-search", response_model=list[SemanticSearchResult])
@@ -497,7 +307,9 @@ async def semantic_search(
     """Search across indexed PDFs using semantic similarity."""
     try:
         embedding_svc = EmbeddingService(http_client=embedding_client)
-        query_vector = await embedding_svc.embed_query(data.query)
+        query_vector = await embedding_svc.embed_query(data.query, db=db)
+    except OpenRouterQuotaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
@@ -532,7 +344,6 @@ async def semantic_search(
     ]
 
 
-# Explain endpoint
 
 
 @router.post("/explain", response_model=ExplainResponse)
@@ -570,13 +381,10 @@ async def explain_annotation(
     if not pdf_row:
         raise HTTPException(status_code=404, detail="PDF not found.")
 
-    try:
-        resolution = await api_key_service.resolve_for_explain(current_user, db)
-    except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
-        raise HTTPException(status_code=402, detail=str(e))
+
+    resolution = await resolve_api_key_with_quota(current_user, db, "explain")
     provider = resolution.provider
     api_key = resolution.api_key
-    is_in_house = resolution.is_in_house
 
     # Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
     embedding_svc = EmbeddingService(http_client=embedding_client)
@@ -586,8 +394,6 @@ async def explain_annotation(
         llm_service=llm_svc,
     )
 
-    provider_fallback = False
-
     try:
         result = await local_explain_service.explain_with_provider(
             selected_text=data.selected_text,
@@ -597,43 +403,14 @@ async def explain_annotation(
             provider=provider,
             api_key=api_key,
             db=db,
+            model=resolution.model,
         )
     except LLMRateLimitError:
-        # Only retry if primary was OpenRouter
-        if provider != "openrouter":
-            raise
-
-        logger.warning(
-            "OpenRouter rate limited for explain, falling back for user %s",
-            current_user.id,
-        )
-
-        try:
-            paid_resolution = await api_key_service.resolve_paid_fallback(
-                current_user,
-                db,
-                quota_field=QuotaType.EXPLAIN.value,
-                feature_priority=api_key_service.EXPLAIN_PRIORITY,
-            )
-        except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
-            raise HTTPException(status_code=402, detail=str(e))
-
-        provider = paid_resolution.provider
-        api_key = paid_resolution.api_key
-        is_in_house = True
-        provider_fallback = True
-
-        result = await local_explain_service.explain_with_provider(
-            selected_text=data.selected_text,
-            page_number=data.page_number,
-            pdf_row=pdf_row,
-            user=current_user,
-            provider=provider,
-            api_key=api_key,
-            db=db,
-        )
+        raise HTTPException(status_code=429, detail="Free tier rate limited. Please try again later or use your own API key.")
     except IndexInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except OpenRouterQuotaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except (EmbeddingError, IndexingError) as exc:
         raise HTTPException(status_code=502, detail=f"Explanation failed: {exc}")
 
@@ -644,12 +421,8 @@ async def explain_annotation(
     )
     annotation.note_content = final_note
 
-    # Decrement explain quota if using paid in-house key (skip free OpenRouter)
-    remaining = -1  # -1 signals unlimited (own API key)
-    if is_in_house and provider != "openrouter":
-        remaining = await api_key_service.decrement_quota(
-            str(current_user.id), QuotaType.EXPLAIN, db
-        )
+    # OpenRouter (free) has no per-user quota. BYOK = unlimited.
+    remaining = -1  # signals unlimited
 
     await db.commit()
 
@@ -657,5 +430,4 @@ async def explain_annotation(
         explanation=result.explanation,
         note_content=final_note,
         explain_uses_remaining=remaining,
-        provider_fallback=provider_fallback,
     )

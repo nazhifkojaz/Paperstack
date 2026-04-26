@@ -1,16 +1,63 @@
+import asyncio
+import logging
 import uuid
-from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Response, Request
+from datetime import datetime, timezone
+from typing import List, Optional
+
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, asc
 
 from app.api import deps
-from app.db.models import User, Pdf, PdfCollection, PdfTag, Collection, Annotation, AnnotationSet
-from app.schemas.pdf import PdfResponse, PdfUpdate, PdfListParams, PdfLinkCreate
+from app.core.config import settings
+from app.db.engine import SessionLocal
+from app.db.models import Annotation, AnnotationSet, Collection, Pdf, PdfCollection, PdfTag, PdfIndexStatus, User
+from app.middleware.rate_limit import limiter
+from app.schemas.pdf import PdfIndexStatusResponse, PdfLinkCreate, PdfListParams, PdfResponse, PdfUpdate, PdfUrlCheckRequest, PdfUrlCheckResponse
 from app.services import pdf_metadata
+from app.services.pdf_download_service import pdf_download_service
+from app.services.indexing_service import IndexingService
 from app.services.storage.factory import get_storage_backend
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+async def _run_index_background(pdf_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    """Fire-and-forget background indexing task."""
+    async with SessionLocal() as db:
+        try:
+            pdf_row = await db.get(Pdf, pdf_id)
+            user_row = await db.get(User, user_id)
+            if not pdf_row or not user_row:
+                return
+            svc = IndexingService(download_service=pdf_download_service)
+            status = await svc.get_or_create_status(str(pdf_id), str(user_id), db)
+            await db.commit()
+            if status.status == "indexed":
+                return
+            await svc.index_pdf(pdf_row, user_row, status, db)
+            await db.commit()
+        except Exception as exc:
+            logger.exception("Background indexing failed for pdf %s", pdf_id)
+            try:
+                await db.rollback()
+                result = await db.execute(
+                    select(PdfIndexStatus).where(
+                        PdfIndexStatus.pdf_id == pdf_id,
+                        PdfIndexStatus.user_id == user_id,
+                    )
+                )
+                row = result.scalar_one_or_none()
+                if row and row.status != "failed":
+                    row.status = "failed"
+                    row.error_message = str(exc)[:500]
+                    row.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+            except Exception:
+                logger.exception("Failed to mark indexing status=failed for pdf %s", pdf_id)
 
 
 def _has_stored_content(pdf: Pdf) -> bool:
@@ -36,7 +83,7 @@ async def upload_pdf(
     project_ids: str = Form(None),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfResponse:
     """Upload a new PDF to the user's active storage backend."""
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
@@ -80,7 +127,77 @@ async def upload_pdf(
 
     await db.commit()
     await db.refresh(pdf)
+    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
     return pdf
+
+
+@router.post("/check-url", response_model=PdfUrlCheckResponse)
+@limiter.limit(settings.RATE_LIMIT_PDF_CHECK_URL)
+async def check_pdf_url(
+    request: Request,
+    data: PdfUrlCheckRequest,
+    current_user: User = Depends(deps.get_current_user),
+) -> PdfUrlCheckResponse:
+    """Validate a URL points to a viewable PDF before adding it."""
+    url_str = str(data.url)
+
+    # Phase 1: HEAD request to check reachability and content-type
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        try:
+            head_resp = await client.head(url_str)
+        except httpx.TimeoutException:
+            return PdfUrlCheckResponse(valid=False, error="Server took too long to respond (timed out after 30 seconds).")
+        except httpx.ConnectError:
+            return PdfUrlCheckResponse(valid=False, error="Could not reach the server. Check the URL and try again.")
+        except httpx.HTTPError as exc:
+            return PdfUrlCheckResponse(valid=False, error=f"Failed to connect: {exc}")
+
+        if head_resp.status_code != 200:
+            return PdfUrlCheckResponse(valid=False, error=f"Server returned HTTP {head_resp.status_code}. The file may not exist at this URL.")
+
+        content_type = head_resp.headers.get("content-type", "").lower()
+        if "application/pdf" not in content_type and "application/x-pdf" not in content_type:
+            return PdfUrlCheckResponse(
+                valid=False,
+                error=f"URL does not point to a PDF file (Content-Type: {content_type or 'unknown'})",
+            )
+
+        # Phase 2: GET to check CORS and extract metadata
+        try:
+            get_resp = await client.get(url_str)
+        except httpx.HTTPError:
+            return PdfUrlCheckResponse(valid=False, error="Failed to download the PDF content.")
+
+        file_bytes = get_resp.content
+        if not file_bytes.startswith(b"%PDF-"):
+            return PdfUrlCheckResponse(valid=False, error="Content is not a valid PDF file.")
+
+        # CORS check
+        acao = get_resp.headers.get("access-control-allow-origin", "")
+        cors_ok = acao == "*" or (acao and settings.FRONTEND_URL in acao)
+        if not cors_ok:
+            return PdfUrlCheckResponse(
+                valid=False,
+                cors_blocked=True,
+                error="This PDF cannot be loaded directly in the browser due to server restrictions (CORS).",
+                suggestions=[
+                    "Download the PDF and upload it manually using the Upload tab",
+                    "Find an alternative URL that allows cross-origin access",
+                ],
+            )
+
+        # Extract metadata
+        page_count = pdf_metadata.extract_page_count(file_bytes)
+        file_size = len(file_bytes)
+        title = pdf_metadata.extract_title_from_bytes(file_bytes)
+
+        return PdfUrlCheckResponse(
+            valid=True,
+            page_count=page_count,
+            file_size=file_size,
+            title=title,
+            cors_blocked=False,
+        )
 
 
 @router.post("/link", response_model=PdfResponse)
@@ -88,7 +205,7 @@ async def link_pdf(
     data: PdfLinkCreate,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfResponse:
     """Create a PDF entry from an external URL (no file upload/storage)."""
     pdf_id = uuid.uuid4()
     filename = f"linked/{pdf_id}"
@@ -119,6 +236,7 @@ async def link_pdf(
 
     await db.commit()
     await db.refresh(pdf)
+    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
     return pdf
 
 
@@ -127,7 +245,7 @@ async def list_pdfs(
     params: PdfListParams = Depends(),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> List[PdfResponse]:
     """List PDFs with filtering, sorting, and pagination."""
     query = select(Pdf).where(Pdf.user_id == current_user.id)
 
@@ -159,12 +277,55 @@ async def get_pdf(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfResponse:
     """Get a specific PDF by ID."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
     return pdf
+
+
+@router.get("/{pdf_id}/index-status", response_model=PdfIndexStatusResponse)
+async def get_index_status(
+    pdf_id: uuid.UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> PdfIndexStatusResponse:
+    """Return the indexing status of a PDF."""
+    pdf = await db.get(Pdf, pdf_id)
+    if not pdf or pdf.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
+    svc = IndexingService(download_service=pdf_download_service)
+    row = await svc.get_or_create_status(str(pdf_id), str(current_user.id), db)
+    await db.commit()
+    return row
+
+
+@router.post("/{pdf_id}/reindex", status_code=202)
+@limiter.limit(settings.RATE_LIMIT_REINDEX)
+async def reindex_pdf(
+    request: Request,
+    pdf_id: uuid.UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict[str, str]:
+    """Re-trigger indexing for a PDF (manual retry or forced re-index)."""
+    pdf = await db.get(Pdf, pdf_id)
+    if not pdf or pdf.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
+    svc = IndexingService(download_service=pdf_download_service)
+    status = await svc.get_or_create_status(str(pdf_id), str(current_user.id), db)
+    if status.status == "indexing":
+        raise HTTPException(status_code=409, detail="Indexing already in progress.")
+
+    status.status = "not_indexed"
+    status.error_message = None
+    await db.commit()
+
+    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
+    return {"status": "accepted"}
 
 
 @router.patch("/{pdf_id}", response_model=PdfResponse)
@@ -173,7 +334,7 @@ async def update_pdf(
     pdf_in: PdfUpdate,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> PdfResponse:
     """Update a PDF's metadata."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
@@ -193,7 +354,7 @@ async def delete_pdf(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, str]:
     """Delete a PDF from both the database and its storage backend."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
@@ -214,7 +375,7 @@ async def get_pdf_content(
     request: Request,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> Response:
     """Fetch raw PDF content from the user's storage backend.
 
     Uses ETag caching based on the storage file identifier.
@@ -245,7 +406,7 @@ async def get_pdf_collections(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> dict[str, list[str]]:
     """Get all collections a PDF belongs to."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
@@ -262,7 +423,7 @@ async def export_annotated_pdf(
     pdf_id: uuid.UUID,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
-) -> Any:
+) -> Response:
     """Fetch the PDF, overlay annotations, and return the baked PDF."""
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
@@ -297,5 +458,6 @@ async def export_annotated_pdf(
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="annotated_{pdf.filename.split("/")[-1]}"'},
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export annotated PDF: {str(e)}")
+    except Exception:
+        logger.exception("Failed to export annotated PDF for pdf_id=%s", pdf_id)
+        raise HTTPException(status_code=500, detail="Failed to export annotated PDF")

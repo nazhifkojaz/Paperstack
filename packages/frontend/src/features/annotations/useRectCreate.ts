@@ -1,11 +1,5 @@
 import { useState, useCallback, RefObject } from 'react';
-
-export interface Rect {
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-}
+import type { Rect } from '@/types/annotation';
 
 interface UseRectCreateOptions {
     containerRef: RefObject<HTMLDivElement | null>;

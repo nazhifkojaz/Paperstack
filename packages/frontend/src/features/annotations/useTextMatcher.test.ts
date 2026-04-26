@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { collectTextNodes } from '@/features/viewer/pdfTextUtils'
+import { collectTextNodes } from '@/lib/pdfTextUtils'
 import {
     buildNormMap,
+    dehyphenate,
     normalize,
     tokenize,
     wordLcsMatch,
+    splitSentences,
+    charLcsMatch,
 } from './useTextMatcher'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -194,6 +197,73 @@ describe('buildNormMap', () => {
     })
 })
 
+// ─── dehyphenate ─────────────────────────────────────────────────────────────
+
+describe('dehyphenate', () => {
+    it('joins word split by hyphen + space', () => {
+        const { text } = dehyphenate('con- sider')
+        expect(text).toBe('consider')
+    })
+
+    it('leaves regular hyphenated words intact', () => {
+        const { text } = dehyphenate('state-of-the-art')
+        expect(text).toBe('state-of-the-art')
+    })
+
+    it('joins word split by hyphen + multiple spaces', () => {
+        const { text } = dehyphenate('large-  scale')
+        expect(text).toBe('largescale')
+    })
+
+    it('joins word split at end of line with tab', () => {
+        const { text } = dehyphenate('per-\tformance')
+        expect(text).toBe('performance')
+    })
+
+    it('toNormal maps dehyphenated positions back to normalized', () => {
+        // norm = c  o  n  -     s  i  d  e  r
+        // idx  = 0  1  2  3  4  5  6  7  8  9
+        const { text, toNormal } = dehyphenate('con- sider')
+        expect(text).toBe('consider')
+        // 'c', 'o', 'n' map to 0, 1, 2
+        expect(toNormal[0]).toBe(0)
+        expect(toNormal[1]).toBe(1)
+        expect(toNormal[2]).toBe(2)
+        // 's', 'i', 'd', 'e', 'r' map to 5, 6, 7, 8, 9 (skipping hyphen idx 3 and space idx 4)
+        expect(toNormal[3]).toBe(5)
+        expect(toNormal[4]).toBe(6)
+        expect(toNormal[5]).toBe(7)
+        expect(toNormal[6]).toBe(8)
+        expect(toNormal[7]).toBe(9)
+    })
+
+    it('handles multiple hyphen breaks', () => {
+        const { text } = dehyphenate('sec- ond- line')
+        expect(text).toBe('secondline')
+    })
+
+    it('handles hyphen without preceding word char as regular char', () => {
+        const { text } = dehyphenate(' - dash')
+        expect(text).toBe(' - dash')
+    })
+
+    it('handles hyphen at end of string', () => {
+        const { text } = dehyphenate('end-')
+        expect(text).toBe('end-')
+    })
+
+    it('returns empty for empty input', () => {
+        const { text, toNormal } = dehyphenate('')
+        expect(text).toBe('')
+        expect(toNormal).toHaveLength(0)
+    })
+
+    it('does not join hyphen at very start of string', () => {
+        const { text } = dehyphenate('-prefixed')
+        expect(text).toBe('-prefixed')
+    })
+})
+
 // ─── tokenize ────────────────────────────────────────────────────────────────
 
 describe('tokenize', () => {
@@ -223,14 +293,121 @@ describe('tokenize', () => {
     })
 })
 
+// ─── splitSentences ──────────────────────────────────────────────────────────
+
+describe('splitSentences', () => {
+    it('splits on period followed by space and capital', () => {
+        const result = splitSentences('First sentence. Second sentence.')
+        expect(result).toEqual(['First sentence.', 'Second sentence.'])
+    })
+
+    it('splits on exclamation and question marks', () => {
+        const result = splitSentences('Wow! Really? Yes.')
+        expect(result).toEqual(['Wow!', 'Really?', 'Yes.'])
+    })
+
+    it('does not split abbreviations with lowercase continuation', () => {
+        const result = splitSentences('e.g. something else. Another.')
+        expect(result).toEqual(['e.g. something else.', 'Another.'])
+    })
+
+    it('returns single element for one sentence', () => {
+        const result = splitSentences('Just one sentence')
+        expect(result).toEqual(['Just one sentence'])
+    })
+
+    it('handles empty string', () => {
+        const result = splitSentences('')
+        expect(result).toEqual([])
+    })
+
+    it('handles trailing whitespace', () => {
+        const result = splitSentences('  A. B.  ')
+        expect(result).toEqual(['A.', 'B.'])
+    })
+
+    it('does not split on numbers followed by period', () => {
+        const result = splitSentences('Accuracy is 92.3%. Good result.')
+        expect(result).toEqual(['Accuracy is 92.3%.', 'Good result.'])
+    })
+})
+
+// ─── charLcsMatch ────────────────────────────────────────────────────────────
+
+describe('charLcsMatch', () => {
+    it('matches exact substring', () => {
+        const orig = 'the model achieves 94.2% accuracy on ImageNet'
+        const { norm: haystack, toOrig } = buildNormMap(orig)
+        const needle = normalize('94.2% accuracy')
+        const result = charLcsMatch(haystack, needle, toOrig, orig.length)
+        expect(result).not.toBeNull()
+        const matched = orig.slice(result!.start, result!.end)
+        expect(matched).toContain('94.2% accuracy')
+    })
+
+    it('matches despite small character differences', () => {
+        const orig = 'the equation is f(x) = x2 + 3 with high precision'
+        const { norm: haystack, toOrig } = buildNormMap(orig)
+        // Needle has slightly different char but most match
+        const needle = normalize('f(x) = x 2 + 3')
+        const result = charLcsMatch(haystack, needle, toOrig, orig.length)
+        expect(result).not.toBeNull()
+    })
+
+    it('matches formula with special characters', () => {
+        const orig = 'we define e = mc2 and derive the result'
+        const { norm: haystack, toOrig } = buildNormMap(orig)
+        const needle = normalize('e = mc2')
+        const result = charLcsMatch(haystack, needle, toOrig, orig.length)
+        expect(result).not.toBeNull()
+        const matched = orig.slice(result!.start, result!.end)
+        expect(matched).toContain('e = mc2')
+    })
+
+    it('rejects when too few characters match', () => {
+        const orig = 'the quick brown fox jumps over the lazy dog'
+        const { norm: haystack, toOrig } = buildNormMap(orig)
+        const needle = normalize('completely different text here')
+        const result = charLcsMatch(haystack, needle, toOrig, orig.length)
+        expect(result).toBeNull()
+    })
+
+    it('returns null for needle shorter than 4 chars', () => {
+        const { norm: haystack, toOrig } = buildNormMap('hello world')
+        const needle = normalize('hel')
+        const result = charLcsMatch(haystack, needle, toOrig, 11)
+        expect(result).toBeNull()
+    })
+
+    it('handles PyMuPDF vs PDF.js character divergence', () => {
+        // Simulating PyMuPDF colon vs PDF.js colon
+        const orig = 'the bound is o(n log n) for worst case'
+        const { norm: haystack, toOrig } = buildNormMap(orig)
+        const needle = normalize('o(n log n)')
+        const result = charLcsMatch(haystack, needle, toOrig, orig.length)
+        expect(result).not.toBeNull()
+    })
+})
+
 // ─── wordLcsMatch ────────────────────────────────────────────────────────────
 
 describe('wordLcsMatch', () => {
-    it('returns null for needle shorter than 3 words', () => {
+    it('returns null for needle shorter than 2 words', () => {
         const { norm: haystack, toOrig } = buildNormMap('the quick brown fox')
-        const needle = normalize('quick fox')
+        const needle = normalize('quick')
         const result = wordLcsMatch(haystack, needle, toOrig, 19)
         expect(result).toBeNull()
+    })
+
+    it('matches 2-word needle (minimum) when words exist in order', () => {
+        const orig = 'the quick brown fox jumps over the lazy dog'
+        const { norm: haystack, toOrig } = buildNormMap(orig)
+        const needle = normalize('quick brown')
+        const result = wordLcsMatch(haystack, needle, toOrig, orig.length, 0.6)
+        expect(result).not.toBeNull()
+        const matched = orig.slice(result!.start, result!.end)
+        expect(matched).toContain('quick')
+        expect(matched).toContain('brown')
     })
 
     it('matches >= 60% in-order words', () => {
@@ -284,5 +461,14 @@ describe('wordLcsMatch', () => {
         const result = wordLcsMatch(haystack, needle, toOrig, orig.length, 0.6)
         // Should be null because span would be much larger than expected
         expect(result).toBeNull()
+    })
+
+    it('accepts optional pre-tokenized haystack', () => {
+        const orig = 'the quick brown fox jumps over the lazy dog'
+        const { norm: haystack, toOrig } = buildNormMap(orig)
+        const tokens = tokenize(haystack)
+        const needle = normalize('quick brown jumps lazy dog')
+        const result = wordLcsMatch(haystack, needle, toOrig, orig.length, 0.6, tokens)
+        expect(result).not.toBeNull()
     })
 })

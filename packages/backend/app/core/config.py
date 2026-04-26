@@ -39,9 +39,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_AUTH_ME: str = "60/minute"
     RATE_LIMIT_AUTH_LOGOUT: str = "30/minute"
 
-    # LLM Providers (in-house keys)
-    GLM_API_KEY: str | None = None
-    GEMINI_API_KEY: str | None = None
+    # LLM Provider (in-house key)
     OPENROUTER_API_KEY: str | None = None
 
     # Auto-highlight rate limits
@@ -49,9 +47,13 @@ class Settings(BaseSettings):
     RATE_LIMIT_AUTO_HIGHLIGHT_QUOTA: str = "30/minute"
     RATE_LIMIT_AUTO_HIGHLIGHT_CACHE: str = "30/minute"
     RATE_LIMIT_API_KEYS: str = "10/minute"
+    RATE_LIMIT_PDF_CHECK_URL: str = "10/minute"
+    RATE_LIMIT_REINDEX: str = "5/minute"
 
-    # Embedding (backend-held key, separate from user chat keys)
-    GEMINI_EMBEDDING_KEY: str | None = None
+    # Embedding — server key reused from OPENROUTER_API_KEY
+
+    # OpenRouter free-tier daily request limit (for soft-gating at 90%).
+    OPENROUTER_FREE_TIER_LIMIT: int = 1000
 
     # Chat rate limits
     RATE_LIMIT_CHAT_MESSAGE: str = "20/minute"

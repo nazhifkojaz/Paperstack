@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 QuotaField = Literal["chat_uses_remaining", "explain_uses_remaining", "free_uses_remaining"]
-Provider = Literal["openai", "anthropic", "gemini", "glm", "openrouter"]
+Provider = Literal["openai", "anthropic", "openrouter"]  # gemini/glm removed - no BYOK users
 
 
 class QuotaType(Enum):
@@ -46,40 +46,41 @@ class ApiKeyResolution:
         api_key: The decrypted API key
         is_in_house: True if using in-house key (quota applies), False if user's own key
         quota_remaining: Remaining quota if in_house, None if unlimited (user's key)
+        model: Specific model ID to use (set when user forces a free-tier model)
     """
     provider: str
     api_key: str
     is_in_house: bool
     quota_remaining: int | None
+    model: str | None = None
 
 
 class ApiKeyService:
     """Service for resolving API keys and managing quotas."""
 
-    # Default provider priorities for different features
-    AUTO_HIGHLIGHT_PRIORITY: list[Provider] = ["glm", "gemini"]
-    CHAT_PRIORITY: list[Provider] = ["openai", "anthropic", "gemini", "glm"]
-    EXPLAIN_PRIORITY: list[Provider] = ["openai", "anthropic", "gemini", "glm"]
+    # Provider priorities for BYOK user keys
+    AUTO_HIGHLIGHT_PRIORITY: list[Provider] = ["openai", "anthropic"]
+    CHAT_PRIORITY: list[Provider] = ["openai", "anthropic"]
+    EXPLAIN_PRIORITY: list[Provider] = ["openai", "anthropic"]
 
-    # In-house provider priority (used when user has no key)
-    IN_HOUSE_PRIORITY: list[Provider] = ["openrouter", "gemini", "glm"]
+    # In-house provider — only OpenRouter free tier
+    IN_HOUSE_PRIORITY: list[Provider] = ["openrouter"]
 
     async def resolve_for_chat(
         self,
         user: User,
         db: AsyncSession,
+        force_free_model: str | None = None,
     ) -> ApiKeyResolution:
         """Resolve API key for chat operations.
-
-        Priority: user's keys (openai > anthropic > gemini > glm) →
-                  in-house fallback (gemini > glm) with chat quota check.
 
         Args:
             user: The authenticated user
             db: Database session
+            force_free_model: If set, skip BYOK keys and force OpenRouter with this model
 
         Returns:
-            ApiKeyResolution with provider, key, and quota info
+            ApiKeyResolution with provider, key, quota info, and optional model
 
         Raises:
             QuotaExhaustedError: If in-house quota is exhausted
@@ -90,23 +91,24 @@ class ApiKeyService:
             db=db,
             quota_field=QuotaType.CHAT.value,
             provider_priority=self.CHAT_PRIORITY,
+            force_free_model=force_free_model,
         )
 
     async def resolve_for_explain(
         self,
         user: User,
         db: AsyncSession,
+        force_free_model: str | None = None,
     ) -> ApiKeyResolution:
         """Resolve API key for explain operations.
-
-        Same priority as chat, but checks explain quota.
 
         Args:
             user: The authenticated user
             db: Database session
+            force_free_model: If set, skip BYOK keys and force OpenRouter with this model
 
         Returns:
-            ApiKeyResolution with provider, key, and quota info
+            ApiKeyResolution with provider, key, quota info, and optional model
 
         Raises:
             QuotaExhaustedError: If in-house quota is exhausted
@@ -117,24 +119,24 @@ class ApiKeyService:
             db=db,
             quota_field=QuotaType.EXPLAIN.value,
             provider_priority=self.EXPLAIN_PRIORITY,
+            force_free_model=force_free_model,
         )
 
     async def resolve_for_auto_highlight(
         self,
         user: User,
         db: AsyncSession,
+        force_free_model: str | None = None,
     ) -> ApiKeyResolution:
         """Resolve API key for auto-highlight operations.
-
-        Priority: user's keys (glm > gemini) →
-                  in-house fallback (glm > gemini) with free quota check.
 
         Args:
             user: The authenticated user
             db: Database session
+            force_free_model: If set, skip BYOK keys and force OpenRouter with this model
 
         Returns:
-            ApiKeyResolution with provider, key, and quota info
+            ApiKeyResolution with provider, key, quota info, and optional model
 
         Raises:
             QuotaExhaustedError: If in-house quota is exhausted
@@ -145,49 +147,8 @@ class ApiKeyService:
             db=db,
             quota_field=QuotaType.FREE.value,
             provider_priority=self.AUTO_HIGHLIGHT_PRIORITY,
+            force_free_model=force_free_model,
         )
-
-    async def resolve_paid_fallback(
-        self,
-        user: User,
-        db: AsyncSession,
-        quota_field: QuotaField,
-        feature_priority: list[Provider],
-    ) -> ApiKeyResolution:
-        """Resolve a paid in-house key, skipping OpenRouter.
-
-        Used when OpenRouter returns 429 and we need to fall back to paid keys.
-        Checks quota and returns the first available paid in-house provider.
-
-        Raises:
-            QuotaExhaustedError: If quota is exhausted
-            ApiKeyNotFoundError: If no paid provider is available
-        """
-        paid_priority = [p for p in feature_priority if p in self.IN_HOUSE_PRIORITY and p != "openrouter"]
-
-        quota_row = await self._get_or_create_quota(user.id, db, quota_field)
-        current_quota = getattr(quota_row, quota_field, 0)
-
-        if current_quota <= 0:
-            raise QuotaExhaustedError(quota_field, remaining=current_quota)
-
-        for provider in paid_priority:
-            api_key = getattr(settings, f"{provider.upper()}_API_KEY")
-            if api_key:
-                logger.info(
-                    "Using paid fallback %s key for user %s (%s uses remaining)",
-                    provider,
-                    user.id,
-                    current_quota,
-                )
-                return ApiKeyResolution(
-                    provider=provider,
-                    api_key=api_key,
-                    is_in_house=True,
-                    quota_remaining=current_quota,
-                )
-
-        raise ApiKeyNotFoundError(quota_field.replace("_", " "))
 
     async def _resolve_api_key(
         self,
@@ -195,6 +156,7 @@ class ApiKeyService:
         db: AsyncSession,
         quota_field: QuotaField,
         provider_priority: list[Provider],
+        force_free_model: str | None = None,
     ) -> ApiKeyResolution:
         """Internal method to resolve API key with given parameters.
 
@@ -203,14 +165,36 @@ class ApiKeyService:
             db: Database session
             quota_field: Which quota field to check for in-house usage
             provider_priority: Order to check user's stored keys
+            force_free_model: If set, skip BYOK keys and force OpenRouter with this model
 
         Returns:
-            ApiKeyResolution with provider, key, and quota info
+            ApiKeyResolution with provider, key, quota info, and optional model
 
         Raises:
             QuotaExhaustedError: If in-house quota is exhausted
             ApiKeyNotFoundError: If no provider is available
         """
+        # 0. If user explicitly chose a free model, skip BYOK and go straight to in-house
+        if force_free_model:
+            logger.info(
+                "User %s forced free-tier model %s for %s",
+                user.id, force_free_model, quota_field,
+            )
+            api_key = getattr(settings, "OPENROUTER_API_KEY")
+            if not api_key:
+                raise ApiKeyNotFoundError("openrouter")
+
+            quota_row = await self._get_or_create_quota(user.id, db, quota_field)
+            current_quota = getattr(quota_row, quota_field, 0)
+
+            return ApiKeyResolution(
+                provider="openrouter",
+                api_key=api_key,
+                is_in_house=True,
+                quota_remaining=current_quota,
+                model=force_free_model,
+            )
+
         # 1. Check user's own keys in priority order
         result = await db.execute(
             select(UserApiKey)
@@ -248,10 +232,8 @@ class ApiKeyService:
         if current_quota <= 0:
             raise QuotaExhaustedError(quota_field, remaining=current_quota)
 
-        # 3. Use in-house key by priority (respects feature-specific ordering)
-        for provider in provider_priority:
-            if provider not in self.IN_HOUSE_PRIORITY:
-                continue
+        # 3. Use in-house key
+        for provider in self.IN_HOUSE_PRIORITY:
             api_key = getattr(settings, f"{provider.upper()}_API_KEY")
             if api_key:
                 logger.info(

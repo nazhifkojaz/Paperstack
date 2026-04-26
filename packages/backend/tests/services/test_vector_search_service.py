@@ -1,10 +1,10 @@
 """Tests for the vector search service (Phase 3.3: proximity boosting, Phase 4.1: hybrid search)."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
-from app.services.vector_search_service import VectorSearchService, SearchResult
+from app.services.vector_search_service import VectorSearchService
 
 
 @pytest.fixture

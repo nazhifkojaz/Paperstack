@@ -43,8 +43,6 @@ interface SharedAnnotationsResponse {
     pdf_title: string;
 }
 
-// Queries
-
 export const useSharesForSet = (setId: string) =>
     useQuery<Share[]>({
         queryKey: ['shares', setId],
@@ -60,8 +58,6 @@ export const useSharedAnnotations = (token: string) =>
         enabled: !!token,
         retry: false,
     });
-
-// Mutations
 
 export const useCreateShare = (setId: string) => {
     const qc = useQueryClient();
