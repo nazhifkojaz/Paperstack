@@ -506,13 +506,16 @@ def chunk_text_with_pages(text_with_markers: str) -> list[Chunk]:
                     overlap_parts.insert(0, p_text)
                 if overlap_parts:
                     current_text = "\n\n".join(overlap_parts) + "\n\n" + para_text
+                    overlap_count = len(overlap_parts)
                     chunk_start_page = _get_page_for_offset(
-                        current_chunk_paras[0][0], page_boundaries
+                        current_chunk_paras[-overlap_count][0], page_boundaries
                     )
                 else:
                     # Fallback: if no single paragraph fits, take the last few chars
                     # of the last paragraph at a sentence boundary
-                    last_para = current_chunk_paras[-1][2] if current_chunk_paras else ""
+                    last_para = (
+                        current_chunk_paras[-1][2] if current_chunk_paras else ""
+                    )
                     if len(last_para) > chunk_overlap:
                         overlap_start = _compute_overlap_start(
                             last_para, len(last_para), chunk_overlap
