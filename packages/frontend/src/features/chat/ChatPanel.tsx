@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MessageSquare, Plus, Send, Square, Loader2, BookOpen, AlertCircle, RefreshCw, Trash2, X } from 'lucide-react';
+import { MessageSquare, Plus, Send, Square, Loader2, BookOpen, AlertCircle, RefreshCw, Trash2, X, Maximize2, Minimize2 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
@@ -28,7 +28,7 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
-    const { isChatPanelOpen, toggleChatPanel, activeConversationId, setActiveConversationId } = useChatStore();
+    const { isChatPanelOpen, toggleChatPanel, isChatFullscreen, toggleChatFullscreen, setChatFullscreen, activeConversationId, setActiveConversationId } = useChatStore();
     const { setCurrentPage } = usePdfViewerStore();
     const { setPendingHighlight } = useChatHighlightStore();
     const userAvatarUrl = useAuthStore((s) => s.user?.avatar_url);
@@ -51,6 +51,8 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
         handleSend,
         handleStop,
         handleRetry,
+        handleRetryFailed,
+        handleDismissFailed,
         handleKeyDown,
         clearStreaming,
         bottomRef,
@@ -76,6 +78,21 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
             setActiveConversationId(conversations[0].id);
         }
     }, [conversations, loadingConvs, activeConversationId, isChatPanelOpen, setActiveConversationId]);
+
+    // Close fullscreen on Escape
+    useEffect(() => {
+        if (!isChatFullscreen) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setChatFullscreen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isChatFullscreen, setChatFullscreen]);
+
+    // Reset fullscreen when panel closes
+    useEffect(() => {
+        if (!isChatPanelOpen) setChatFullscreen(false);
+    }, [isChatPanelOpen, setChatFullscreen]);
 
     if (!isChatPanelOpen) return null;
 
@@ -124,21 +141,33 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
             content: streamingMessage.content,
             context_chunks: streamingMessage.isStreaming ? null : streamingMessage.context_chunks,
             isStreaming: streamingMessage.isStreaming,
+            error: streamingMessage.error,
         }] : []),
     ];
 
     const noConversation = !loadingConvs && conversations.length === 0;
 
+    const handleClosePanel = () => {
+        setChatFullscreen(false);
+        toggleChatPanel();
+    };
+
     return (
-        <div className="fixed inset-0 z-50 flex justify-end">
+        <div className={`fixed inset-0 z-50 flex ${isChatFullscreen ? 'items-center justify-center' : 'justify-end'}`}>
             {/* Backdrop */}
-            <div
-                className="absolute inset-0 bg-black/20 backdrop-blur-[2px] backdrop-enter"
-                onClick={toggleChatPanel}
-                aria-hidden="true"
-            />
+            {!isChatFullscreen && (
+                <div
+                    className="absolute inset-0 bg-black/20 backdrop-blur-[2px] backdrop-enter"
+                    onClick={handleClosePanel}
+                    aria-hidden="true"
+                />
+            )}
             {/* Drawer */}
-            <div className="relative w-full max-w-[400px] h-full bg-background shadow-2xl drawer-enter flex flex-col border-l">
+            <div className={`relative h-full bg-background shadow-2xl drawer-enter flex flex-col ${
+                isChatFullscreen
+                    ? 'w-full border-0'
+                    : 'w-full max-w-[400px] border-l'
+            }`}>
                 {/* Header */}
                 <div className="p-4 border-b flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
@@ -166,7 +195,15 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
                         <Button
                             variant="ghost"
                             size="icon"
-                            onClick={toggleChatPanel}
+                            onClick={toggleChatFullscreen}
+                            title={isChatFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                        >
+                            {isChatFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={handleClosePanel}
                             title="Close chat panel"
                         >
                             <X className="h-4 w-4" />
@@ -232,22 +269,26 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
                 {/* Message list */}
                 {!noConversation && (
                     <ScrollArea className="flex-1 px-3 py-2">
-                        <ChatMessageList
-                            messages={displayMessages}
-                            isSending={isSending}
-                            userAvatarUrl={userAvatarUrl}
-                            emptyMessage="Ask a question about this paper."
-                            onChunkClick={(chunk) => {
-                                setPendingHighlight({
-                                    pdfId,
-                                    pageNumber: chunk.page_number,
-                                    snippet: chunk.snippet || '',
-                                });
-                                setCurrentPage(chunk.page_number);
-                            }}
-                            onPageClick={(page) => setCurrentPage(page)}
-                        />
-                        <div ref={bottomRef} />
+                        <div className={isChatFullscreen ? 'mx-auto max-w-2xl w-full' : ''}>
+                            <ChatMessageList
+                                messages={displayMessages}
+                                isSending={isSending}
+                                userAvatarUrl={userAvatarUrl}
+                                emptyMessage="Ask a question about this paper."
+                                onChunkClick={(chunk) => {
+                                    setPendingHighlight({
+                                        pdfId,
+                                        pageNumber: chunk.page_number,
+                                        snippet: chunk.snippet || '',
+                                    });
+                                    setCurrentPage(chunk.page_number);
+                                }}
+                                onPageClick={(page) => setCurrentPage(page)}
+                                onRetryFailed={handleRetryFailed}
+                                onDismissFailed={handleDismissFailed}
+                            />
+                            <div ref={bottomRef} />
+                        </div>
                     </ScrollArea>
                 )}
 
@@ -261,34 +302,36 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
 
                 {/* Input */}
                 {!noConversation && (
-                    <div className="shrink-0 p-3 border-t flex gap-2 items-end">
-                        <Textarea
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            placeholder="Ask about this paper… (Enter to send)"
-                            className="resize-none text-sm min-h-[60px] max-h-[120px]"
-                        />
-                        {isSending ? (
-                            <Button
-                                size="icon"
-                                onClick={handleStop}
-                                variant="destructive"
-                                className="shrink-0"
-                                title="Stop generating"
-                            >
-                                <Square className="h-4 w-4 fill-current" />
-                            </Button>
-                        ) : (
-                            <Button
-                                size="icon"
-                                onClick={() => handleSend()}
-                                disabled={!input.trim() || !activeConversationId}
-                                className="shrink-0"
-                            >
-                                <Send className="h-4 w-4" />
-                            </Button>
-                        )}
+                    <div className={`shrink-0 border-t ${isChatFullscreen ? 'flex justify-center' : ''}`}>
+                        <div className={`flex gap-2 items-end p-3 ${isChatFullscreen ? 'w-full max-w-2xl' : ''}`}>
+                            <Textarea
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="Ask about this paper… (Enter to send)"
+                                className="resize-none text-sm min-h-[60px] max-h-[120px]"
+                            />
+                            {isSending ? (
+                                <Button
+                                    size="icon"
+                                    onClick={handleStop}
+                                    variant="destructive"
+                                    className="shrink-0"
+                                    title="Stop generating"
+                                >
+                                    <Square className="h-4 w-4 fill-current" />
+                                </Button>
+                            ) : (
+                                <Button
+                                    size="icon"
+                                    onClick={() => handleSend()}
+                                    disabled={!input.trim() || !activeConversationId}
+                                    className="shrink-0"
+                                >
+                                    <Send className="h-4 w-4" />
+                                </Button>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>

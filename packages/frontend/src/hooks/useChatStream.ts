@@ -19,6 +19,7 @@ interface StreamingMessage {
     content: string;
     context_chunks: ContextChunk[] | null;
     isStreaming: boolean;
+    error: string | null;
 }
 
 interface UseChatStreamOptions {
@@ -54,6 +55,10 @@ interface UseChatStreamReturn {
     handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
     clearStreaming: () => void;
 
+    // Error recovery actions
+    handleRetryFailed: () => void;
+    handleDismissFailed: () => void;
+
     // Display
     bottomRef: React.RefObject<HTMLDivElement | null>;
 }
@@ -74,12 +79,14 @@ export function useChatStream({
         startStreaming,
         appendToken,
         finalizeStreaming,
+        streamingFailed,
         clearStreaming: clearStoreStreaming,
     } = useChatStore();
 
     const bottomRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const tempUserIdRef = useRef<string | null>(null);
+    const hadErrorRef = useRef(false);
 
     const [input, setInput] = useState('');
     const [isSending, setIsSending] = useState(false);
@@ -171,7 +178,6 @@ export function useChatStream({
                     );
                 },
                 onError: (err) => {
-                    clearStreaming();
                     const errorMsg = err.message;
                     const isQuotaError = errorMsg.toLowerCase().includes('quota');
                     const isIndexError = errorMsg.toLowerCase().includes('index');
@@ -180,6 +186,10 @@ export function useChatStream({
                         toast.error('Chat quota exhausted. Add an API key in Settings.');
                     } else if (isIndexError) {
                         setIndexError(errorMsg);
+                    } else if (streamingMessage) {
+                        streamingFailed(errorMsg);
+                        toast.error(errorMsg);
+                        hadErrorRef.current = true;
                     } else {
                         toast.error(errorMsg);
                     }
@@ -199,17 +209,40 @@ export function useChatStream({
             }
         } finally {
             setIsSending(false);
-            tempUserIdRef.current = null;
-            // Always invalidate to sync with server state (replaces the
-            // optimistic user message with the real history).
-            for (const key of invalidateQueryKeys) {
-                queryClient.invalidateQueries({ queryKey: key });
+            if (!hadErrorRef.current) {
+                tempUserIdRef.current = null;
+                for (const key of invalidateQueryKeys) {
+                    queryClient.invalidateQueries({ queryKey: key });
+                }
             }
+            hadErrorRef.current = false;
         }
     };
 
     const handleRetry = () => {
         if (lastMessage) handleSend(lastMessage);
+    };
+
+    const handleRetryFailed = () => {
+        if (!lastMessage || !conversationId) return;
+        queryClient.setQueryData<ChatMessage[]>(
+            ['chat-history', conversationId],
+            (old = []) => old.filter(m => m.id !== tempUserIdRef.current),
+        );
+        hadErrorRef.current = false;
+        clearStoreStreaming();
+        handleSend(lastMessage);
+    };
+
+    const handleDismissFailed = () => {
+        if (!conversationId) return;
+        setIndexError(null);
+        hadErrorRef.current = false;
+        queryClient.setQueryData<ChatMessage[]>(
+            ['chat-history', conversationId],
+            (old = []) => old.filter(m => m.id !== tempUserIdRef.current),
+        );
+        clearStoreStreaming();
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -236,6 +269,8 @@ export function useChatStream({
         handleSend,
         handleStop,
         handleRetry,
+        handleRetryFailed,
+        handleDismissFailed,
         handleKeyDown,
         clearStreaming,
         bottomRef,

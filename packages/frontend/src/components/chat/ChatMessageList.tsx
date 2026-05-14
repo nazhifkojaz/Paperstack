@@ -11,7 +11,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Loader2, User, Bot, Copy, Check } from 'lucide-react';
+import { Loader2, User, Bot, Copy, Check, RefreshCw, X, AlertCircle } from 'lucide-react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import { Badge } from '@/components/ui/badge';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
@@ -28,6 +28,7 @@ export interface ChatMessageProps {
     content: string;
     context_chunks: ContextChunk[] | null;
     isStreaming?: boolean;
+    error?: string | null;
     created_at?: string;
 }
 
@@ -39,6 +40,8 @@ interface ChatMessageListProps {
     onChunkClick?: (chunk: ContextChunk) => void;
     onChunkClickUrl?: (chunk: ContextChunk) => void;
     onPageClick?: (page: number) => void;
+    onRetryFailed?: (messageId: string) => void;
+    onDismissFailed?: (messageId: string) => void;
 }
 
 /**
@@ -52,6 +55,8 @@ export function ChatMessageList({
     onChunkClick,
     onChunkClickUrl,
     onPageClick,
+    onRetryFailed,
+    onDismissFailed,
 }: ChatMessageListProps) {
     if (messages.length === 0 && !isSending) {
         return (
@@ -71,6 +76,8 @@ export function ChatMessageList({
                     onChunkClick={onChunkClick}
                     onChunkClickUrl={onChunkClickUrl}
                     onPageClick={onPageClick}
+                    onRetryFailed={onRetryFailed}
+                    onDismissFailed={onDismissFailed}
                 />
             ))}
         </div>
@@ -83,6 +90,8 @@ interface MessageBubbleProps {
     onChunkClick?: (chunk: ContextChunk) => void;
     onChunkClickUrl?: (chunk: ContextChunk) => void;
     onPageClick?: (page: number) => void;
+    onRetryFailed?: (messageId: string) => void;
+    onDismissFailed?: (messageId: string) => void;
 }
 
 function formatTime(iso: string): string {
@@ -90,7 +99,7 @@ function formatTime(iso: string): string {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, onPageClick }: MessageBubbleProps) {
+function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, onPageClick, onRetryFailed, onDismissFailed }: MessageBubbleProps) {
     const isUser = message.role === 'user';
     const [copied, setCopied] = useState(false);
 
@@ -174,33 +183,61 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
                             : 'bg-muted text-foreground'
                     }`}
                 >
-                    {!message.content && message.isStreaming
+                    {message.error
                         ? (
-                            <div className="flex items-center gap-2 text-muted-foreground min-w-[80px]">
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                <span className="text-xs">Thinking…</span>
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-start gap-2">
+                                    <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-destructive" />
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-medium text-xs text-destructive">Failed to generate response</p>
+                                        <p className="text-xs text-destructive/80 mt-1 break-words">{message.error}</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-1 justify-end">
+                                    <button
+                                        onClick={() => onRetryFailed?.(message.id)}
+                                        className="flex items-center gap-1 text-xs font-medium text-destructive hover:text-destructive/80 transition-colors cursor-pointer"
+                                    >
+                                        <RefreshCw className="h-3 w-3" />
+                                        Retry
+                                    </button>
+                                    <button
+                                        onClick={() => onDismissFailed?.(message.id)}
+                                        className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                                    >
+                                        <X className="h-3 w-3" />
+                                        Dismiss
+                                    </button>
+                                </div>
                             </div>
                         )
-                        : isUser
-                            ? <span className="whitespace-pre-wrap">{message.content}</span>
-                            : (
-                                <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0">
-                                    <Markdown
-                                        remarkPlugins={remarkPlugins}
-                                        components={markdownComponents}
-                                        urlTransform={urlTransform}
-                                    >
-                                        {message.content}
-                                    </Markdown>
+                        : !message.content && message.isStreaming
+                            ? (
+                                <div className="flex items-center gap-2 text-muted-foreground min-w-[80px]">
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    <span className="text-xs">Thinking…</span>
                                 </div>
                             )
+                            : isUser
+                                ? <span className="whitespace-pre-wrap">{message.content}</span>
+                                : (
+                                    <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0">
+                                        <Markdown
+                                            remarkPlugins={remarkPlugins}
+                                            components={markdownComponents}
+                                            urlTransform={urlTransform}
+                                        >
+                                            {message.content}
+                                        </Markdown>
+                                    </div>
+                                )
                     }
                     {message.isStreaming && message.content && (
                         <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />
                     )}
 
                     {/* Copy button for assistant messages */}
-                    {!isUser && message.content && !message.isStreaming && (
+                    {!isUser && message.content && !message.isStreaming && !message.error && (
                         <button
                             onClick={handleCopy}
                             className="absolute -top-2 -right-2 p-1 rounded-md bg-background border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"

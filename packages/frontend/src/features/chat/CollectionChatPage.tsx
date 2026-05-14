@@ -42,6 +42,8 @@ export function CollectionChatPage() {
         isSending,
         handleSend,
         handleStop,
+        handleRetryFailed,
+        handleDismissFailed,
         handleKeyDown,
         clearStreaming,
         bottomRef,
@@ -103,6 +105,7 @@ export function CollectionChatPage() {
             content: streamingMessage.content,
             context_chunks: streamingMessage.isStreaming ? null : streamingMessage.context_chunks,
             isStreaming: streamingMessage.isStreaming,
+            error: streamingMessage.error,
         }] : []),
     ];
 
@@ -203,6 +206,8 @@ export function CollectionChatPage() {
                                         window.open(`${BASE_URL}/viewer/${chunk.pdf_id}`, '_blank');
                                     }
                                 }}
+                                onRetryFailed={handleRetryFailed}
+                                onDismissFailed={handleDismissFailed}
                             />
                             <div ref={bottomRef} />
                         </ScrollArea>
