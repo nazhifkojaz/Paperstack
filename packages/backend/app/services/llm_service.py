@@ -305,7 +305,12 @@ class LLMService:
 
         # Use a longer read timeout for reasoning calls to avoid
         # httpx-side timeouts while the model is thinking
-        call_timeout = httpx.Timeout(read=settings.OPENROUTER_REASONING_TIMEOUT_READ) if reasoning_effort else None
+        call_timeout = httpx.Timeout(
+            connect=10.0,
+            read=settings.OPENROUTER_REASONING_TIMEOUT_READ,
+            write=10.0,
+            pool=10.0,
+        ) if reasoning_effort else None
 
         try:
             result = await self._call_provider(
