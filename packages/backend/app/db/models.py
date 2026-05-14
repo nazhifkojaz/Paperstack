@@ -341,6 +341,7 @@ class AutoHighlightCache(Base):
     )  # 'quick' | 'thorough'
     provider: Mapped[Optional[str]] = mapped_column(String(20))
     llm_response: Mapped[Optional[Any]] = mapped_column(JSONB)
+    reasoning_trace: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     annotation_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("annotation_sets.id", ondelete="CASCADE")
     )

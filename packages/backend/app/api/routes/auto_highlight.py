@@ -403,6 +403,7 @@ async def _run_analysis_background(
                 cache_row.status = "complete"
                 cache_row.progress_pct = 100
                 cache_row.llm_response = highlights
+                cache_row.reasoning_trace = llm_svc.last_reasoning_trace
                 cache_row.annotation_set_id = annotation_set.id
                 await db.commit()
         except Exception:
@@ -511,6 +512,7 @@ async def _run_analysis_background(
                     cache_row.status = "complete"
                     cache_row.progress_pct = 100
                     cache_row.llm_response = all_highlights
+                    cache_row.reasoning_trace = llm_svc.last_reasoning_trace
                 await db.commit()
         except Exception:
             logger.exception(
