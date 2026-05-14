@@ -14,8 +14,13 @@ import { useMemo, useState } from 'react';
 import { Loader2, User, Bot, Copy, Check } from 'lucide-react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import { Badge } from '@/components/ui/badge';
+import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { type ContextChunk } from '@/api/chat';
+import { useCitation } from '@/api/citations';
+import { CitationPreview } from './CitationPreview';
+import { InlineCitationLink } from './InlineCitationLink';
 import { createPageRefPlugin } from '@/lib/remarkPageRefs';
+import { createInlineCitationPlugin } from '@/lib/remarkInlineCitations';
 
 export interface ChatMessageProps {
     id: string;
@@ -100,17 +105,16 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
     };
 
     const remarkPlugins = useMemo(
-        () => onPageClick ? [createPageRefPlugin()] : [],
+        () => onPageClick ? [createPageRefPlugin(), createInlineCitationPlugin()] : [createInlineCitationPlugin()],
         [onPageClick]
     );
 
     const markdownComponents = useMemo(() => {
-        if (!onPageClick) return undefined;
         return {
             a: ({ href, children, ...props }: React.ComponentPropsWithoutRef<'a'>) => {
                 if (href?.startsWith('page://')) {
                     const page = parseInt(href.slice(7), 10);
-                    if (!isNaN(page)) {
+                    if (!isNaN(page) && onPageClick) {
                         return (
                             <button
                                 className="inline text-primary underline underline-offset-2
@@ -123,13 +127,25 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
                         );
                     }
                 }
+                if (href?.startsWith('citation://') && message.context_chunks && message.context_chunks.length > 0) {
+                    return (
+                        <InlineCitationLink
+                            href={href}
+                            contextChunks={message.context_chunks}
+                            onChunkClick={onChunkClick}
+                            onChunkClickUrl={onChunkClickUrl}
+                        >
+                            {children}
+                        </InlineCitationLink>
+                    );
+                }
                 return <a href={href} {...props}>{children}</a>;
             },
         };
-    }, [onPageClick]);
+    }, [onPageClick, message.context_chunks, onChunkClick, onChunkClickUrl]);
 
     const urlTransform = useMemo(
-        () => (url: string) => url.startsWith('page://') ? url : defaultUrlTransform(url),
+        () => (url: string) => url.startsWith('page://') || url.startsWith('citation://') ? url : defaultUrlTransform(url),
         []
     );
 
@@ -205,43 +221,76 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
                 {/* Context chunk badges */}
                 {!isUser && message.context_chunks && message.context_chunks.length > 0 && (
                     <div className="flex flex-wrap gap-1 max-w-full">
-                        {message.context_chunks.map((chunk) => {
-                            // Determine label and click behavior based on available data
-                            const hasPdfInfo = !!chunk.pdf_id && !!chunk.pdf_title;
-                            const startPage = chunk.page_number;
-                            const endPage = chunk.end_page_number;
-                            const pageLabel = endPage && endPage > startPage
-                                ? `p.${startPage}-${endPage}`
-                                : `p.${startPage}`;
-                            const label = hasPdfInfo
-                                ? `${chunk.pdf_title!.length > 18 ? chunk.pdf_title!.slice(0, 18) + '…' : chunk.pdf_title} · ${pageLabel}`
-                                : pageLabel;
-
-                            const handleClick = () => {
-                                if (onChunkClickUrl && hasPdfInfo) {
-                                    onChunkClickUrl(chunk);
-                                } else if (onChunkClick) {
-                                    onChunkClick(chunk);
-                                }
-                            };
-
-                            const isClickable = onChunkClick || (onChunkClickUrl && hasPdfInfo);
-
-                            return (
-                                <Badge
-                                    key={chunk.chunk_id}
-                                    variant="outline"
-                                    className={`text-xs ${isClickable ? 'cursor-pointer hover:bg-primary/10 transition-colors' : ''}`}
-                                    onClick={isClickable ? handleClick : undefined}
-                                    title={chunk.snippet}
-                                >
-                                    {label}
-                                </Badge>
-                            );
-                        })}
+                        {message.context_chunks.map((chunk) => (
+                            <ContextChunkBadge
+                                key={chunk.chunk_id}
+                                chunk={chunk}
+                                onChunkClick={onChunkClick}
+                                onChunkClickUrl={onChunkClickUrl}
+                            />
+                        ))}
                     </div>
                 )}
             </div>
         </div>
+    );
+}
+
+function ContextChunkBadge({
+    chunk,
+    onChunkClick,
+    onChunkClickUrl,
+}: {
+    chunk: ContextChunk;
+    onChunkClick?: (chunk: ContextChunk) => void;
+    onChunkClickUrl?: (chunk: ContextChunk) => void;
+}) {
+    const { data: citation, isLoading } = useCitation(chunk.pdf_id || '');
+
+    const hasPdfInfo = !!chunk.pdf_id && !!chunk.pdf_title;
+    const startPage = chunk.page_number;
+    const endPage = chunk.end_page_number;
+    const pageLabel = endPage && endPage > startPage
+        ? `p.${startPage}-${endPage}`
+        : `p.${startPage}`;
+    const label = hasPdfInfo
+        ? `${chunk.pdf_title!.length > 18 ? chunk.pdf_title!.slice(0, 18) + '…' : chunk.pdf_title} · ${pageLabel}`
+        : pageLabel;
+
+    const handleClick = () => {
+        if (onChunkClickUrl && hasPdfInfo) {
+            onChunkClickUrl(chunk);
+        } else if (onChunkClick) {
+            onChunkClick(chunk);
+        }
+    };
+
+    const isClickable = onChunkClick || (onChunkClickUrl && hasPdfInfo);
+
+    return (
+        <HoverCard openDelay={200} closeDelay={150}>
+            <HoverCardTrigger asChild>
+                <Badge
+                    variant="outline"
+                    className={`text-xs ${isClickable ? 'cursor-pointer hover:bg-primary/10 transition-colors' : ''}`}
+                    onClick={isClickable ? handleClick : undefined}
+                >
+                    {label}
+                </Badge>
+            </HoverCardTrigger>
+            <HoverCardContent side="top" align="center" className="p-0">
+                {isLoading ? (
+                    <div className="w-80 h-24 flex items-center justify-center">
+                        <span className="text-xs text-muted-foreground animate-pulse">Loading...</span>
+                    </div>
+                ) : (
+                    <CitationPreview
+                        citation={citation ?? null}
+                        chunk={chunk}
+                        onNavigate={isClickable ? handleClick : undefined}
+                    />
+                )}
+            </HoverCardContent>
+        </HoverCard>
     );
 }

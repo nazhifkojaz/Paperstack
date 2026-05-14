@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, apiFetchBlob } from './client';
 import { downloadBlob } from '@/lib/download-utils';
 
-interface Citation {
+export interface Citation {
     id: string;
     pdf_id: string;
     user_id: string;
