@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 import { useChatStore } from '@/stores/chatStore';
 import { usePdfViewerStore } from '@/stores/pdfViewerStore';
+import { useChatHighlightStore } from '@/stores/chatHighlightStore';
 import { useAuthStore } from '@/stores/authStore';
 import {
     useConversations,
@@ -29,6 +30,7 @@ interface ChatPanelProps {
 export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
     const { isChatPanelOpen, toggleChatPanel, activeConversationId, setActiveConversationId } = useChatStore();
     const { setCurrentPage } = usePdfViewerStore();
+    const { setPendingHighlight } = useChatHighlightStore();
     const userAvatarUrl = useAuthStore((s) => s.user?.avatar_url);
     const queryClient = useQueryClient();
 
@@ -235,7 +237,14 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
                             isSending={isSending}
                             userAvatarUrl={userAvatarUrl}
                             emptyMessage="Ask a question about this paper."
-                            onChunkClick={(chunk) => setCurrentPage(chunk.page_number)}
+                            onChunkClick={(chunk) => {
+                                setPendingHighlight({
+                                    pdfId,
+                                    pageNumber: chunk.page_number,
+                                    snippet: chunk.snippet || '',
+                                });
+                                setCurrentPage(chunk.page_number);
+                            }}
                             onPageClick={(page) => setCurrentPage(page)}
                         />
                         <div ref={bottomRef} />

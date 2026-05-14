@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHand
 import type { PDFPageProxy } from 'pdfjs-dist';
 import { TextLayer as PdfjsTextLayer } from 'pdfjs-dist';
 import { usePdfViewerStore } from '@/stores/pdfViewerStore';
+import { useChatHighlightStore } from '@/stores/chatHighlightStore';
 import { SelectionPopup } from '@/features/annotations/SelectionPopup';
 import { collectTextNodes, selectionRangeToRects } from '@/lib/pdfTextUtils';
 import type { PdfTextItem, PdfRectData, TextLayerHandle } from '@/types/viewer';
@@ -22,7 +23,10 @@ export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProx
     const containerRef = useRef<HTMLDivElement>(null);
     const zoom = usePdfViewerStore(s => s.zoom);
     const rotation = usePdfViewerStore(s => s.rotation);
+    const pendingHighlight = useChatHighlightStore(s => s.pendingHighlight);
+    const setPendingHighlight = useChatHighlightStore(s => s.setPendingHighlight);
     const [selectionState, setSelectionState] = useState<SelectionState | null>(null);
+    const [chatHighlightRects, setChatHighlightRects] = useState<Array<{ x: number; y: number; w: number; h: number }>>([]);
     const textLayerRef = useRef<HTMLDivElement>(null);
     const textLayerInstanceRef = useRef<PdfjsTextLayer | null>(null);
     const renderReadyResolveRef = useRef<() => void>(() => {});
@@ -122,6 +126,63 @@ export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProx
             renderReadyPromiseRef.current = Promise.resolve();
         };
     }, [pageProxy, zoom, rotation]);
+
+    // Handle chat navigation highlight
+    useEffect(() => {
+        /* eslint-disable react-hooks/set-state-in-effect */
+        if (!pendingHighlight || !pageProxy || pendingHighlight.pageNumber !== pageProxy.pageNumber) {
+            setChatHighlightRects([]);
+            return;
+        }
+
+        const items = textItemsRef.current;
+        if (items.length === 0) return;
+
+        const fullText = items.map(item => item.str || '').join('');
+        const snippet = pendingHighlight.snippet.trim();
+        const normalizedFull = fullText.toLowerCase().replace(/\s+/g, ' ');
+        const normalizedSnippet = snippet.toLowerCase().replace(/\s+/g, ' ');
+        const searchIndex = normalizedFull.indexOf(normalizedSnippet);
+
+        if (searchIndex === -1) {
+            setChatHighlightRects([]);
+            return;
+        }
+
+        let charOffset = 0;
+        const matchedItemIndices: number[] = [];
+        for (let i = 0; i < items.length; i++) {
+            const itemStr = items[i].str || '';
+            const itemLen = itemStr.length;
+            if (charOffset + itemLen > searchIndex) matchedItemIndices.push(i);
+            charOffset += itemLen;
+            if (charOffset > searchIndex + normalizedSnippet.length) break;
+        }
+
+        const viewport = pageProxy.getViewport({ scale: zoom, rotation });
+        const rects: Array<{ x: number; y: number; w: number; h: number }> = [];
+        for (const idx of matchedItemIndices) {
+            const item = items[idx];
+            if (!item.transform || item.transform.length < 6) continue;
+            const [scaleX, , skewY, scaleY, translateX, translateY] = item.transform;
+            const itemWidth = item.width || (item.str?.length || 0) * Math.abs(scaleX) * 0.6;
+            const itemHeight = Math.abs(scaleY) || Math.abs(skewY) || 12;
+            const x = translateX / viewport.width;
+            const y = 1 - (translateY + itemHeight) / viewport.height;
+            const w = itemWidth / viewport.width;
+            const h = itemHeight / viewport.height;
+            rects.push({ x, y, w, h });
+        }
+
+        setChatHighlightRects(rects);
+
+        const timeout = setTimeout(() => {
+            setChatHighlightRects([]);
+            setPendingHighlight(null);
+        }, 5000);
+        return () => clearTimeout(timeout);
+        /* eslint-enable react-hooks/set-state-in-effect */
+    }, [pendingHighlight, pageProxy, zoom, rotation, setPendingHighlight]);
 
     const handleMouseUp = useCallback(() => {
         if (!textLayerRef.current || !pageProxy) return;
@@ -239,6 +300,29 @@ export const TextLayer = forwardRef<TextLayerHandle, TextLayerProps>(({ pageProx
                         onDismiss={handleDismiss}
                     />
                 </>
+            )}
+
+            {chatHighlightRects.length > 0 && (
+                <svg
+                    className="absolute inset-0 pointer-events-none"
+                    style={{ width: `${viewport.width}px`, height: `${viewport.height}px` }}
+                    aria-hidden
+                >
+                    {chatHighlightRects.map((r, i) => (
+                        <rect
+                            key={`chat-${i}`}
+                            x={r.x * viewport.width}
+                            y={r.y * viewport.height}
+                            width={r.w * viewport.width}
+                            height={r.h * viewport.height}
+                            rx={2}
+                            ry={2}
+                            fill="rgba(255, 200, 50, 0.45)"
+                            stroke="rgba(255, 180, 30, 0.8)"
+                            strokeWidth={1}
+                        />
+                    ))}
+                </svg>
             )}
         </div>
     );
