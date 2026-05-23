@@ -114,9 +114,26 @@
 
 /* pdf.js text layer — invisible but selectable text overlay */
 .pdfTextLayer {
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor, 1) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
   opacity: 1;
   line-height: 1;
+  -webkit-text-size-adjust: none;
+  -moz-text-size-adjust: none;
   text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
 }
 
 .pdfTextLayer :is(span, br) {
@@ -127,6 +144,42 @@
   transform-origin: 0% 0%;
 }
 
+.pdfTextLayer > :not(.markedContent),
+.pdfTextLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdfTextLayer .markedContent {
+  display: contents;
+}
+
+.pdfTextLayer span[role="img"] {
+  user-select: none;
+  cursor: default;
+}
+
 .pdfTextLayer span::selection {
   background: rgba(0, 100, 255, 0.3);
+}
+
+.pdfTextLayer br::selection {
+  background: transparent;
+}
+
+.pdfTextLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.pdfTextLayer.selecting .endOfContent {
+  top: 0;
 }
