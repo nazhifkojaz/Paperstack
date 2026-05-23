@@ -9,7 +9,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 import { useChatStore } from '@/stores/chatStore';
-import { usePdfViewerStore } from '@/stores/pdfViewerStore';
 import { useChatHighlightStore } from '@/stores/chatHighlightStore';
 import { useAuthStore } from '@/stores/authStore';
 import {
@@ -25,11 +24,12 @@ import { DeleteConversationDialog } from './DeleteConversationDialog';
 
 interface ChatPanelProps {
     pdfId: string;
+    /** Explicit page jumps keep passive scrolling separate from navigation. */
+    jumpToPage: (page: number) => void;
 }
 
-export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
+export const ChatPanel = ({ pdfId, jumpToPage }: ChatPanelProps) => {
     const { isChatPanelOpen, toggleChatPanel, isChatFullscreen, toggleChatFullscreen, setChatFullscreen, activeConversationId, setActiveConversationId } = useChatStore();
-    const { setCurrentPage } = usePdfViewerStore();
     const { setPendingHighlight } = useChatHighlightStore();
     const userAvatarUrl = useAuthStore((s) => s.user?.avatar_url);
     const queryClient = useQueryClient();
@@ -281,9 +281,9 @@ export const ChatPanel = ({ pdfId }: ChatPanelProps) => {
                                         pageNumber: chunk.page_number,
                                         snippet: chunk.snippet || '',
                                     });
-                                    setCurrentPage(chunk.page_number);
+                                    jumpToPage(chunk.page_number);
                                 }}
-                                onPageClick={(page) => setCurrentPage(page)}
+                                onPageClick={(page) => jumpToPage(page)}
                                 onRetryFailed={handleRetryFailed}
                                 onDismissFailed={handleDismissFailed}
                             />

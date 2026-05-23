@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react'
 import { useAnnotationStore } from '@/stores/annotationStore'
 import { useAnnotations, Annotation } from '@/api/annotations'
-import { usePdfViewerStore } from '@/stores/pdfViewerStore'
+import { useNewPdfViewerStore } from '@/features/pdf-viewer/pdfViewerStore'
 import { AlertTriangle, Highlighter, Square, StickyNote, ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -90,7 +90,7 @@ interface SetAnnotationListProps {
 export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, groupBy }) => {
   const selectedAnnotationId = useAnnotationStore(s => s.selectedAnnotationId)
   const { data: annotations = [], isLoading } = useAnnotations(setId)
-  const setCurrentPage = usePdfViewerStore((state) => state.setCurrentPage)
+  const jumpToPage = useNewPdfViewerStore((state) => state.jumpToPage)
   const setSelectedAnnotationId = useAnnotationStore((state) => state.setSelectedAnnotationId)
   const setSelectedSetId = useAnnotationStore((state) => state.setSelectedSetId)
 
@@ -110,7 +110,7 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
 
   const handleAnnotationClick = (annotation: Annotation) => {
     setSelectedSetId(setId)
-    setCurrentPage(annotation.page_number)
+    jumpToPage(annotation.page_number)
     setSelectedAnnotationId(annotation.id)
   }
 

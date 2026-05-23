@@ -90,6 +90,40 @@ describe('SelectionPopup', () => {
     expect(onDismiss).toHaveBeenCalled()
   })
 
+  it('includes selector metadata when creating a highlight', () => {
+    const createMock = vi.fn()
+    vi.mocked(annotationsApi.useCreateAnnotation).mockReturnValue({
+      mutate: createMock,
+    } as any)
+
+    const metadata = {
+      selector_version: 1,
+      text_range: { page: 1, start: 12, end: 28 },
+      quote: { exact: 'test text', prefix: 'before ', suffix: ' after' },
+      resolver: { method: 'selection' },
+    }
+
+    render(
+      <SelectionPopup
+        selectionRect={mockSelectionRect}
+        normalizedRects={mockNormalizedRects}
+        selectedText="test text"
+        pageNumber={1}
+        onDismiss={vi.fn()}
+        metadata={metadata}
+      />
+    )
+
+    fireEvent.click(screen.getByText('Highlight'))
+
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata,
+      }),
+      expect.any(Object),
+    )
+  })
+
   it('shows disabled state when no set is selected', () => {
     useAnnotationStore.setState({ selectedSetId: null })
 

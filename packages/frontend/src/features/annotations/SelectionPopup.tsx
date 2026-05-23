@@ -12,6 +12,7 @@ interface SelectionPopupProps {
     selectedText: string;
     pageNumber: number;
     onDismiss: () => void;
+    metadata?: Record<string, unknown> | null;
 }
 
 export const SelectionPopup = ({
@@ -20,6 +21,7 @@ export const SelectionPopup = ({
     selectedText,
     pageNumber,
     onDismiss,
+    metadata,
 }: SelectionPopupProps) => {
     const { pdfId = '' } = useParams<{ pdfId: string }>();
     const selectedSetId = useAnnotationStore(s => s.selectedSetId);
@@ -76,6 +78,7 @@ export const SelectionPopup = ({
                 rects: normalizedRects,
                 selected_text: selectedText,
                 color: setColor,
+                metadata: metadata ?? undefined,
             },
             {
                 onSuccess: () => {

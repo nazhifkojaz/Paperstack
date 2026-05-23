@@ -5,7 +5,7 @@
  * @example
  * <ChatMessageList
  *     messages={displayMessages}
- *     onChunkClick={(chunk) => setCurrentPage(chunk.page_number)}
+ *     onChunkClick={(chunk) => jumpToPage(chunk.page_number)}
  *     onChunkClickUrl={(chunk) => window.open(`/viewer/${chunk.pdf_id}`, '_blank')}
  * />
  */

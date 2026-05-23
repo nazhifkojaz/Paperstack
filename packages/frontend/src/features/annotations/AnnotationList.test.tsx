@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@/test/test-utils'
 import { SetAnnotationList } from './AnnotationList'
 import { useAnnotationStore } from '@/stores/annotationStore'
+import { useNewPdfViewerStore } from '@/features/pdf-viewer/pdfViewerStore'
 import * as annotationsApi from '@/api/annotations'
 import { createMockAnnotation } from '@/test/test-utils'
 
@@ -22,6 +23,7 @@ describe('SetAnnotationList', () => {
       selectedAnnotationId: null,
       sidebarGroupBy: 'page',
     })
+    useNewPdfViewerStore.getState().reset()
     vi.mocked(annotationsApi.useAnnotations).mockReturnValue({
       data: mockAnnotations,
       isLoading: false,
@@ -55,6 +57,13 @@ describe('SetAnnotationList', () => {
     const item = screen.getByText(/Important finding/)
     fireEvent.click(item.closest('[data-annotation-id]')!)
     expect(useAnnotationStore.getState().selectedAnnotationId).toBe('ann-1')
+  })
+
+  it('uses explicit page jump on click', () => {
+    render(<SetAnnotationList setId="set-1" groupBy="page" />)
+    const item = screen.getByText(/Another result/)
+    fireEvent.click(item.closest('[data-annotation-id]')!)
+    expect(useNewPdfViewerStore.getState().targetPage).toBe(3)
   })
 
   it('shows empty state when no annotations', () => {
