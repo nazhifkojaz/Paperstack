@@ -5,17 +5,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # Annotation Sets
 
+
 class AnnotationSetBase(BaseModel):
     name: str = Field(..., max_length=255)
-    color: Optional[str] = Field(default='#FFFF00', max_length=7)
+    color: Optional[str] = Field(default="#FFFF00", max_length=7)
+
 
 class AnnotationSetCreate(AnnotationSetBase):
     pdf_id: UUID
-    source: Optional[str] = Field(default='manual', max_length=20)
+    source: Optional[str] = Field(default="manual", max_length=20)
+
 
 class AnnotationSetUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     color: Optional[str] = Field(None, max_length=7)
+
 
 class AnnotationSetResponse(AnnotationSetBase):
     id: UUID
@@ -27,32 +31,38 @@ class AnnotationSetResponse(AnnotationSetBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 # Annotations
+
 
 class AnnotationBase(BaseModel):
     page_number: int
-    type: str = Field(..., max_length=20) # 'highlight', 'rect', 'note'
+    type: str = Field(..., max_length=20)  # 'highlight', 'rect', 'note'
     rects: list[dict[str, float]]  # JSON array of {x, y, w, h} normalized rects
     selected_text: Optional[str] = None
     note_content: Optional[str] = None
     color: Optional[str] = Field(None, max_length=7)
 
+
 class AnnotationCreate(AnnotationBase):
     set_id: UUID
-    ann_metadata: Optional[dict[str, Any]] = Field(None, alias='metadata')
+    ann_metadata: Optional[dict[str, Any]] = Field(None, alias="metadata")
+
 
 class AnnotationUpdate(BaseModel):
+    page_number: Optional[int] = None
     rects: Optional[list[dict[str, float]]] = None
     selected_text: Optional[str] = None
     note_content: Optional[str] = None
     color: Optional[str] = Field(None, max_length=7)
-    ann_metadata: Optional[dict[str, Any]] = Field(None, alias='metadata')
+    ann_metadata: Optional[dict[str, Any]] = Field(None, alias="metadata")
+
 
 class AnnotationResponse(AnnotationBase):
     id: UUID
     set_id: UUID
     # ann_metadata maps to the ORM attribute name; serialized as 'metadata' in JSON output
-    ann_metadata: Optional[Any] = Field(None, serialization_alias='metadata')
+    ann_metadata: Optional[Any] = Field(None, serialization_alias="metadata")
     created_at: datetime
     updated_at: datetime
 
