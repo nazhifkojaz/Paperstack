@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import Markdown from 'react-markdown';
 import { useUpdateAnnotation, type Annotation } from '@/api/annotations';
 import { Button } from '@/components/ui/button';
@@ -8,11 +9,14 @@ import { Save, Pencil, Loader2, Sparkles } from 'lucide-react';
 
 const PREFERRED_CARD_WIDTH = 384;
 const CARD_MAX_HEIGHT = 420;
+const CARD_MIN_HEIGHT = 96;
 const EDGE_MARGIN = 8;
+const ANCHOR_GAP = 8;
 
 interface NotePopoverProps {
     annotation: Annotation;
     containerDims: { width: number; height: number } | null;
+    containerElement?: HTMLElement | null;
     onClose: () => void;
     isExplaining?: boolean;
     explainStatusMessage?: string;
@@ -27,7 +31,24 @@ function parseAiHeader(content: string): { isAi: boolean; header?: string; body:
     return { isAi: false, body: trimmed };
 }
 
-export const NotePopover = ({ annotation, containerDims, onClose, isExplaining, explainStatusMessage }: NotePopoverProps) => {
+function clamp(value: number, min: number, max: number): number {
+    if (max < min) return min;
+    return Math.min(Math.max(value, min), max);
+}
+
+function getCardWidth(availableWidth: number): number {
+    return Math.max(0, Math.min(PREFERRED_CARD_WIDTH, availableWidth - EDGE_MARGIN * 2));
+}
+
+function getAnnotationBounds(rects: Annotation['rects']) {
+    const minX = Math.min(...rects.map((r) => r.x));
+    const minY = Math.min(...rects.map((r) => r.y));
+    const maxX = Math.max(...rects.map((r) => r.x + r.w));
+    const maxY = Math.max(...rects.map((r) => r.y + r.h));
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+export const NotePopover = ({ annotation, containerDims, containerElement, onClose, isExplaining, explainStatusMessage }: NotePopoverProps) => {
     const [content, setContent] = useState(annotation.note_content || '');
     const [isEditing, setIsEditing] = useState(!annotation.note_content);
     const prevIsExplainingRef = useRef(isExplaining ?? false);
@@ -92,49 +113,21 @@ export const NotePopover = ({ annotation, containerDims, onClose, isExplaining, 
 
     if (!containerDims || !annotation.rects[0]) return null;
 
-    const rect = annotation.rects[0];
-    const centerX = (rect.x + rect.w / 2) * containerDims.width;
-
-    // Responsive width — never overflow the container
-    const cardWidth = Math.min(PREFERRED_CARD_WIDTH, containerDims.width - EDGE_MARGIN * 2);
-
-    // Horizontal positioning: center by default, clamp to edges
-    const halfWidth = cardWidth / 2;
-    let adjustedLeft: number;
-    let horizontalTransform: string;
-
-    if (centerX + halfWidth > containerDims.width - EDGE_MARGIN) {
-        adjustedLeft = containerDims.width - cardWidth - EDGE_MARGIN;
-        horizontalTransform = 'none';
-    } else if (centerX - halfWidth < EDGE_MARGIN) {
-        adjustedLeft = EDGE_MARGIN;
-        horizontalTransform = 'none';
-    } else {
-        adjustedLeft = centerX;
-        horizontalTransform = 'translateX(-50%)';
-    }
-
-    // Vertical positioning: flip above if near bottom and there's room above
-    const annotationBottomY = (rect.y + rect.h) * containerDims.height;
-    const annotationTopY = rect.y * containerDims.height;
-    const spaceBelow = containerDims.height - annotationBottomY;
-    const showAbove = spaceBelow < CARD_MAX_HEIGHT + 12 && annotationTopY > CARD_MAX_HEIGHT * 0.4;
-
-    const topY = showAbove ? annotationTopY - 8 : annotationBottomY + 8;
-    const verticalTransform = showAbove ? 'translateY(-100%)' : 'none';
+    const rect = getAnnotationBounds(annotation.rects);
+    const viewportPosition = containerElement
+        ? getViewportPosition(rect, containerElement)
+        : null;
+    const fallbackPosition = getContainerPosition(rect, containerDims);
+    const position = viewportPosition ?? fallbackPosition;
 
     const isAiContent = parsedContent.isAi && !isEditing && !isExplaining;
-
-    return (
+    const popover = (
         <div
             ref={popoverRef}
-            className="absolute z-50 pointer-events-auto"
-            style={{
-                left: `${adjustedLeft}px`,
-                top: `${topY}px`,
-                transform: `${horizontalTransform} ${verticalTransform}`.trim(),
-            }}
+            className={`${position.mode === 'fixed' ? 'fixed' : 'absolute'} z-50 pointer-events-auto`}
+            style={position.style}
             onClick={(e) => e.stopPropagation()}
+            data-testid="note-popover-root"
         >
             <div
                 className={`rounded-xl shadow-2xl border flex flex-col ${
@@ -142,7 +135,7 @@ export const NotePopover = ({ annotation, containerDims, onClose, isExplaining, 
                         ? 'bg-violet-50/95 border-violet-200'
                         : 'bg-white border-gray-200'
                 }`}
-                style={{ width: `${cardWidth}px`, maxHeight: `${CARD_MAX_HEIGHT}px` }}
+                style={{ width: `${position.cardWidth}px`, maxHeight: `${position.maxHeight}px` }}
                 data-testid="note-popover-card"
             >
                 {/* Scrollable content */}
@@ -238,4 +231,64 @@ export const NotePopover = ({ annotation, containerDims, onClose, isExplaining, 
             </div>
         </div>
     );
+
+    return position.mode === 'fixed' ? createPortal(popover, document.body) : popover;
 };
+
+function getContainerPosition(
+    rect: { x: number; y: number; w: number; h: number },
+    containerDims: { width: number; height: number },
+) {
+    const centerX = (rect.x + rect.w / 2) * containerDims.width;
+    const cardWidth = getCardWidth(containerDims.width);
+    const left = clamp(centerX - cardWidth / 2, EDGE_MARGIN, containerDims.width - cardWidth - EDGE_MARGIN);
+    const annotationBottomY = (rect.y + rect.h) * containerDims.height;
+    const annotationTopY = rect.y * containerDims.height;
+    const spaceBelow = containerDims.height - annotationBottomY - EDGE_MARGIN - ANCHOR_GAP;
+    const spaceAbove = annotationTopY - EDGE_MARGIN - ANCHOR_GAP;
+    const showAbove = spaceBelow < CARD_MAX_HEIGHT && spaceAbove > spaceBelow;
+    const availableHeight = Math.max(CARD_MIN_HEIGHT, showAbove ? spaceAbove : spaceBelow);
+    const maxHeight = Math.min(CARD_MAX_HEIGHT, availableHeight);
+
+    return {
+        mode: 'absolute' as const,
+        cardWidth,
+        maxHeight,
+        style: {
+            left: `${left}px`,
+            top: `${showAbove ? annotationTopY - ANCHOR_GAP : annotationBottomY + ANCHOR_GAP}px`,
+            transform: showAbove ? 'translateY(-100%)' : 'none',
+        },
+    };
+}
+
+function getViewportPosition(
+    rect: { x: number; y: number; w: number; h: number },
+    containerElement: HTMLElement,
+) {
+    const containerRect = containerElement.getBoundingClientRect();
+    if (containerRect.width <= 0 || containerRect.height <= 0) return null;
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const cardWidth = getCardWidth(viewportWidth);
+    const anchorCenterX = containerRect.left + (rect.x + rect.w / 2) * containerRect.width;
+    const anchorTopY = containerRect.top + rect.y * containerRect.height;
+    const anchorBottomY = containerRect.top + (rect.y + rect.h) * containerRect.height;
+    const spaceBelow = viewportHeight - anchorBottomY - EDGE_MARGIN - ANCHOR_GAP;
+    const spaceAbove = anchorTopY - EDGE_MARGIN - ANCHOR_GAP;
+    const showAbove = spaceBelow < CARD_MAX_HEIGHT && spaceAbove > spaceBelow;
+    const availableHeight = Math.max(CARD_MIN_HEIGHT, showAbove ? spaceAbove : spaceBelow);
+    const maxHeight = Math.min(CARD_MAX_HEIGHT, availableHeight);
+
+    return {
+        mode: 'fixed' as const,
+        cardWidth,
+        maxHeight,
+        style: {
+            left: `${clamp(anchorCenterX - cardWidth / 2, EDGE_MARGIN, viewportWidth - cardWidth - EDGE_MARGIN)}px`,
+            top: `${showAbove ? anchorTopY - ANCHOR_GAP : anchorBottomY + ANCHOR_GAP}px`,
+            transform: showAbove ? 'translateY(-100%)' : 'none',
+        },
+    };
+}
