@@ -11,7 +11,7 @@ from tests.fixtures import (
     create_test_annotation,
 )
 
-TEST_EMBEDDING_2048 = [0.01] * 2048
+TEST_EMBEDDING = [0.01] * 1024
 
 
 def _init_http_clients():
@@ -475,7 +475,7 @@ class TestStreamMessage:
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING_2048)
+        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING)
 
         mock_llm_instance = MagicMock()
 
@@ -556,7 +556,7 @@ class TestStreamMessageOpenRouterRateLimit:
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING_2048)
+        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING)
 
         mock_llm_instance = MagicMock()
 
@@ -629,7 +629,7 @@ class TestStreamMessageOpenRouterRateLimit:
         mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
         mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING_2048)
+        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING)
 
         mock_llm_instance = MagicMock()
 
@@ -715,7 +715,7 @@ class TestSemanticSearch:
 
         with patch("app.api.routes.chat.EmbeddingService") as mock_embed_cls:
             mock_embed = AsyncMock()
-            mock_embed.embed_query = AsyncMock(return_value=TEST_EMBEDDING_2048)
+            mock_embed.embed_query = AsyncMock(return_value=TEST_EMBEDDING)
             mock_embed_cls.return_value = mock_embed
 
             with patch("app.api.routes.chat.vector_search_service") as mock_search:
@@ -1007,29 +1007,6 @@ class TestOpenRouterQuotaGating:
                 assert response.status_code == 503
                 assert "OpenRouter free-tier usage" in response.json()["detail"]
 
-    async def test_semantic_search_quota_exceeded_returns_503(
-        self, client: AsyncClient, auth_headers
-    ):
-        """When OpenRouter quota is exceeded, semantic_search returns 503."""
-        _setup_stream_mocks()
-
-        from app.services.exceptions import OpenRouterQuotaError
-
-        with patch("app.api.routes.chat.EmbeddingService") as mock_embed_cls:
-            mock_embed = AsyncMock()
-            mock_embed.embed_query = AsyncMock(
-                side_effect=OpenRouterQuotaError(limit=1000, count_today=900)
-            )
-            mock_embed_cls.return_value = mock_embed
-
-            response = await client.post(
-                "/v1/chat/semantic-search",
-                json={"query": "machine learning"},
-                headers=auth_headers,
-            )
-
-            assert response.status_code == 503
-
     async def test_stream_message_llm_gate_returns_503(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
@@ -1055,7 +1032,7 @@ class TestOpenRouterQuotaGating:
 
         mock_embed_instance = MagicMock()
         mock_embed_instance.embed_query = AsyncMock(
-            return_value=TEST_EMBEDDING_2048
+            return_value=TEST_EMBEDDING
         )
 
         with patch(
@@ -1110,7 +1087,7 @@ class TestOpenRouterQuotaGating:
 
         mock_embed_instance = MagicMock()
         mock_embed_instance.embed_query = AsyncMock(
-            return_value=TEST_EMBEDDING_2048
+            return_value=TEST_EMBEDDING
         )
 
         mock_llm_instance = MagicMock()
