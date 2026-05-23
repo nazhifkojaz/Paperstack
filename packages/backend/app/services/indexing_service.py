@@ -160,7 +160,7 @@ class IndexingService:
                 raise ChunkingError("No chunks produced from PDF text.")
 
             texts = [c.content for c in chunks]
-            embeddings = await self._embedding_service.embed_texts(texts, db=db)
+            embeddings = await self._embedding_service.embed_texts(texts)
 
             # Delete stale chunks and insert new ones
             await db.execute(

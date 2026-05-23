@@ -413,7 +413,7 @@ class PdfChunk(Base):
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     end_page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(2048))
+    embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(1024))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     section_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     search_vector = Column(TSVECTOR, Computed("to_tsvector('english', content)"), nullable=True)

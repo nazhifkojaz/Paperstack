@@ -1,35 +1,37 @@
 """Embedding service: wraps OpenRouter /v1/embeddings for chunk and query embedding.
 
-Model: nvidia/llama-nemotron-embed-vl-1b-v2:free (text-only; image embedding is future work)
+Model: qwen/qwen3-embedding-8b (1024-dim via Matryoshka, providers: nebius + deepinfra)
 """
 from typing import Optional
 
 import httpx
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.services.exceptions import EmbeddingError
-from app.services.openrouter_usage_service import openrouter_usage_service
 
 _EMBED_URL = "https://openrouter.ai/api/v1/embeddings"
+
+_PROVIDER_BLOCK = {
+    "order": ["nebius", "deepinfra"],
+    "allow_fallbacks": True,
+}
 
 
 class EmbeddingService:
 
-    MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
-    DIMENSIONS = 2048
+    MODEL = "qwen/qwen3-embedding-8b"
+    DIMENSIONS = 1024
     BATCH_SIZE = 128
 
     def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
         self._client = http_client
 
     async def embed_texts(
-        self, texts: list[str], db: Optional[AsyncSession] = None
+        self, texts: list[str]
     ) -> list[list[float]]:
-        """Embed a list of texts. Returns 2048-dim float vectors in input order.
+        """Embed a list of texts. Returns 1024-dim float vectors in input order.
 
         Raises EmbeddingError on API failure or missing server key.
-        Raises OpenRouterQuotaError when free-tier usage is at/above 90%.
         """
         if not settings.OPENROUTER_API_KEY:
             raise EmbeddingError("OPENROUTER_API_KEY is not configured")
@@ -42,13 +44,15 @@ class EmbeddingService:
         for i in range(0, len(texts), self.BATCH_SIZE):
             batch = texts[i : i + self.BATCH_SIZE]
 
-            if db is not None:
-                await openrouter_usage_service.record_and_check(db)
-
             client = self._client or httpx.AsyncClient(timeout=60.0)
             should_close = self._client is None
 
-            payload = {"model": self.MODEL, "input": batch}
+            payload = {
+                "model": self.MODEL,
+                "input": batch,
+                "dimensions": self.DIMENSIONS,
+                "provider": _PROVIDER_BLOCK,
+            }
             headers = {
                 "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
                 "Content-Type": "application/json",
@@ -72,13 +76,18 @@ class EmbeddingService:
 
             data = resp.json()
             for item in sorted(data["data"], key=lambda x: x["index"]):
-                all_embeddings.append(item["embedding"])
+                embedding = item["embedding"]
+                if len(embedding) != self.DIMENSIONS:
+                    raise EmbeddingError(
+                        f"Expected {self.DIMENSIONS}-dim embedding, got {len(embedding)}"
+                    )
+                all_embeddings.append(embedding)
 
         return all_embeddings
 
     async def embed_query(
-        self, text: str, db: Optional[AsyncSession] = None
+        self, text: str
     ) -> list[float]:
-        """Embed a single query string. Returns a 2048-dim float vector."""
-        results = await self.embed_texts([text], db=db)
+        """Embed a single query string. Returns a 1024-dim float vector."""
+        results = await self.embed_texts([text])
         return results[0]

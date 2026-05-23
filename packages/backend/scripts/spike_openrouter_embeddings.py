@@ -1,8 +1,8 @@
-"""Phase 0 feasibility spike for the Nemotron embedding migration.
+"""Phase 0 feasibility spike for the Qwen3 embedding migration.
 
 Runs three checks and prints a PASS/FAIL summary:
-  0.1  POST /api/v1/embeddings with nvidia/llama-nemotron-embed-vl-1b-v2:free
-       → expect HTTP 200, 2048-dim embedding
+  0.1  POST /api/v1/embeddings with qwen/qwen3-embedding-8b (dimensions=1024, providers: nebius + deepinfra)
+       → expect HTTP 200, 1024-dim embedding
   0.2  SELECT extversion FROM pg_extension WHERE extname='vector'
        → expect >= 0.7.0 and halfvec(3) cast to succeed
   0.3  GET /api/v1/key
@@ -29,9 +29,14 @@ from app.core.config import settings
 
 EMBED_URL = "https://openrouter.ai/api/v1/embeddings"
 KEY_URL = "https://openrouter.ai/api/v1/key"
-MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
-EXPECTED_DIM = 2048
+MODEL = "qwen/qwen3-embedding-8b"
+EXPECTED_DIM = 1024
 MIN_PGVECTOR_VERSION = (0, 7, 0)
+
+_PROVIDER_BLOCK = {
+    "order": ["nebius", "deepinfra"],
+    "allow_fallbacks": True,
+}
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -49,6 +54,8 @@ async def check_embeddings(client: httpx.AsyncClient, api_key: str) -> tuple[boo
             json={
                 "model": MODEL,
                 "input": ["This is a test sentence for embedding verification."],
+                "dimensions": EXPECTED_DIM,
+                "provider": _PROVIDER_BLOCK,
             },
             timeout=30.0,
         )
@@ -89,7 +96,12 @@ async def check_batch_ceiling(client: httpx.AsyncClient, api_key: str) -> tuple[
     notes: list[str] = []
 
     for size in trials:
-        payload = {"model": MODEL, "input": [sample_text] * size}
+        payload = {
+            "model": MODEL,
+            "input": [sample_text] * size,
+            "dimensions": EXPECTED_DIM,
+            "provider": _PROVIDER_BLOCK,
+        }
         try:
             resp = await client.post(
                 EMBED_URL,
@@ -176,11 +188,10 @@ async def check_key_limits(client: httpx.AsyncClient, api_key: str) -> tuple[boo
     limit = payload.get("limit")
     limit_remaining = payload.get("limit_remaining")
     usage_daily = payload.get("usage_daily")
-    is_free_tier = payload.get("is_free_tier")
 
     return True, (
         f"limit={limit} | limit_remaining={limit_remaining} | "
-        f"usage_daily={usage_daily} | is_free_tier={is_free_tier}"
+        f"usage_daily={usage_daily}"
     )
 
 

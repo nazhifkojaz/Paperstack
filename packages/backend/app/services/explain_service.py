@@ -91,7 +91,7 @@ class ExplainService:
             await db.commit()
             raise
 
-        query_vector = await self._embedding_service.embed_query(selected_text, db=db)
+        query_vector = await self._embedding_service.embed_query(selected_text)
 
         # Vector search for context (top 4 — tighter than chat's 6)
         top_chunks = await vector_search_service.search_pdf(
