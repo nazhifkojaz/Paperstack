@@ -39,12 +39,14 @@ class AnnotationBase(BaseModel):
 
 class AnnotationCreate(AnnotationBase):
     set_id: UUID
+    ann_metadata: Optional[dict[str, Any]] = Field(None, alias='metadata')
 
 class AnnotationUpdate(BaseModel):
     rects: Optional[list[dict[str, float]]] = None
     selected_text: Optional[str] = None
     note_content: Optional[str] = None
     color: Optional[str] = Field(None, max_length=7)
+    ann_metadata: Optional[dict[str, Any]] = Field(None, alias='metadata')
 
 class AnnotationResponse(AnnotationBase):
     id: UUID
