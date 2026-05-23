@@ -60,6 +60,11 @@ export const PdfAnnotationLayer = ({
     width: number;
     height: number;
   } | null>(null);
+  const [containerElement, setContainerElement] =
+    useState<HTMLDivElement | null>(null);
+  const [textIndex, setTextIndex] = useState<ReturnType<
+    NonNullable<PdfTextLayerHandle['getTextIndex']>
+  > | null>(null);
 
   // ---- Viewport info for text-index-based rect resolution ----
   const dimensions = useNewPdfViewerStore((s) =>
@@ -84,6 +89,7 @@ export const PdfAnnotationLayer = ({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    setContainerElement(el);
     const observer = new ResizeObserver(() => {
       setContainerDims({
         width: el.offsetWidth,
@@ -93,6 +99,16 @@ export const PdfAnnotationLayer = ({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // ---- Cache text index from text layer for render-safe access ----
+  useEffect(() => {
+    const layer = textLayerRef?.current;
+    if (!layer) return;
+    layer.renderReady().then(() => {
+      const index = textLayerRef.current?.getTextIndex?.();
+      if (index) setTextIndex(index);
+    });
+  }, [textLayerRef, renderId]);
 
   // ---- Rect drawing ----
   const rectCreate = useRectCreate({
@@ -165,22 +181,19 @@ export const PdfAnnotationLayer = ({
     }
 
     // Try to derive rects from selector metadata + text index
-    if (meta?.text_range && viewport && textLayerRef?.current) {
-      const textIndex = textLayerRef.current.getTextIndex();
-      if (textIndex) {
-        const tr = meta.text_range as {
-          page: number;
-          start: number;
-          end: number;
-        };
-        const derived = textRangeToNormalizedRects(
-          textIndex,
-          tr.start,
-          tr.end,
-          viewport,
-        );
-        if (derived.length > 0) return derived;
-      }
+    if (meta?.text_range && viewport && textIndex) {
+      const tr = meta.text_range as {
+        page: number;
+        start: number;
+        end: number;
+      };
+      const derived = textRangeToNormalizedRects(
+        textIndex,
+        tr.start,
+        tr.end,
+        viewport,
+      );
+      if (derived.length > 0) return derived;
     }
 
     return ann.rects;
@@ -434,7 +447,7 @@ export const PdfAnnotationLayer = ({
             <NotePopover
               annotation={noteAnn}
               containerDims={containerDims}
-              containerElement={containerRef.current}
+              containerElement={containerElement}
               onClose={() => {
                 setEditingNoteId(null);
                 annotationExplain.clearExplain();

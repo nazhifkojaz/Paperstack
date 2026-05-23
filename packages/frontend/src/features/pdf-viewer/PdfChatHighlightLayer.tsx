@@ -55,7 +55,7 @@ export const PdfChatHighlightLayer = ({
       !textLayerRef?.current ||
       pendingHighlight.pageNumber !== pageNumber
     ) {
-      setRects([]);
+      queueMicrotask(() => setRects([]));
       return;
     }
 
