@@ -12,7 +12,11 @@ import { AnnotationContextMenu } from '@/features/annotations/AnnotationContextM
 import type { Annotation } from '@/api/annotations';
 import type { Rect } from '@/types/annotation';
 import type { PdfTextLayerHandle } from './PdfTextLayer';
-import { textRangeToNormalizedRects } from './pdfGeometry';
+import {
+  projectNormalizedRectsForRotation,
+  textRangeToNormalizedRects,
+  unprojectNormalizedRectForRotation,
+} from './pdfGeometry';
 import { useNewPdfViewerStore } from './pdfViewerStore';
 import { useTextIndexMatcher } from './useTextIndexMatcher';
 import type { PdfViewportInfo } from './pdfViewerTypes';
@@ -71,6 +75,7 @@ export const PdfAnnotationLayer = ({
     s.pageDimensions.get(pageNumber),
   );
   const zoom = useNewPdfViewerStore((s) => s.zoom);
+  const rotation = useNewPdfViewerStore((s) => s.rotation);
 
   const viewport: PdfViewportInfo | null = useMemo(
     () =>
@@ -78,11 +83,11 @@ export const PdfAnnotationLayer = ({
         ? {
             width: dimensions.baseWidth,
             height: dimensions.baseHeight,
-            rotation: 0,
+            rotation,
             scale: zoom,
           }
         : null,
-    [dimensions, zoom],
+    [dimensions, rotation, zoom],
   );
 
   // ---- ResizeObserver for container dimensions ----
@@ -116,11 +121,12 @@ export const PdfAnnotationLayer = ({
     isDrawingRect,
     selectedSetId,
     onCreate: (rect) => {
+      const storedRect = unprojectNormalizedRectForRotation(rect, rotation);
       createAnnotation({
         set_id: selectedSetId!,
         page_number: pageNumber,
         type: 'rect',
-        rects: [rect],
+        rects: [storedRect],
         color: '#FF0000',
       });
     },
@@ -177,7 +183,7 @@ export const PdfAnnotationLayer = ({
     const meta = ann.metadata as Record<string, unknown> | null | undefined;
     const resolver = meta?.resolver as { method?: string } | undefined;
     if (resolver?.method === 'selection' && ann.rects.length > 0) {
-      return ann.rects;
+      return projectNormalizedRectsForRotation(ann.rects, rotation);
     }
 
     // Try to derive rects from selector metadata + text index
@@ -196,7 +202,7 @@ export const PdfAnnotationLayer = ({
       if (derived.length > 0) return derived;
     }
 
-    return ann.rects;
+    return projectNormalizedRectsForRotation(ann.rects, rotation);
   };
 
   // ---- Explain handler ----
@@ -263,7 +269,7 @@ export const PdfAnnotationLayer = ({
                   ann.type !== 'highlight'
                 ) {
                   e.stopPropagation();
-                  startMove(e, ann.rects);
+                  startMove(e, effectiveRects);
                 }
               }}
             >
@@ -336,17 +342,18 @@ export const PdfAnnotationLayer = ({
             const selectedAnn = pageAnnotations.find(
               (a) => a.id === selectedAnnotationId,
             );
+            const selectedRects = selectedAnn ? resolveRects(selectedAnn) : [];
             if (
               !selectedAnn ||
               selectedAnn.type !== 'rect' ||
-              !selectedAnn.rects[0]
+              !selectedRects[0]
             )
               return null;
 
             const rect =
               isDragging && dragPreviewRect
                 ? dragPreviewRect
-                : selectedAnn.rects[0];
+                : selectedRects[0];
 
             const handles = [
               {
@@ -443,9 +450,11 @@ export const PdfAnnotationLayer = ({
             (a) => a.id === editingNoteId,
           );
           if (!noteAnn) return null;
+          const noteRects = resolveRects(noteAnn);
+          if (!noteRects.length) return null;
           return (
             <NotePopover
-              annotation={noteAnn}
+              annotation={{ ...noteAnn, rects: noteRects }}
               containerDims={containerDims}
               containerElement={containerElement}
               onClose={() => {
@@ -466,7 +475,7 @@ export const PdfAnnotationLayer = ({
         pageAnnotations
           .filter((ann) => ann.type !== 'note' && ann.note_content)
           .map((ann) => {
-            const rects = ann.rects;
+            const rects = resolveRects(ann);
             if (!rects.length) return null;
             const maxX = Math.max(...rects.map((r) => r.x + r.w));
             const minY = Math.min(...rects.map((r) => r.y));
@@ -499,9 +508,11 @@ export const PdfAnnotationLayer = ({
             (a) => a.id === selectedAnnotationId,
           );
           if (!selectedAnn) return null;
+          const selectedRects = resolveRects(selectedAnn);
+          if (!selectedRects.length) return null;
           return (
             <AnnotationToolbar
-              annotation={selectedAnn}
+              annotation={{ ...selectedAnn, rects: selectedRects }}
               containerDims={containerDims}
               onEditNote={() => setEditingNoteId(selectedAnnotationId)}
             />

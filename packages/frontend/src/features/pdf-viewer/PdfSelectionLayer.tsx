@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { PdfTextLayerHandle } from './PdfTextLayer';
-import { textRangeToNormalizedRects } from './pdfGeometry';
+import {
+  getRotatedViewportSize,
+  projectNormalizedRectsForRotation,
+  textRangeToNormalizedRects,
+  unprojectNormalizedRectsForRotation,
+} from './pdfGeometry';
 import { searchTextIndex } from './pdfSearch';
 import { useNewPdfViewerStore } from './pdfViewerStore';
 import { SelectionPopup } from '@/features/annotations/SelectionPopup';
@@ -17,6 +22,7 @@ interface PdfSelectionLayerProps {
 
 interface SelectionState {
   selectionRect: { x: number; y: number; width: number; height: number };
+  displayRects: Array<{ x: number; y: number; w: number; h: number }>;
   normalizedRects: Array<{ x: number; y: number; w: number; h: number }>;
   selectedText: string;
   metadata: HighlightSelectorMetadata;
@@ -120,8 +126,17 @@ export const PdfSelectionLayer = ({
   if (!selection) return null;
 
   // Viewport pixel dimensions for SVG
-  const vpW = dimensions ? dimensions.baseWidth * zoom : 612;
-  const vpH = dimensions ? dimensions.baseHeight * zoom : 792;
+  const viewport = dimensions
+    ? {
+        width: dimensions.baseWidth,
+        height: dimensions.baseHeight,
+        rotation,
+        scale: zoom,
+      }
+    : null;
+  const { width: vpW, height: vpH } = viewport
+    ? getRotatedViewportSize(viewport)
+    : { width: 612, height: 792 };
 
   return (
     <>
@@ -131,7 +146,7 @@ export const PdfSelectionLayer = ({
         style={{ width: `${vpW}px`, height: `${vpH}px` }}
         aria-hidden
       >
-        {selection.normalizedRects.map((r, i) => (
+        {selection.displayRects.map((r, i) => (
           <rect
             key={i}
             x={r.x * vpW}
@@ -165,7 +180,7 @@ function processSelection(
   container: HTMLDivElement,
   pageNumber: number,
   zoom: number,
-  _rotation: number,
+  rotation: number,
   pageDims: { baseWidth: number; baseHeight: number } | null,
   setResult: (s: SelectionState | null) => void,
 ) {
@@ -248,10 +263,14 @@ function processSelection(
   // 4. Compute normalized rects. For the live user selection, browser range
   // rects are more precise than PDF text-item projection, especially for
   // partial words and high zoom. The text range is still stored in metadata.
-  let normalizedRects = getDomSelectionRects(range, container);
+  let displayRects = getDomSelectionRects(range, container);
+  let normalizedRects =
+    displayRects.length > 0
+      ? unprojectNormalizedRectsForRotation(displayRects, rotation)
+      : [];
 
-  if (normalizedRects.length === 0 && index && pageDims) {
-    const viewport: PdfViewportInfo = {
+  if (displayRects.length === 0 && index && pageDims) {
+    const canonicalViewport: PdfViewportInfo = {
       width: pageDims.baseWidth,
       height: pageDims.baseHeight,
       rotation: 0,
@@ -261,11 +280,15 @@ function processSelection(
       index,
       matchStart,
       matchEnd,
-      viewport,
+      canonicalViewport,
+    );
+    displayRects = projectNormalizedRectsForRotation(
+      normalizedRects,
+      rotation,
     );
   }
 
-  if (normalizedRects.length === 0) {
+  if (normalizedRects.length === 0 || displayRects.length === 0) {
     setResult(null);
     return;
   }
@@ -300,6 +323,7 @@ function processSelection(
 
   setResult({
     selectionRect,
+    displayRects,
     normalizedRects,
     selectedText: exactText,
     metadata,

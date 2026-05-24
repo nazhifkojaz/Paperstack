@@ -8,7 +8,12 @@ import {
   createPdfPageTextIndex,
   normalizedRangeToOriginal,
 } from './pdfTextIndex';
-import { textRangeToNormalizedRects } from './pdfGeometry';
+import {
+  getRotatedViewportSize,
+  projectNormalizedRectForRotation,
+  textRangeToNormalizedRects,
+  unprojectNormalizedRectForRotation,
+} from './pdfGeometry';
 import type { PdfTextItemGeometry, PdfViewportInfo } from './pdfViewerTypes';
 
 // ---------------------------------------------------------------------------
@@ -368,6 +373,54 @@ describe('textRangeToNormalizedRects', () => {
         expect(r.w).toBeGreaterThan(0);
         expect(r.h).toBeGreaterThan(0);
       }
+    });
+  });
+
+  describe('rotation projection', () => {
+    it('projects rects for 0, 90, 180, and 270 degree viewports', () => {
+      const items = [textItem('Hello', 72, 720, 30)];
+      const index = createPdfPageTextIndex(items, 1);
+      const baseRect = textRangeToNormalizedRects(index, 0, 5, {
+        ...mockViewport(),
+        rotation: 0,
+      })[0];
+
+      expect(
+        textRangeToNormalizedRects(index, 0, 5, {
+          ...mockViewport(),
+          rotation: 90,
+        })[0],
+      ).toEqual(projectNormalizedRectForRotation(baseRect, 90));
+      expect(
+        textRangeToNormalizedRects(index, 0, 5, {
+          ...mockViewport(),
+          rotation: 180,
+        })[0],
+      ).toEqual(projectNormalizedRectForRotation(baseRect, 180));
+      expect(
+        textRangeToNormalizedRects(index, 0, 5, {
+          ...mockViewport(),
+          rotation: 270,
+        })[0],
+      ).toEqual(projectNormalizedRectForRotation(baseRect, 270));
+    });
+
+    it('can unproject a displayed rotated rect back to page coordinates', () => {
+      const rect = { x: 0.125, y: 0.25, w: 0.25, h: 0.125 };
+      const displayed = projectNormalizedRectForRotation(rect, 90);
+
+      expect(unprojectNormalizedRectForRotation(displayed, 90)).toEqual(rect);
+    });
+
+    it('returns rotated scaled viewport dimensions', () => {
+      expect(
+        getRotatedViewportSize({
+          width: 612,
+          height: 792,
+          rotation: 90,
+          scale: 2,
+        }),
+      ).toEqual({ width: 1584, height: 1224 });
     });
   });
 

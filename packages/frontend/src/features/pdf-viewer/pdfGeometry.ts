@@ -7,6 +7,108 @@
 
 import type { NormalizedRect, PdfPageTextIndex, PdfViewportInfo } from './pdfViewerTypes';
 
+type OrthogonalRotation = 0 | 90 | 180 | 270;
+
+const EPSILON = 1e-12;
+
+function normalizeRotation(rotation: number): OrthogonalRotation {
+  const normalized = ((rotation % 360) + 360) % 360;
+  if (normalized === 90 || normalized === 180 || normalized === 270) {
+    return normalized;
+  }
+  return 0;
+}
+
+function clean(value: number): number {
+  if (Math.abs(value) < EPSILON) return 0;
+  if (Math.abs(value - 1) < EPSILON) return 1;
+  return value;
+}
+
+function cleanRect(rect: NormalizedRect): NormalizedRect {
+  return {
+    x: clean(rect.x),
+    y: clean(rect.y),
+    w: clean(rect.w),
+    h: clean(rect.h),
+  };
+}
+
+/**
+ * Return the active viewport pixel size for a base page viewport.
+ */
+export function getRotatedViewportSize(viewport: PdfViewportInfo): {
+  width: number;
+  height: number;
+} {
+  const rotation = normalizeRotation(viewport.rotation);
+  const isQuarterTurn = rotation === 90 || rotation === 270;
+  return {
+    width: (isQuarterTurn ? viewport.height : viewport.width) * viewport.scale,
+    height: (isQuarterTurn ? viewport.width : viewport.height) * viewport.scale,
+  };
+}
+
+/**
+ * Project an unrotated page-normalized rect into the active rotated viewport.
+ */
+export function projectNormalizedRectForRotation(
+  rect: NormalizedRect,
+  rotation: number,
+): NormalizedRect {
+  switch (normalizeRotation(rotation)) {
+    case 90:
+      return cleanRect({
+        x: 1 - rect.y - rect.h,
+        y: rect.x,
+        w: rect.h,
+        h: rect.w,
+      });
+    case 180:
+      return cleanRect({
+        x: 1 - rect.x - rect.w,
+        y: 1 - rect.y - rect.h,
+        w: rect.w,
+        h: rect.h,
+      });
+    case 270:
+      return cleanRect({
+        x: rect.y,
+        y: 1 - rect.x - rect.w,
+        w: rect.h,
+        h: rect.w,
+      });
+    case 0:
+    default:
+      return cleanRect(rect);
+  }
+}
+
+export function projectNormalizedRectsForRotation(
+  rects: NormalizedRect[],
+  rotation: number,
+): NormalizedRect[] {
+  return rects.map((rect) => projectNormalizedRectForRotation(rect, rotation));
+}
+
+/**
+ * Convert a viewport-normalized rect back to unrotated page coordinates.
+ */
+export function unprojectNormalizedRectForRotation(
+  rect: NormalizedRect,
+  rotation: number,
+): NormalizedRect {
+  const inverseRotation = (360 - normalizeRotation(rotation)) % 360;
+  return projectNormalizedRectForRotation(rect, inverseRotation);
+}
+
+export function unprojectNormalizedRectsForRotation(
+  rects: NormalizedRect[],
+  rotation: number,
+): NormalizedRect[] {
+  return rects.map((rect) => unprojectNormalizedRectForRotation(rect, rotation));
+}
+
 // ---------------------------------------------------------------------------
 // Text range → normalized rects
 // ---------------------------------------------------------------------------
@@ -113,8 +215,12 @@ export function textRangeToNormalizedRects(
     });
   }
 
-  // Merge adjacent rects that are vertically aligned (same y and h, contiguous x)
-  return mergeAdjacentRects(rects);
+  // Merge adjacent rects in unrotated page space, then project the result into
+  // the active viewer rotation.
+  return projectNormalizedRectsForRotation(
+    mergeAdjacentRects(rects),
+    viewport.rotation,
+  );
 }
 
 // ---------------------------------------------------------------------------

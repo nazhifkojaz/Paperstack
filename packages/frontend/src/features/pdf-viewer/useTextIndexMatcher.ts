@@ -91,6 +91,10 @@ export function useTextIndexMatcher(
       const index = handle.getTextIndex();
       if (!index) return;
 
+      const canonicalViewport: PdfViewportInfo = {
+        ...viewport,
+        rotation: 0,
+      };
       const newResolved = new Map<
         string,
         { rects: Rect[]; page: number }
@@ -111,7 +115,7 @@ export function useTextIndexMatcher(
           index,
           match.start,
           match.end,
-          viewport,
+          canonicalViewport,
         );
 
         const validRects = rects.filter(
@@ -136,7 +140,7 @@ export function useTextIndexMatcher(
           index,
           match.start,
           match.end,
-          viewport,
+          canonicalViewport,
         );
 
         const validRects = rects.filter(
