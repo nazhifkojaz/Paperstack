@@ -10,7 +10,10 @@ import { useEffect, useState } from 'react';
 import { useChatHighlightStore } from '@/stores/chatHighlightStore';
 import type { PdfTextLayerHandle } from './PdfTextLayer';
 import { searchTextIndex } from './pdfSearch';
-import { textRangeToNormalizedRects } from './pdfGeometry';
+import {
+  getRotatedViewportSize,
+  textRangeToNormalizedRects,
+} from './pdfGeometry';
 import { useNewPdfViewerStore } from './pdfViewerStore';
 import type { PdfViewportInfo } from './pdfViewerTypes';
 
@@ -19,6 +22,7 @@ import type { PdfViewportInfo } from './pdfViewerTypes';
 // ---------------------------------------------------------------------------
 
 interface PdfChatHighlightLayerProps {
+  pdfId: string;
   pageNumber: number;
   textLayerRef?: React.RefObject<PdfTextLayerHandle | null>;
 }
@@ -30,6 +34,7 @@ const HIGHLIGHT_DURATION_MS = 5000;
 // ---------------------------------------------------------------------------
 
 export const PdfChatHighlightLayer = ({
+  pdfId,
   pageNumber,
   textLayerRef,
 }: PdfChatHighlightLayerProps) => {
@@ -48,11 +53,13 @@ export const PdfChatHighlightLayer = ({
     s.pageDimensions.get(pageNumber),
   );
   const zoom = useNewPdfViewerStore((s) => s.zoom);
+  const rotation = useNewPdfViewerStore((s) => s.rotation);
 
   useEffect(() => {
     if (
       !pendingHighlight ||
       !textLayerRef?.current ||
+      pendingHighlight.pdfId !== pdfId ||
       pendingHighlight.pageNumber !== pageNumber
     ) {
       queueMicrotask(() => setRects([]));
@@ -85,7 +92,7 @@ export const PdfChatHighlightLayer = ({
       const viewport: PdfViewportInfo = {
         width: dimensions.baseWidth,
         height: dimensions.baseHeight,
-        rotation: 0,
+        rotation,
         scale: zoom,
       };
 
@@ -111,18 +118,29 @@ export const PdfChatHighlightLayer = ({
     return () => clearTimeout(timeout);
   }, [
     pendingHighlight,
+    pdfId,
     pageNumber,
     textLayerRef,
     dimensions,
     zoom,
+    rotation,
     setPendingHighlight,
   ]);
 
   if (rects.length === 0) return null;
 
   // Compute viewport pixel dimensions for SVG
-  const vpW = dimensions ? dimensions.baseWidth * zoom : 612;
-  const vpH = dimensions ? dimensions.baseHeight * zoom : 792;
+  const viewport: PdfViewportInfo | null = dimensions
+    ? {
+        width: dimensions.baseWidth,
+        height: dimensions.baseHeight,
+        rotation,
+        scale: zoom,
+      }
+    : null;
+  const { width: vpW, height: vpH } = viewport
+    ? getRotatedViewportSize(viewport)
+    : { width: 612, height: 792 };
 
   return (
     <svg

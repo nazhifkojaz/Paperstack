@@ -35,6 +35,7 @@ export const PdfPage = ({
   const textLayerHandleRef = useRef<PdfTextLayerHandle>(null);
   const [canvasVisible, setCanvasVisible] = useState(false);
   const [pageProxy, setPageProxy] = useState<PDFPageProxy | null>(null);
+  const [textRenderId, setTextRenderId] = useState(0);
 
   const zoom = useNewPdfViewerStore((s) => s.zoom);
   const rotation = useNewPdfViewerStore((s) => s.rotation);
@@ -120,12 +121,14 @@ export const PdfPage = ({
             <PdfTextLayer
               ref={textLayerHandleRef}
               pageProxy={pageProxy}
+              onRenderComplete={setTextRenderId}
             />
             <PdfSelectionLayer
               textLayerRef={textLayerHandleRef}
               pageNumber={pageNumber}
             />
             <PdfChatHighlightLayer
+              pdfId={pdfId}
               pageNumber={pageNumber}
               textLayerRef={textLayerHandleRef}
             />
@@ -133,6 +136,7 @@ export const PdfPage = ({
               pageNumber={pageNumber}
               pdfId={pdfId}
               textLayerRef={textLayerHandleRef}
+              renderId={textRenderId}
             />
           </>
         )}

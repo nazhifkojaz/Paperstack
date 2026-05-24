@@ -186,12 +186,10 @@ export function useChatStream({
                         toast.error('Chat quota exhausted. Add an API key in Settings.');
                     } else if (isIndexError) {
                         setIndexError(errorMsg);
-                    } else if (streamingMessage) {
+                    } else {
                         streamingFailed(errorMsg);
                         toast.error(errorMsg);
                         hadErrorRef.current = true;
-                    } else {
-                        toast.error(errorMsg);
                     }
 
                     onError?.(errorMsg, isQuotaError, isIndexError);
