@@ -22,6 +22,14 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute("UPDATE chat_messages SET context_chunks = NULL")
+    op.execute(
+        "DELETE FROM annotation_sets "
+        "WHERE source = 'auto_highlight' "
+        "AND id IN ("
+        "  SELECT annotation_set_id FROM auto_highlight_cache "
+        "  WHERE annotation_set_id IS NOT NULL"
+        ")"
+    )
     op.execute("DELETE FROM auto_highlight_cache")
 
     op.drop_index("idx_pdf_chunks_embedding", table_name="pdf_chunks")

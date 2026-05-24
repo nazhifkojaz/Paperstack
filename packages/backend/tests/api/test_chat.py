@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from tests.fixtures import (
     create_test_pdf,
     create_test_collection,
-    create_test_annotation_set,
-    create_test_annotation,
 )
 
 TEST_EMBEDDING = [0.01] * 1024

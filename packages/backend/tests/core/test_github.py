@@ -1,6 +1,5 @@
 """Tests for the GitHub OAuth helper functions."""
 
-import pytest
 import respx
 from httpx import Response
 

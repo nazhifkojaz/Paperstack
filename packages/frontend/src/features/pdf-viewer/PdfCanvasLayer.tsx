@@ -69,7 +69,7 @@ export const PdfCanvasLayer = ({ pdfDocument, pageNumber }: PdfCanvasLayerProps)
 
     task.promise.catch((error) => {
       if (error?.name === 'RenderingCancelledException') return;
-      console.error(`Render error on page ${pageNumber}`, error);
+      console.error(`Render error on page ${pageProxy.pageNumber}`, error);
     });
 
     return () => {

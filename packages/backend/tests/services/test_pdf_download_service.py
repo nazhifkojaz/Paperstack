@@ -1,10 +1,7 @@
 """Tests for the PDF download service."""
 
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
-import httpx
 import pytest
 import respx
 from httpx import Response
@@ -19,7 +16,6 @@ from app.services.exceptions import (
     ExternalUrlError,
     GithubApiError,
     InvalidPdfSourceError,
-    PdfDownloadError,
 )
 
 
