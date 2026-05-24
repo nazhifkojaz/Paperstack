@@ -204,3 +204,66 @@ class TestExplainWithProvider:
 
         assert isinstance(result, ExplainResult)
         assert result.context_chunks == []
+
+    async def test_non_openrouter_forwards_model(self, explain_service, mock_db, mock_llm):
+        pdf_row = MagicMock()
+        pdf_row.id = uuid.uuid4()
+        user = MagicMock()
+
+        search_result = MagicMock()
+        search_result.page_number = 1
+        search_result.end_page_number = None
+        search_result.content = "context text"
+        search_result.chunk_id = str(uuid.uuid4())
+
+        with patch(
+            "app.services.explain_service.vector_search_service.search_pdf",
+            new_callable=AsyncMock,
+        ) as mock_search:
+            mock_search.return_value = [search_result]
+
+            await explain_service.explain_with_provider(
+                selected_text="passage",
+                page_number=1,
+                pdf_row=pdf_row,
+                user=user,
+                provider="gemini",
+                api_key="test-key",
+                db=mock_db,
+                model="gemini-2.0-flash",
+            )
+
+        mock_llm.call_gemini.assert_called_once()
+        call_kwargs = mock_llm.call_gemini.call_args[1]
+        assert call_kwargs.get("model") == "gemini-2.0-flash"
+
+    async def test_llm_rate_limit_error_propagates(self, explain_service, mock_db, mock_llm):
+        mock_llm.call_openrouter = AsyncMock(
+            side_effect=LLMRateLimitError("openrouter")
+        )
+        pdf_row = MagicMock()
+        pdf_row.id = uuid.uuid4()
+        user = MagicMock()
+
+        search_result = MagicMock()
+        search_result.page_number = 1
+        search_result.end_page_number = None
+        search_result.content = "context"
+        search_result.chunk_id = str(uuid.uuid4())
+
+        with patch(
+            "app.services.explain_service.vector_search_service.search_pdf",
+            new_callable=AsyncMock,
+        ) as mock_search:
+            mock_search.return_value = [search_result]
+
+            with pytest.raises(LLMRateLimitError):
+                await explain_service.explain_with_provider(
+                    selected_text="passage",
+                    page_number=1,
+                    pdf_row=pdf_row,
+                    user=user,
+                    provider="openrouter",
+                    api_key="or-key",
+                    db=mock_db,
+                )

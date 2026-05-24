@@ -173,16 +173,18 @@ class TestAddTagToPdf:
 
     async def test_add_tag_already_assigned_returns_400(self, client: AsyncClient, auth_headers, db_session, test_user) -> None:
         """Test adding already assigned tag returns 400."""
-        from app.db.models import PdfTag
-
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
         tag = await create_test_tag(db_session, user_id=test_user.id, name="Important", color="#FF0000")
-        await db_session.flush()
-
-        pt = PdfTag(pdf_id=pdf.id, tag_id=tag.id)
-        db_session.add(pt)
         await db_session.commit()
 
+        # Add tag via API first (creates PdfTag association in same session)
+        initial = await client.post(
+            f"/v1/tags/pdfs/{pdf.id}/tags/{tag.id}",
+            headers=auth_headers,
+        )
+        assert initial.status_code == 200
+
+        # Second attempt should return 400 (already assigned)
         response = await client.post(
             f"/v1/tags/pdfs/{pdf.id}/tags/{tag.id}",
             headers=auth_headers,

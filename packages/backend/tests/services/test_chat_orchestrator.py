@@ -8,9 +8,7 @@ from app.services.chat_orchestrator import ChatOrchestrator, PreparedContext, Pr
 from app.services.exceptions import (
     EmbeddingError,
     IndexInProgressError,
-    IndexingError,
     LLMRateLimitError,
-    OpenRouterQuotaError,
 )
 
 TEST_EMBEDDING = [0.01] * 1024
@@ -294,51 +292,49 @@ class TestPrepareCollectionContext:
 
 class TestBuildMessages:
 
-    async def test_build_messages_with_pdf_context(
-        self, orchestrator, mock_chat
+    @pytest.mark.parametrize(
+        "collection_id,expected_base_prompt,history,paper_metadata",
+        [
+            pytest.param(
+                None, None,
+                [{"role": "user", "content": "previous"}],
+                {"title": "Test Paper"},
+                id="pdf_context_with_history",
+            ),
+            pytest.param(
+                uuid.uuid4(), "COLLECTION",
+                [],
+                [{"title": "Paper A"}, {"title": "Paper B"}],
+                id="collection_context_no_history",
+            ),
+            pytest.param(
+                None, None,
+                [],
+                None,
+                id="no_history_no_metadata",
+            ),
+        ],
+    )
+    async def test_build_messages_passes_base_prompt(
+        self, orchestrator, mock_chat, collection_id, expected_base_prompt, history, paper_metadata
     ):
-        result = await orchestrator.build_messages(
-            context="[Page 1] test chunk",
-            history=[{"role": "user", "content": "previous question"}],
-            user_message="another question",
-            collection_id=None,
-            paper_metadata={"title": "Test Paper"},
-        )
+        from app.services.chat_service import COLLECTION_SYSTEM_PROMPT
 
-        assert isinstance(result, PreparedMessages)
-        assert result.system_prompt == "system prompt"
-        assert len(result.messages) == 1
-        assert result.messages[0]["role"] == "user"
-        mock_chat.build_messages.assert_called_once()
-
-    async def test_build_messages_with_collection_context(
-        self, orchestrator, mock_chat
-    ):
-        result = await orchestrator.build_messages(
-            context="[Paper A, Page 1] content",
-            history=[],
-            user_message="question",
-            collection_id=uuid.uuid4(),
-            paper_metadata=[{"title": "Paper A"}, {"title": "Paper B"}],
-        )
-
-        assert isinstance(result, PreparedMessages)
-        # Should use COLLECTION_SYSTEM_PROMPT as base_prompt
-        mock_chat.build_messages.assert_called_once()
-
-    async def test_build_messages_no_history_or_metadata(
-        self, orchestrator, mock_chat
-    ):
         result = await orchestrator.build_messages(
             context="[Page 1] chunk",
-            history=[],
-            user_message="first question",
-            collection_id=None,
-            paper_metadata=None,
+            history=history,
+            user_message="question",
+            collection_id=collection_id,
+            paper_metadata=paper_metadata,
         )
 
         assert isinstance(result, PreparedMessages)
         mock_chat.build_messages.assert_called_once()
+        call_kwargs = mock_chat.build_messages.call_args[1]
+        if expected_base_prompt == "COLLECTION":
+            assert call_kwargs["base_prompt"] == COLLECTION_SYSTEM_PROMPT
+        else:
+            assert call_kwargs["base_prompt"] is None
 
 
 # ---------------------------------------------------------------------------

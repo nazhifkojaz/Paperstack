@@ -68,64 +68,39 @@ class TestExportAnnotatedPdf:
 
         assert result is not None
         assert len(result) > 0
-        assert result != minimal_pdf  # content should differ
-        assert result.startswith(b"%PDF")  # valid PDF header
+        assert result != minimal_pdf
+        assert result.startswith(b"%PDF")
 
-    def test_multiple_highlight_annotations(self, minimal_pdf):
-        annotations = [
-            {
-                "page_number": 1,
-                "type": "highlight",
-                "color": "#FFFF00",
-                "rects": [
+    @pytest.mark.parametrize(
+        "annotations",
+        [
+            pytest.param(
+                [{"page_number": 1, "type": "highlight", "color": "#FFFF00", "rects": [
                     {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.03},
                     {"x": 0.5, "y": 0.3, "w": 0.4, "h": 0.04},
-                ],
-            },
-        ]
-
-        result = export_annotated_pdf(minimal_pdf, annotations)
-        assert result.startswith(b"%PDF")
-
-    def test_rect_annotation(self, minimal_pdf):
-        annotations = [
-            {
-                "page_number": 1,
-                "type": "rect",
-                "color": "#0000FF",
-                "rects": [
+                ]}],
+                id="multiple_rects",
+            ),
+            pytest.param(
+                [{"page_number": 1, "type": "rect", "color": "#0000FF", "rects": [
                     {"x": 0.2, "y": 0.1, "w": 0.4, "h": 0.1},
-                ],
-            },
-        ]
-
-        result = export_annotated_pdf(minimal_pdf, annotations)
-        assert result.startswith(b"%PDF")
-
-    def test_annotations_default_color(self, minimal_pdf):
-        annotations = [
-            {
-                "page_number": 1,
-                "type": "highlight",
-                "rects": [
+                ]}],
+                id="rect_annotation",
+            ),
+            pytest.param(
+                [{"page_number": 1, "type": "highlight", "rects": [
                     {"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.05},
-                ],
-            },
-        ]
-
-        result = export_annotated_pdf(minimal_pdf, annotations)
-        assert result.startswith(b"%PDF")
-
-    def test_annotations_on_multiple_pages(self, minimal_pdf):
-        # Our minimal PDF only has 1 page, but annotations for page 2 should not crash
-        annotations = [
-            {
-                "page_number": 1,
-                "type": "highlight",
-                "color": "#00FF00",
-                "rects": [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.03}],
-            },
-        ]
-
+                ]}],
+                id="default_color",
+            ),
+            pytest.param(
+                [{"page_number": 1, "type": "highlight", "color": "#00FF00", "rects": [
+                    {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.03},
+                ]}],
+                id="single_page",
+            ),
+        ],
+    )
+    def test_annotation_variants_produce_valid_pdf(self, minimal_pdf, annotations):
         result = export_annotated_pdf(minimal_pdf, annotations)
         assert result.startswith(b"%PDF")

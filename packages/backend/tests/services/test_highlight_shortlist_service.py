@@ -169,3 +169,56 @@ class TestShortlistChunks:
         assert len(results) == 1
         assert set(results[0].categories) == {"findings", "methods", "background"}
         assert results[0].best_score == 0.80
+
+    async def test_custom_queries_appended_to_canned_query(self, shortlist_service, mock_db, mock_embedding):
+        pdf_id = str(uuid.uuid4())
+
+        with patch(
+            "app.services.highlight_shortlist_service.vector_search_service.search_pdf",
+            new_callable=AsyncMock,
+        ) as mock_search:
+            mock_search.return_value = []
+
+            await shortlist_service.shortlist_chunks(
+                pdf_id=pdf_id,
+                user_id=str(uuid.uuid4()),
+                categories=["findings"],
+                pages=[],
+                tier="quick",
+                db=mock_db,
+                custom_queries={"findings": "novel approaches to deep learning"},
+            )
+
+        call_args = mock_search.call_args_list[0]
+        assert "novel approaches to deep learning" in call_args.kwargs["query_text"]
+        assert "key findings" in call_args.kwargs["query_text"]
+
+    async def test_spanning_chunk_matches_page_range(self, shortlist_service, mock_db):
+        pdf_id = str(uuid.uuid4())
+        chunk_id = str(uuid.uuid4())
+
+        r = MagicMock()
+        r.chunk_id = chunk_id
+        r.page_number = 2
+        r.end_page_number = 4
+        r.content = "spanning content"
+        r.score = 0.80
+        r.section_title = None
+
+        with patch(
+            "app.services.highlight_shortlist_service.vector_search_service.search_pdf",
+            new_callable=AsyncMock,
+        ) as mock_search:
+            mock_search.return_value = [r]
+
+            results = await shortlist_service.shortlist_chunks(
+                pdf_id=pdf_id,
+                user_id=str(uuid.uuid4()),
+                categories=["findings"],
+                pages=[3],
+                tier="quick",
+                db=mock_db,
+            )
+
+        assert len(results) == 1
+        assert results[0].page_number == 2

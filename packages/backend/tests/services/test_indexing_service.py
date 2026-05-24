@@ -380,3 +380,126 @@ class TestIndexPdf:
             tmp_path.unlink(missing_ok=True)
 
         assert status.status == "failed"
+
+
+# ---------------------------------------------------------------------------
+# download_pdf_for_row
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadPdfForRow:
+
+    @staticmethod
+    def _make_pdf_row(source_url=None, github_sha=None, drive_file_id=None, filename="test.pdf"):
+        row = MagicMock()
+        row.source_url = source_url
+        row.github_sha = github_sha
+        row.drive_file_id = drive_file_id
+        row.filename = filename
+        return row
+
+    async def test_external_url_download(self, indexing_service, mock_db):
+        pdf_row = self._make_pdf_row(source_url="https://example.com/test.pdf")
+        user = MagicMock()
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp.write(b"pdf content")
+        tmp.close()
+        tmp_path = Path(tmp.name)
+
+        try:
+            result_mock = MagicMock()
+            result_mock.file_path = tmp_path
+            indexing_service.download_service.download_to_tempfile = AsyncMock(
+                return_value=result_mock
+            )
+
+            result = await indexing_service.download_pdf_for_row(pdf_row, user, mock_db)
+
+            assert result == tmp_path
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    async def test_stored_pdf_delegates_to_storage_backend(self, indexing_service, mock_db):
+        pdf_row = self._make_pdf_row(github_sha="abc123", filename="stored.pdf")
+        user = MagicMock()
+        user.id = uuid.uuid4()
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp.write(b"stored content")
+        tmp.close()
+        tmp_path = Path(tmp.name)
+
+        try:
+            with patch(
+                "app.services.indexing_service.get_storage_backend",
+                new_callable=AsyncMock,
+            ) as mock_get_backend:
+                mock_backend = MagicMock()
+                mock_backend.download_to_tempfile = AsyncMock(return_value=tmp_path)
+                mock_get_backend.return_value = mock_backend
+
+                result = await indexing_service.download_pdf_for_row(
+                    pdf_row, user, mock_db
+                )
+
+                assert result == tmp_path
+                mock_get_backend.assert_called_once()
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    async def test_download_failure_wraps_as_indexing_error(self, indexing_service, mock_db):
+        pdf_row = self._make_pdf_row(source_url="https://example.com/test.pdf")
+        user = MagicMock()
+
+        indexing_service.download_service.download_to_tempfile = AsyncMock(
+            side_effect=Exception("Network failure")
+        )
+
+        with pytest.raises(IndexingError, match="Failed to download PDF"):
+            await indexing_service.download_pdf_for_row(pdf_row, user, mock_db)
+
+
+# ---------------------------------------------------------------------------
+# index_pdf — unexpected exception
+# ---------------------------------------------------------------------------
+
+
+class TestIndexPdfUnexpectedError:
+
+    @staticmethod
+    def _setup_tmp_download(svc):
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp.write(b"dummy pdf content")
+        tmp.close()
+        tmp_path = Path(tmp.name)
+        result = MagicMock()
+        result.file_path = tmp_path
+        svc.download_service.download_to_tempfile = AsyncMock(return_value=result)
+        return tmp_path
+
+    async def test_unexpected_exception_sets_failed(self, indexing_service, mock_db):
+        pdf_row = MagicMock()
+        pdf_row.id = uuid.uuid4()
+        pdf_row.source_url = "https://example.com/test.pdf"
+        pdf_row.github_sha = None
+        pdf_row.drive_file_id = None
+        pdf_row.filename = "test.pdf"
+
+        user = MagicMock()
+        status = PdfIndexStatus(pdf_id="pdf-1", user_id="user-1", status="not_indexed")
+
+        tmp_path = self._setup_tmp_download(indexing_service)
+
+        try:
+            with patch(
+                "app.services.indexing_service.extract_text_with_pages",
+                side_effect=RuntimeError("Unexpected filesystem error"),
+            ):
+                with pytest.raises(IndexingError, match="Unexpected filesystem error"):
+                    await indexing_service.index_pdf(pdf_row, user, status, mock_db)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        assert status.status == "failed"
+        assert "Unexpected filesystem error" in status.error_message
