@@ -328,7 +328,7 @@ class LLMService:
         except LLMProviderError as e:
             if not reasoning_effort:
                 raise
-            if e.status_code not in (0, 524):
+            if e.status_code not in (0, 400, 422, 524):
                 raise
             logger.warning(
                 "OpenRouter reasoning call failed (status=%d), retrying without reasoning: %s",
