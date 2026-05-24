@@ -446,6 +446,142 @@ async def test_run_analysis_background_quick_success():
 
 
 @pytest.mark.asyncio
+async def test_run_analysis_background_thorough_combines_non_empty_reasoning_traces():
+    from app.api.routes.auto_highlight import _run_analysis_background
+
+    pdf_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    cache_id = uuid.uuid4()
+
+    mock_user = MagicMock()
+    mock_pdf = MagicMock()
+    mock_pdf.id = pdf_id
+    mock_pdf.title = "Test Paper"
+    mock_pdf.user_id = user_id
+
+    mock_cache = MagicMock()
+    mock_cache.id = cache_id
+    mock_cache.status = "pending"
+    mock_cache.annotation_set_id = None
+    mock_cache.progress_pct = 0
+    mock_cache.reasoning_trace = None
+
+    mock_idx_status = MagicMock()
+    mock_idx_status.status = "indexed"
+
+    shortlist = []
+    for i in range(11):
+        passage = MagicMock()
+        passage.content = f"batch {i + 1} source passage with an important finding"
+        passage.page_number = i + 1
+        passage.end_page_number = None
+        shortlist.append(passage)
+
+    with patch(
+        "app.api.routes.auto_highlight.SessionLocal"
+    ) as mock_sl, patch(
+        "app.api.routes.auto_highlight.IndexingService"
+    ) as mock_idx_cls, patch(
+        "app.api.routes.auto_highlight.LLMService"
+    ) as mock_llm_cls, patch(
+        "app.api.routes.auto_highlight.highlight_shortlist_service.shortlist_chunks",
+        new_callable=AsyncMock,
+    ) as mock_shortlist, patch(
+        "app.api.routes.auto_highlight._extract_abstract_text",
+        new_callable=AsyncMock,
+    ) as mock_extract_abstract:
+        mock_session = _mock_session()
+
+        def _execute_results(*args, **kwargs):
+            from sqlalchemy.sql.selectable import Select
+
+            stmt = args[0] if args else None
+            scalar_result = MagicMock()
+
+            if stmt is not None and isinstance(stmt, Select):
+                stmt_str = str(stmt)
+                if "users" in stmt_str:
+                    scalar_result.scalar_one_or_none = MagicMock(
+                        return_value=mock_user
+                    )
+                elif "pdfs" in stmt_str and "auto_highlight_cache" not in stmt_str:
+                    scalar_result.scalar_one_or_none = MagicMock(
+                        return_value=mock_pdf
+                    )
+                elif "auto_highlight_cache" in stmt_str:
+                    scalar_result.scalar_one_or_none = MagicMock(
+                        return_value=mock_cache
+                    )
+                    scalar_result.scalar_one = MagicMock(
+                        return_value=mock_cache
+                    )
+                else:
+                    scalar_result.scalar_one_or_none = MagicMock(return_value=None)
+                scalar_result.scalars = MagicMock()
+                scalar_result.scalars.return_value.all = MagicMock(return_value=[])
+
+            return scalar_result
+
+        mock_session.execute = AsyncMock(side_effect=_execute_results)
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        mock_idx_svc = MagicMock()
+        mock_idx_svc.get_or_create_status = AsyncMock(return_value=mock_idx_status)
+        mock_idx_svc.ensure_indexed = AsyncMock(return_value=mock_idx_status)
+        mock_idx_cls.return_value = mock_idx_svc
+
+        traces = ["trace one", "  ", "trace three"]
+        extract_calls = []
+        mock_llm_svc = MagicMock()
+
+        async def _extract(batch, *args, **kwargs):
+            idx = len(extract_calls)
+            extract_calls.append(batch)
+            mock_llm_svc.last_reasoning_trace = traces[idx]
+            return [
+                {
+                    "text": batch[0].content,
+                    "page": 1,
+                    "category": "findings",
+                    "reason": "Important result",
+                }
+            ]
+
+        mock_llm_svc.extract_highlights_from_passages = AsyncMock(
+            side_effect=_extract
+        )
+        mock_llm_svc.generate_paper_queries = AsyncMock(return_value=None)
+        mock_llm_svc.last_reasoning_trace = None
+        mock_llm_cls.return_value = mock_llm_svc
+
+        mock_shortlist.return_value = shortlist
+        mock_extract_abstract.return_value = (
+            "This abstract has enough content to trigger query generation."
+        )
+
+        await _run_analysis_background(
+            cache_id=cache_id,
+            pdf_id=pdf_id,
+            user_id=user_id,
+            categories=["findings"],
+            pages=[1, 2],
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            tier="thorough",
+            llm_client=MagicMock(),
+        )
+
+        assert len(extract_calls) == 3
+        assert mock_cache.status == "complete"
+        assert mock_cache.progress_pct == 100
+        assert mock_cache.reasoning_trace == (
+            "## Batch 1/3\ntrace one\n\n## Batch 3/3\ntrace three"
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_analysis_background_setup_failure_no_shortlist():
     from app.api.routes.auto_highlight import _run_analysis_background
 

@@ -181,6 +181,18 @@ def _validate_highlights_against_chunks(
     return valid
 
 
+def _combine_batch_reasoning_traces(
+    traces: list[tuple[int, int, str]],
+) -> str | None:
+    """Combine non-empty thorough-mode reasoning traces with batch headers."""
+    parts = []
+    for idx, total, trace in traces:
+        cleaned = trace.strip()
+        if cleaned:
+            parts.append(f"## Batch {idx}/{total}\n{cleaned}")
+    return "\n\n".join(parts) if parts else None
+
+
 async def _get_cache_row(
     db: AsyncSession,
     cache_id: uuid.UUID,
@@ -423,6 +435,7 @@ async def _run_analysis_background(
         ]
         total = len(batches)
         all_highlights = []
+        batch_reasoning_traces: list[tuple[int, int, str]] = []
 
         for idx, batch in enumerate(batches, 1):
             # LLM call — no DB session held
@@ -444,6 +457,11 @@ async def _run_analysis_background(
                 )
                 await _mark_cache_failed(cache_id, "LLM extraction failed")
                 return
+
+            if llm_svc.last_reasoning_trace:
+                batch_reasoning_traces.append(
+                    (idx, total, llm_svc.last_reasoning_trace)
+                )
 
             batch_highlights = _validate_highlights_against_chunks(
                 batch_highlights,
@@ -512,7 +530,9 @@ async def _run_analysis_background(
                     cache_row.status = "complete"
                     cache_row.progress_pct = 100
                     cache_row.llm_response = all_highlights
-                    cache_row.reasoning_trace = llm_svc.last_reasoning_trace
+                    cache_row.reasoning_trace = _combine_batch_reasoning_traces(
+                        batch_reasoning_traces
+                    )
                 await db.commit()
         except Exception:
             logger.exception(
