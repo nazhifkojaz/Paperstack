@@ -5,16 +5,18 @@ from dataclasses import dataclass
 import difflib
 import logging
 import re
+from time import perf_counter
 import unicodedata
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user, resolve_api_key_with_quota
-from app.services.exceptions import IndexingError
+from app.services.exceptions import IndexingError, LLMProviderError, LLMRateLimitError
 from app.core.config import settings
 from app.core.http_client import HTTPClientState
 from app.db.engine import SessionLocal
@@ -46,6 +48,87 @@ router = APIRouter()
 
 _MAX_PAGES = 100
 _BATCH_SIZE_THOROUGH = 5
+_LLM_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+_TRANSIENT_LLM_STATUS_CODES = {0, 408, 409, 425, 429, 500, 502, 503, 504, 524}
+
+
+async def _run_logged_step(
+    step: str,
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    tier: str,
+    operation,
+):
+    started = perf_counter()
+    log_context = {
+        "auto_highlight_step": step,
+        "cache_id": str(cache_id),
+        "pdf_id": str(pdf_id),
+        "user_id": str(user_id),
+        "tier": tier,
+    }
+    logger.info(
+        "Auto-highlight step started: step=%s cache_id=%s pdf_id=%s user_id=%s tier=%s",
+        step,
+        cache_id,
+        pdf_id,
+        user_id,
+        tier,
+        extra=log_context,
+    )
+    try:
+        result = await operation()
+    except Exception:
+        duration_ms = int((perf_counter() - started) * 1000)
+        logger.exception(
+            "Auto-highlight step failed: step=%s cache_id=%s duration_ms=%d",
+            step,
+            cache_id,
+            duration_ms,
+            extra={**log_context, "duration_ms": duration_ms},
+        )
+        raise
+
+    duration_ms = int((perf_counter() - started) * 1000)
+    logger.info(
+        "Auto-highlight step completed: step=%s cache_id=%s duration_ms=%d",
+        step,
+        cache_id,
+        duration_ms,
+        extra={**log_context, "duration_ms": duration_ms},
+    )
+    return result
+
+
+def _log_background_stop(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    tier: str,
+    run_started: float,
+    status: str,
+    reason: str,
+) -> None:
+    duration_ms = int((perf_counter() - run_started) * 1000)
+    logger.info(
+        "Background analysis stopped: cache_id=%s tier=%s status=%s "
+        "reason=%s duration_ms=%d",
+        cache_id,
+        tier,
+        status,
+        reason,
+        duration_ms,
+        extra={
+            "cache_id": str(cache_id),
+            "pdf_id": str(pdf_id),
+            "user_id": str(user_id),
+            "tier": tier,
+            "duration_ms": duration_ms,
+            "auto_highlight_status": status,
+            "stop_reason": reason,
+        },
+    )
 
 
 def _build_set_name(categories: list[str]) -> str:
@@ -316,11 +399,13 @@ async def _prepare_analysis_setup(
 ) -> _AnalysisSetup | None:
     try:
         return await _fetch_paper_content(pdf_id, user_id, categories, pages, tier)
-    except IndexingError:
+    except IndexingError as exc:
         logger.exception(
             "Setup phase failed (IndexingError): cache_id=%s",
             cache_id,
         )
+        await _mark_cache_failed(cache_id, str(exc))
+        return None
     except Exception:
         logger.exception("Setup phase failed: cache_id=%s", cache_id)
 
@@ -392,6 +477,35 @@ async def _augment_shortlist_with_custom_queries(
         return shortlist
 
 
+def _is_transient_llm_error(exc: Exception) -> bool:
+    if isinstance(exc, LLMRateLimitError):
+        return True
+    if isinstance(exc, LLMProviderError):
+        return exc.status_code in _TRANSIENT_LLM_STATUS_CODES
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    return False
+
+
+def _llm_user_error_message(exc: Exception) -> str:
+    if isinstance(exc, LLMRateLimitError):
+        return str(exc)
+    if isinstance(exc, LLMProviderError):
+        if exc.status_code in (401, 403):
+            return "LLM authentication failed. Check the configured API key."
+        if exc.status_code == 402:
+            return "LLM quota or billing is unavailable. Check the configured API key."
+        if exc.status_code == 429:
+            return "LLM rate limit exceeded. Please try again shortly."
+        if exc.status_code >= 500 or exc.status_code in (0, 408, 524):
+            return "LLM provider is temporarily unavailable. Please try again."
+    return "LLM extraction failed"
+
+
+def _passage_char_count(passages: list) -> int:
+    return sum(len(getattr(passage, "content", "")) for passage in passages)
+
+
 async def _run_llm_analysis(
     llm_svc: LLMService,
     passages: list,
@@ -403,25 +517,149 @@ async def _run_llm_analysis(
     label: str,
 ) -> list[dict] | None:
     """Run extraction for a passage batch and validate quotes against the source."""
-    try:
-        highlights = await llm_svc.extract_highlights_from_passages(
-            passages,
-            categories,
-            provider,
-            api_key,
-            model=model,
-            db=None,
-        )
-    except Exception:
-        logger.exception(
-            "LLM extraction failed (%s): cache_id=%s",
-            label,
-            cache_id,
-        )
-        await _mark_cache_failed(cache_id, "LLM extraction failed")
-        return None
+    max_attempts = len(_LLM_RETRY_DELAYS_SECONDS) + 1
+    started = perf_counter()
+    highlights = None
+    for attempt in range(1, max_attempts + 1):
+        attempt_started = perf_counter()
+        passage_chars = _passage_char_count(passages)
+        try:
+            logger.info(
+                "LLM extraction started: cache_id=%s label=%s attempt=%d/%d "
+                "provider=%s model=%s passages=%d chars=%d",
+                cache_id,
+                label,
+                attempt,
+                max_attempts,
+                provider,
+                model or "default",
+                len(passages),
+                passage_chars,
+                extra={
+                    "cache_id": str(cache_id),
+                    "auto_highlight_step": "llm_extract",
+                    "analysis_label": label,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "provider": provider,
+                    "model": model or "default",
+                    "passage_count": len(passages),
+                    "passage_chars": passage_chars,
+                },
+            )
+            highlights = await llm_svc.extract_highlights_from_passages(
+                passages,
+                categories,
+                provider,
+                api_key,
+                model=model,
+                db=None,
+            )
+            latency_ms = int((perf_counter() - attempt_started) * 1000)
+            reasoning_trace = llm_svc.last_reasoning_trace
+            reasoning_chars = (
+                len(reasoning_trace) if isinstance(reasoning_trace, str) else 0
+            )
+            logger.info(
+                "LLM extraction completed: cache_id=%s label=%s attempt=%d "
+                "latency_ms=%d highlights=%d reasoning_chars=%d",
+                cache_id,
+                label,
+                attempt,
+                latency_ms,
+                len(highlights),
+                reasoning_chars,
+                extra={
+                    "cache_id": str(cache_id),
+                    "auto_highlight_step": "llm_extract",
+                    "analysis_label": label,
+                    "attempt": attempt,
+                    "latency_ms": latency_ms,
+                    "provider": provider,
+                    "model": model or "default",
+                    "highlight_count": len(highlights),
+                    "reasoning_chars": reasoning_chars,
+                },
+            )
+            break
+        except Exception as exc:
+            latency_ms = int((perf_counter() - attempt_started) * 1000)
+            retryable = _is_transient_llm_error(exc)
+            if retryable and attempt < max_attempts:
+                delay = _LLM_RETRY_DELAYS_SECONDS[attempt - 1]
+                logger.warning(
+                    "Transient LLM extraction failure: cache_id=%s label=%s "
+                    "attempt=%d/%d latency_ms=%d retry_delay=%.1f error=%s",
+                    cache_id,
+                    label,
+                    attempt,
+                    max_attempts,
+                    latency_ms,
+                    delay,
+                    exc,
+                    extra={
+                        "cache_id": str(cache_id),
+                        "auto_highlight_step": "llm_extract",
+                        "analysis_label": label,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "latency_ms": latency_ms,
+                        "retry_delay_seconds": delay,
+                        "provider": provider,
+                        "model": model or "default",
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                await asyncio.sleep(delay)
+                continue
 
-    return _validate_highlights_against_chunks(highlights, passages)
+            logger.exception(
+                "LLM extraction failed: cache_id=%s label=%s attempt=%d/%d "
+                "latency_ms=%d retryable=%s",
+                cache_id,
+                label,
+                attempt,
+                max_attempts,
+                latency_ms,
+                retryable,
+                extra={
+                    "cache_id": str(cache_id),
+                    "auto_highlight_step": "llm_extract",
+                    "analysis_label": label,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "latency_ms": latency_ms,
+                    "provider": provider,
+                    "model": model or "default",
+                    "error_type": type(exc).__name__,
+                    "retryable": retryable,
+                },
+            )
+            await _mark_cache_failed(cache_id, _llm_user_error_message(exc))
+            return None
+
+    total_latency_ms = int((perf_counter() - started) * 1000)
+    valid_highlights = _validate_highlights_against_chunks(highlights or [], passages)
+    logger.info(
+        "LLM extraction validated: cache_id=%s label=%s latency_ms=%d "
+        "valid_highlights=%d raw_highlights=%d",
+        cache_id,
+        label,
+        total_latency_ms,
+        len(valid_highlights),
+        len(highlights or []),
+        extra={
+            "cache_id": str(cache_id),
+            "auto_highlight_step": "llm_extract_validate",
+            "analysis_label": label,
+            "latency_ms": total_latency_ms,
+            "valid_highlight_count": len(valid_highlights),
+            "raw_highlight_count": len(highlights or []),
+            "provider": provider,
+            "model": model or "default",
+        },
+    )
+    return valid_highlights
 
 
 def _build_auto_highlight_annotation_set(
@@ -790,11 +1028,12 @@ async def analyze_paper(
     pending_cache = existing_result.scalar_one_or_none()
 
     if pending_cache:
-        if pending_cache.status == "pending":
+        if pending_cache.status in {"pending", "running"}:
             raise HTTPException(status_code=409, detail="Analysis already in progress.")
         pending_cache.status = "pending"
         pending_cache.provider = provider
         pending_cache.llm_response = None
+        pending_cache.reasoning_trace = None
         pending_cache.annotation_set_id = None
         pending_cache.progress_pct = 0
         pending_cache.tier = data.tier

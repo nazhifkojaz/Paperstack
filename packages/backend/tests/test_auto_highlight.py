@@ -176,14 +176,18 @@ class TestAutoHighlightOpenRouterRateLimit:
             },
         ]
 
-        with patch(
-            "app.api.routes.auto_highlight.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.auto_highlight.LLMService",
-        ) as mock_llm_cls, patch(
-            "app.api.routes.auto_highlight.IndexingService",
-        ) as mock_idx_cls:
+        with (
+            patch(
+                "app.api.routes.auto_highlight.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.api.routes.auto_highlight.LLMService",
+            ) as mock_llm_cls,
+            patch(
+                "app.api.routes.auto_highlight.IndexingService",
+            ) as mock_idx_cls,
+        ):
             mock_resolve.return_value = MagicMock(
                 provider="anthropic",
                 api_key="user-own-key",
@@ -192,7 +196,9 @@ class TestAutoHighlightOpenRouterRateLimit:
             )
 
             mock_llm = MagicMock()
-            mock_llm.extract_highlights_from_passages = AsyncMock(return_value=mock_highlights)
+            mock_llm.extract_highlights_from_passages = AsyncMock(
+                return_value=mock_highlights
+            )
             mock_llm_cls.return_value = mock_llm
 
             mock_idx_svc = MagicMock()
@@ -217,7 +223,6 @@ class TestAutoHighlightOpenRouterRateLimit:
 
 
 class TestValidateHighlightsAgainstChunks:
-
     def test_exact_match_passes(self):
         from app.api.routes.auto_highlight import _validate_highlights_against_chunks
 
@@ -232,7 +237,9 @@ class TestValidateHighlightsAgainstChunks:
     def test_fuzzy_match_passes(self):
         from app.api.routes.auto_highlight import _validate_highlights_against_chunks
 
-        passages = [_Passage("  The algorithm  achieves\n95% accuracy on the   test set.  ")]
+        passages = [
+            _Passage("  The algorithm  achieves\n95% accuracy on the   test set.  ")
+        ]
         highlights = [{"text": "the algorithm achieves 95% accuracy on the test set."}]
 
         result = _validate_highlights_against_chunks(highlights, passages)
@@ -253,7 +260,9 @@ class TestValidateHighlightsAgainstChunks:
         from app.api.routes.auto_highlight import _validate_highlights_against_chunks
 
         passages = [_Passage("The results show significant improvement.")]
-        highlights = [{"text": "completely unrelated text that does not appear anywhere"}]
+        highlights = [
+            {"text": "completely unrelated text that does not appear anywhere"}
+        ]
 
         result = _validate_highlights_against_chunks(highlights, passages)
 
@@ -262,7 +271,9 @@ class TestValidateHighlightsAgainstChunks:
     def test_mixed_valid_and_invalid(self):
         from app.api.routes.auto_highlight import _validate_highlights_against_chunks
 
-        passages = [_Passage("The model achieves state-of-the-art performance on benchmark X.")]
+        passages = [
+            _Passage("The model achieves state-of-the-art performance on benchmark X.")
+        ]
         highlights = [
             {"text": "state-of-the-art performance on benchmark X"},
             {"text": "unrelated text not in passages"},
@@ -369,6 +380,85 @@ async def test_run_llm_analysis_marks_cache_failed_on_llm_error():
 
 
 @pytest.mark.asyncio
+async def test_run_llm_analysis_retries_transient_provider_error():
+    from app.api.routes.auto_highlight import _run_llm_analysis
+    from app.services.exceptions import LLMProviderError
+
+    cache_id = uuid.uuid4()
+    llm_svc = MagicMock()
+    llm_svc.last_reasoning_trace = None
+    llm_svc.extract_highlights_from_passages = AsyncMock(
+        side_effect=[
+            LLMProviderError("openrouter", 503, "temporarily unavailable"),
+            [
+                {
+                    "text": "the treatment reduced symptoms",
+                    "page": 1,
+                    "category": "findings",
+                    "reason": "Supported by the passage",
+                }
+            ],
+        ]
+    )
+
+    with patch("app.api.routes.auto_highlight.asyncio.sleep", new_callable=AsyncMock):
+        result = await _run_llm_analysis(
+            llm_svc,
+            [_Passage("In the trial, the treatment reduced symptoms.")],
+            ["findings"],
+            "openrouter",
+            "test-key",
+            None,
+            cache_id,
+            "quick",
+        )
+
+    assert result == [
+        {
+            "text": "the treatment reduced symptoms",
+            "page": 1,
+            "category": "findings",
+            "reason": "Supported by the passage",
+        }
+    ]
+    assert llm_svc.extract_highlights_from_passages.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_llm_analysis_does_not_retry_auth_error():
+    from app.api.routes.auto_highlight import _run_llm_analysis
+    from app.services.exceptions import LLMProviderError
+
+    cache_id = uuid.uuid4()
+    llm_svc = MagicMock()
+    llm_svc.extract_highlights_from_passages = AsyncMock(
+        side_effect=LLMProviderError("openrouter", 401, "invalid key")
+    )
+
+    with patch(
+        "app.api.routes.auto_highlight._mark_cache_failed",
+        new_callable=AsyncMock,
+    ) as mock_mark_failed:
+        result = await _run_llm_analysis(
+            llm_svc,
+            [_Passage("source passage")],
+            ["findings"],
+            "openrouter",
+            "test-key",
+            None,
+            cache_id,
+            "quick",
+        )
+
+    assert result is None
+    llm_svc.extract_highlights_from_passages.assert_awaited_once()
+    mock_mark_failed.assert_awaited_once_with(
+        cache_id,
+        "LLM authentication failed. Check the configured API key.",
+    )
+
+
+@pytest.mark.asyncio
 async def test_parse_and_store_results_no_highlights_marks_cache_failed():
     from app.api.routes.auto_highlight import _parse_and_store_results
 
@@ -379,10 +469,13 @@ async def test_parse_and_store_results_no_highlights_marks_cache_failed():
     cache_row.llm_response = None
     mock_session = _mock_session()
 
-    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl, patch(
-        "app.api.routes.auto_highlight._get_cache_row",
-        new_callable=AsyncMock,
-    ) as mock_get_cache_row:
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch(
+            "app.api.routes.auto_highlight._get_cache_row",
+            new_callable=AsyncMock,
+        ) as mock_get_cache_row,
+    ):
         mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
         mock_get_cache_row.return_value = cache_row
@@ -413,10 +506,13 @@ async def test_augment_shortlist_with_custom_queries_falls_back_to_original():
     original_shortlist = [_Passage("original shortlist passage")]
     mock_session = _mock_session()
 
-    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl, patch(
-        "app.api.routes.auto_highlight._chunk_for_analysis",
-        new_callable=AsyncMock,
-    ) as mock_chunk_for_analysis:
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch(
+            "app.api.routes.auto_highlight._chunk_for_analysis",
+            new_callable=AsyncMock,
+        ) as mock_chunk_for_analysis,
+    ):
         mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
         mock_chunk_for_analysis.return_value = []
@@ -450,6 +546,7 @@ def _mock_session(return_scalars=None):
     session.add = MagicMock(side_effect=_add_side_effect)
     session.flush = AsyncMock()
     session.commit = AsyncMock()
+    session.refresh = AsyncMock()
 
     if return_scalars is not None:
         scalar_result = MagicMock()
@@ -460,6 +557,147 @@ def _mock_session(return_scalars=None):
         session.execute = AsyncMock()
 
     return session
+
+
+@pytest.mark.asyncio
+async def test_mark_cache_running_updates_status():
+    from app.api.routes.auto_highlight import _mark_cache_running
+
+    cache_row = MagicMock()
+    cache_row.status = "pending"
+    cache_row.progress_pct = 0
+    mock_session = _mock_session(return_scalars=cache_row)
+
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        result = await _mark_cache_running(uuid.uuid4())
+
+    assert result is True
+    assert cache_row.status == "running"
+    assert cache_row.progress_pct == 1
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_cache_running_does_not_override_cancelled():
+    from app.api.routes.auto_highlight import _mark_cache_running
+
+    cache_row = MagicMock()
+    cache_row.status = "cancelled"
+    cache_row.progress_pct = 100
+    mock_session = _mock_session(return_scalars=cache_row)
+
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        result = await _mark_cache_running(uuid.uuid4())
+
+    assert result is False
+    assert cache_row.status == "cancelled"
+    mock_session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mark_cache_failed_stores_user_visible_error():
+    from app.api.routes.auto_highlight import _mark_cache_failed
+
+    cache_row = MagicMock()
+    cache_row.status = "running"
+    cache_row.progress_pct = 30
+    cache_row.llm_response = None
+    mock_session = _mock_session(return_scalars=cache_row)
+
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await _mark_cache_failed(uuid.uuid4(), "LLM provider is unavailable")
+
+    assert cache_row.status == "failed"
+    assert cache_row.progress_pct == 100
+    assert cache_row.llm_response == {"error": "LLM provider is unavailable"}
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_cache_failed_does_not_override_cancelled():
+    from app.api.routes.auto_highlight import _mark_cache_failed
+
+    cache_row = MagicMock()
+    cache_row.status = "cancelled"
+    cache_row.progress_pct = 100
+    cache_row.llm_response = {"error": "Analysis cancelled."}
+    mock_session = _mock_session(return_scalars=cache_row)
+
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await _mark_cache_failed(uuid.uuid4(), "Unexpected analysis failure")
+
+    assert cache_row.status == "cancelled"
+    assert cache_row.llm_response == {"error": "Analysis cancelled."}
+    mock_session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mark_cache_cancelled_updates_status():
+    from app.api.routes.auto_highlight import _mark_cache_cancelled
+
+    cache_row = MagicMock()
+    cache_row.id = uuid.uuid4()
+    cache_row.status = "running"
+    cache_row.progress_pct = 30
+    cache_row.llm_response = None
+    cache_row.annotation_set_id = uuid.uuid4()
+    mock_session = _mock_session(return_scalars=cache_row)
+
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        result = await _mark_cache_cancelled(cache_row.id)
+
+    assert result == cache_row
+    assert cache_row.status == "cancelled"
+    assert cache_row.progress_pct == 100
+    assert cache_row.llm_response == {"error": "Analysis cancelled."}
+    assert cache_row.annotation_set_id is None
+    mock_session.commit.assert_awaited_once()
+    mock_session.refresh.assert_awaited_once_with(cache_row)
+
+
+@pytest.mark.asyncio
+async def test_run_quick_analysis_stops_before_llm_when_cancelled():
+    from app.api.routes.auto_highlight import _run_quick_analysis
+
+    cache_id = uuid.uuid4()
+    llm_svc = MagicMock()
+    llm_svc.extract_highlights_from_passages = AsyncMock(return_value=[])
+
+    with patch(
+        "app.api.routes.auto_highlight._is_cache_cancelled",
+        new_callable=AsyncMock,
+    ) as mock_is_cancelled:
+        mock_is_cancelled.return_value = True
+
+        result = await _run_quick_analysis(
+            cache_id=cache_id,
+            pdf_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            categories=["findings"],
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            llm_svc=llm_svc,
+            shortlist=[_Passage("source passage")],
+        )
+
+    assert result is False
+    llm_svc.extract_highlights_from_passages.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -497,19 +735,19 @@ async def test_run_analysis_background_quick_success():
         "reason": "Important result",
     }
 
-    with patch(
-        "app.api.routes.auto_highlight.SessionLocal"
-    ) as mock_sl, patch(
-        "app.api.routes.auto_highlight.IndexingService"
-    ) as mock_idx_cls, patch(
-        "app.api.routes.auto_highlight.LLMService"
-    ) as mock_llm_cls, patch(
-        "app.api.routes.auto_highlight.highlight_shortlist_service.shortlist_chunks",
-        new_callable=AsyncMock,
-    ) as mock_shortlist, patch(
-        "app.api.routes.auto_highlight._extract_abstract_text",
-        new_callable=AsyncMock,
-    ) as mock_extract_abstract:
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch("app.api.routes.auto_highlight.IndexingService") as mock_idx_cls,
+        patch("app.api.routes.auto_highlight.LLMService") as mock_llm_cls,
+        patch(
+            "app.api.routes.auto_highlight.highlight_shortlist_service.shortlist_chunks",
+            new_callable=AsyncMock,
+        ) as mock_shortlist,
+        patch(
+            "app.api.routes.auto_highlight._extract_abstract_text",
+            new_callable=AsyncMock,
+        ) as mock_extract_abstract,
+    ):
         mock_session = _mock_session()
 
         def _execute_results(*args, **kwargs):
@@ -521,25 +759,17 @@ async def test_run_analysis_background_quick_success():
             if stmt is not None and isinstance(stmt, Select):
                 stmt_str = str(stmt)
                 if "users" in stmt_str:
-                    scalar_result.scalar_one_or_none = MagicMock(
-                        return_value=mock_user
-                    )
+                    scalar_result.scalar_one_or_none = MagicMock(return_value=mock_user)
                 elif "pdfs" in stmt_str and "auto_highlight_cache" not in stmt_str:
-                    scalar_result.scalar_one_or_none = MagicMock(
-                        return_value=mock_pdf
-                    )
+                    scalar_result.scalar_one_or_none = MagicMock(return_value=mock_pdf)
                 elif "chunks" in stmt_str:
                     scalar_result.scalars = MagicMock()
-                    scalar_result.scalars.return_value.all = MagicMock(
-                        return_value=[]
-                    )
+                    scalar_result.scalars.return_value.all = MagicMock(return_value=[])
                 elif "auto_highlight_cache" in stmt_str:
                     scalar_result.scalar_one_or_none = MagicMock(
                         return_value=mock_cache
                     )
-                    scalar_result.scalar_one = MagicMock(
-                        return_value=mock_cache
-                    )
+                    scalar_result.scalar_one = MagicMock(return_value=mock_cache)
                 else:
                     scalar_result.scalar_one_or_none = MagicMock(return_value=None)
                 scalar_result.scalars = MagicMock()
@@ -623,19 +853,19 @@ async def test_run_analysis_background_thorough_combines_non_empty_reasoning_tra
         passage.end_page_number = None
         shortlist.append(passage)
 
-    with patch(
-        "app.api.routes.auto_highlight.SessionLocal"
-    ) as mock_sl, patch(
-        "app.api.routes.auto_highlight.IndexingService"
-    ) as mock_idx_cls, patch(
-        "app.api.routes.auto_highlight.LLMService"
-    ) as mock_llm_cls, patch(
-        "app.api.routes.auto_highlight.highlight_shortlist_service.shortlist_chunks",
-        new_callable=AsyncMock,
-    ) as mock_shortlist, patch(
-        "app.api.routes.auto_highlight._extract_abstract_text",
-        new_callable=AsyncMock,
-    ) as mock_extract_abstract:
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch("app.api.routes.auto_highlight.IndexingService") as mock_idx_cls,
+        patch("app.api.routes.auto_highlight.LLMService") as mock_llm_cls,
+        patch(
+            "app.api.routes.auto_highlight.highlight_shortlist_service.shortlist_chunks",
+            new_callable=AsyncMock,
+        ) as mock_shortlist,
+        patch(
+            "app.api.routes.auto_highlight._extract_abstract_text",
+            new_callable=AsyncMock,
+        ) as mock_extract_abstract,
+    ):
         mock_session = _mock_session()
 
         def _execute_results(*args, **kwargs):
@@ -647,20 +877,14 @@ async def test_run_analysis_background_thorough_combines_non_empty_reasoning_tra
             if stmt is not None and isinstance(stmt, Select):
                 stmt_str = str(stmt)
                 if "users" in stmt_str:
-                    scalar_result.scalar_one_or_none = MagicMock(
-                        return_value=mock_user
-                    )
+                    scalar_result.scalar_one_or_none = MagicMock(return_value=mock_user)
                 elif "pdfs" in stmt_str and "auto_highlight_cache" not in stmt_str:
-                    scalar_result.scalar_one_or_none = MagicMock(
-                        return_value=mock_pdf
-                    )
+                    scalar_result.scalar_one_or_none = MagicMock(return_value=mock_pdf)
                 elif "auto_highlight_cache" in stmt_str:
                     scalar_result.scalar_one_or_none = MagicMock(
                         return_value=mock_cache
                     )
-                    scalar_result.scalar_one = MagicMock(
-                        return_value=mock_cache
-                    )
+                    scalar_result.scalar_one = MagicMock(return_value=mock_cache)
                 else:
                     scalar_result.scalar_one_or_none = MagicMock(return_value=None)
                 scalar_result.scalars = MagicMock()
@@ -694,9 +918,7 @@ async def test_run_analysis_background_thorough_combines_non_empty_reasoning_tra
                 }
             ]
 
-        mock_llm_svc.extract_highlights_from_passages = AsyncMock(
-            side_effect=_extract
-        )
+        mock_llm_svc.extract_highlights_from_passages = AsyncMock(side_effect=_extract)
         mock_llm_svc.generate_paper_queries = AsyncMock(return_value=None)
         mock_llm_svc.last_reasoning_trace = None
         mock_llm_cls.return_value = mock_llm_svc
@@ -740,23 +962,30 @@ async def test_run_analysis_background_setup_failure_no_shortlist():
     mock_pdf.id = pdf_id
     mock_pdf.title = "Test Paper"
 
+    mock_cache = MagicMock()
+    mock_cache.id = cache_id
+    mock_cache.status = "pending"
+    mock_cache.progress_pct = 0
+
     mock_idx_status = MagicMock()
     mock_idx_status.status = "not_indexed"
 
-    with patch(
-        "app.api.routes.auto_highlight.SessionLocal"
-    ) as mock_sl, patch(
-        "app.api.routes.auto_highlight.IndexingService"
-    ) as mock_idx_cls, patch(
-        "app.api.routes.auto_highlight.highlight_shortlist_service.shortlist_chunks",
-        new_callable=AsyncMock,
-    ) as mock_shortlist, patch(
-        "app.api.routes.auto_highlight._extract_abstract_text",
-        new_callable=AsyncMock,
-    ) as mock_extract_abstract, patch(
-        "app.api.routes.auto_highlight._mark_cache_failed",
-        new_callable=AsyncMock,
-    ) as mock_mark_failed:
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch("app.api.routes.auto_highlight.IndexingService") as mock_idx_cls,
+        patch(
+            "app.api.routes.auto_highlight.highlight_shortlist_service.shortlist_chunks",
+            new_callable=AsyncMock,
+        ) as mock_shortlist,
+        patch(
+            "app.api.routes.auto_highlight._extract_abstract_text",
+            new_callable=AsyncMock,
+        ) as mock_extract_abstract,
+        patch(
+            "app.api.routes.auto_highlight._mark_cache_failed",
+            new_callable=AsyncMock,
+        ) as mock_mark_failed,
+    ):
         mock_session = _mock_session()
 
         def _execute_results(*args, **kwargs):
@@ -768,12 +997,12 @@ async def test_run_analysis_background_setup_failure_no_shortlist():
             if stmt is not None and isinstance(stmt, Select):
                 stmt_str = str(stmt)
                 if "users" in stmt_str:
-                    scalar_result.scalar_one_or_none = MagicMock(
-                        return_value=mock_user
-                    )
+                    scalar_result.scalar_one_or_none = MagicMock(return_value=mock_user)
                 elif "pdfs" in stmt_str:
+                    scalar_result.scalar_one_or_none = MagicMock(return_value=mock_pdf)
+                elif "auto_highlight_cache" in stmt_str:
                     scalar_result.scalar_one_or_none = MagicMock(
-                        return_value=mock_pdf
+                        return_value=mock_cache
                     )
                 elif "chunks" in stmt_str:
                     scalar_result.scalars = MagicMock()

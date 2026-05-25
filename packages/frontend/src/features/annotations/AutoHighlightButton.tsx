@@ -14,9 +14,12 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
     const [showCategoryDialog, setShowCategoryDialog] = useState(false);
     const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
     const [activeCacheId, setActiveCacheId] = useState<string | null>(null);
+    const activeCacheIdRef = useRef<string | null>(null);
+    const activeStatusRef = useRef<string | null>(null);
     const notifiedRef = useRef<string | null>(null);
     const lastProgressRef = useRef<number>(0);
     const { data: quota } = useAutoHighlightQuota();
+    const cancelMutation = useCancelAnalysis();
     const queryClient = useQueryClient();
 
     const canAnalyze = quota?.has_own_key || (quota?.free_uses_remaining ?? 0) > 0;
@@ -25,8 +28,25 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
     const { data: statusData } = useAnalysisStatus(activeCacheId);
 
     // Derive "is analyzing" from state + query data (no setState in effect needed)
-    const isAnalyzing = activeCacheId !== null && (!statusData || statusData.status === 'pending');
+    const isAnalyzing =
+        activeCacheId !== null &&
+        (!statusData || statusData.status === 'pending' || statusData.status === 'running');
     const progressPct = statusData?.progress_pct ?? 0;
+
+    useEffect(() => {
+        activeCacheIdRef.current = activeCacheId;
+        activeStatusRef.current = statusData?.status ?? null;
+    }, [activeCacheId, statusData?.status]);
+
+    useEffect(() => {
+        return () => {
+            const cacheId = activeCacheIdRef.current;
+            const status = activeStatusRef.current;
+            if (cacheId && (!status || status === 'pending' || status === 'running')) {
+                void cancelAnalysis(cacheId).catch(() => undefined);
+            }
+        };
+    }, []);
 
     // Progressive invalidation: when progress_pct increases in thorough mode, invalidate annotations
     useEffect(() => {

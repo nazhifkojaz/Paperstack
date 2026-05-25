@@ -349,6 +349,14 @@ class AutoHighlightCache(Base):
         DateTime(timezone=True), server_default=text("now()")
     )
 
+    @property
+    def error_message(self) -> Optional[str]:
+        if isinstance(self.llm_response, dict):
+            error = self.llm_response.get("error")
+            if isinstance(error, str):
+                return error
+        return None
+
 
 class UserUsageQuota(Base):
     __tablename__ = "user_usage_quotas"

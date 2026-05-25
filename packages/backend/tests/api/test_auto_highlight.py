@@ -62,7 +62,6 @@ def _make_create_task_stub(real_create_task):
 
 
 class TestAutoHighlightQuota:
-
     async def test_quota_returns_default_free_uses(
         self, client: AsyncClient, auth_headers
     ):
@@ -79,7 +78,6 @@ class TestAutoHighlightQuota:
 
 
 class TestAutoHighlightAnalyze:
-
     async def test_analyze_no_api_key_no_quota_returns_402(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
@@ -155,12 +153,15 @@ class TestAutoHighlightAnalyze:
         await db_session.commit()
         create_task_stub = _make_create_task_stub(asyncio.create_task)
 
-        with patch(
-            "app.api.routes.auto_highlight.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.auto_highlight.asyncio.create_task"
-        ) as mock_create_task:
+        with (
+            patch(
+                "app.api.routes.auto_highlight.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.api.routes.auto_highlight.asyncio.create_task"
+            ) as mock_create_task,
+        ):
             mock_resolve.return_value = _make_analyze_resolution()
             mock_create_task.side_effect = create_task_stub
 
@@ -185,9 +186,7 @@ class TestAutoHighlightAnalyze:
         from sqlalchemy import select
 
         result = await db_session.execute(
-            select(AutoHighlightCache).where(
-                AutoHighlightCache.id == data["cache_id"]
-            )
+            select(AutoHighlightCache).where(AutoHighlightCache.id == data["cache_id"])
         )
         cache = result.scalar_one_or_none()
         assert cache is not None
@@ -237,6 +236,47 @@ class TestAutoHighlightAnalyze:
 
         assert response.status_code == 409
 
+    async def test_analyze_running_cache_returns_409(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ):
+        _setup_http_mocks()
+
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Test", filename="test.pdf"
+        )
+        await db_session.commit()
+
+        from app.db.models import AutoHighlightCache
+
+        cache = AutoHighlightCache(
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            categories=["findings"],
+            pages=[1, 2],
+            status="running",
+        )
+        db_session.add(cache)
+        await db_session.commit()
+
+        with patch(
+            "app.api.routes.auto_highlight.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
+        ) as mock_resolve:
+            mock_resolve.return_value = _make_analyze_resolution()
+
+            response = await client.post(
+                "/v1/auto-highlight/analyze",
+                json={
+                    "pdf_id": str(pdf.id),
+                    "categories": ["findings"],
+                    "pages": [1, 2],
+                    "tier": "quick",
+                },
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 409
+
     async def test_analyze_failed_cache_is_reset(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
@@ -261,12 +301,15 @@ class TestAutoHighlightAnalyze:
         await db_session.commit()
         create_task_stub = _make_create_task_stub(asyncio.create_task)
 
-        with patch(
-            "app.api.routes.auto_highlight.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.auto_highlight.asyncio.create_task"
-        ) as mock_create_task:
+        with (
+            patch(
+                "app.api.routes.auto_highlight.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.api.routes.auto_highlight.asyncio.create_task"
+            ) as mock_create_task,
+        ):
             mock_resolve.return_value = _make_analyze_resolution()
             mock_create_task.side_effect = create_task_stub
 
@@ -327,11 +370,8 @@ class TestAutoHighlightAnalyze:
 
 
 class TestAutoHighlightCache:
-
     async def test_cache_requires_auth(self, client: AsyncClient):
-        response = await client.get(
-            f"/v1/auto-highlight/cache/{uuid.uuid4()}"
-        )
+        response = await client.get(f"/v1/auto-highlight/cache/{uuid.uuid4()}")
         assert response.status_code == 401
 
     async def test_cache_empty_for_nonexistent_pdf(
@@ -346,9 +386,7 @@ class TestAutoHighlightCache:
         assert response.json() == []
 
     async def test_delete_cache_requires_auth(self, client: AsyncClient):
-        response = await client.delete(
-            f"/v1/auto-highlight/cache/{uuid.uuid4()}"
-        )
+        response = await client.delete(f"/v1/auto-highlight/cache/{uuid.uuid4()}")
         assert response.status_code == 401
 
     async def test_get_cache_entry_success(
