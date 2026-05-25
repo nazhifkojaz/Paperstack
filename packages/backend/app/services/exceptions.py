@@ -100,15 +100,6 @@ class InvalidPdfSourceError(PdfDownloadError):
     pass
 
 
-class GoogleDriveError(PdfDownloadError):
-
-    def __init__(self, status_code: int | None = None, detail: str = ""):
-        self.status_code = status_code
-        detail_msg = f": {detail}" if detail else ""
-        status_msg = f" (HTTP {status_code})" if status_code else ""
-        super().__init__(f"Google Drive API error{status_msg}{detail_msg}")
-
-
 # Indexing Service Exceptions
 
 class TextExtractionError(IndexingError):
