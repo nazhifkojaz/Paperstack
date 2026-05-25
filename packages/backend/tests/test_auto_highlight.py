@@ -290,6 +290,152 @@ class TestValidateHighlightsAgainstChunks:
 
 
 # ---------------------------------------------------------------------------
+# Extracted auto-highlight pipeline steps
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_llm_analysis_filters_hallucinated_highlights():
+    from app.api.routes.auto_highlight import _run_llm_analysis
+
+    cache_id = uuid.uuid4()
+    llm_svc = MagicMock()
+    llm_svc.extract_highlights_from_passages = AsyncMock(
+        return_value=[
+            {
+                "text": "the model improves accuracy by 20 percent",
+                "page": 1,
+                "category": "findings",
+                "reason": "Supported by the passage",
+            },
+            {
+                "text": "a hallucinated claim that is not in the source passage",
+                "page": 1,
+                "category": "findings",
+                "reason": "Unsupported",
+            },
+        ]
+    )
+
+    result = await _run_llm_analysis(
+        llm_svc,
+        [_Passage("The paper says the model improves accuracy by 20 percent.")],
+        ["findings"],
+        "openrouter",
+        "test-key",
+        None,
+        cache_id,
+        "quick",
+    )
+
+    assert result == [
+        {
+            "text": "the model improves accuracy by 20 percent",
+            "page": 1,
+            "category": "findings",
+            "reason": "Supported by the passage",
+        }
+    ]
+    llm_svc.extract_highlights_from_passages.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_llm_analysis_marks_cache_failed_on_llm_error():
+    from app.api.routes.auto_highlight import _run_llm_analysis
+
+    cache_id = uuid.uuid4()
+    llm_svc = MagicMock()
+    llm_svc.extract_highlights_from_passages = AsyncMock(
+        side_effect=RuntimeError("LLM unavailable")
+    )
+
+    with patch(
+        "app.api.routes.auto_highlight._mark_cache_failed",
+        new_callable=AsyncMock,
+    ) as mock_mark_failed:
+        result = await _run_llm_analysis(
+            llm_svc,
+            [_Passage("source passage")],
+            ["findings"],
+            "openrouter",
+            "test-key",
+            None,
+            cache_id,
+            "quick",
+        )
+
+    assert result is None
+    mock_mark_failed.assert_awaited_once_with(cache_id, "LLM extraction failed")
+
+
+@pytest.mark.asyncio
+async def test_parse_and_store_results_no_highlights_marks_cache_failed():
+    from app.api.routes.auto_highlight import _parse_and_store_results
+
+    cache_id = uuid.uuid4()
+    cache_row = MagicMock()
+    cache_row.status = "pending"
+    cache_row.progress_pct = 0
+    cache_row.llm_response = None
+    mock_session = _mock_session()
+
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl, patch(
+        "app.api.routes.auto_highlight._get_cache_row",
+        new_callable=AsyncMock,
+    ) as mock_get_cache_row:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_cache_row.return_value = cache_row
+
+        result = await _parse_and_store_results(
+            cache_id=cache_id,
+            pdf_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            categories=["findings"],
+            highlights=[],
+            reasoning_trace=None,
+        )
+
+    assert result is False
+    assert cache_row.status == "failed"
+    assert cache_row.progress_pct == 100
+    assert cache_row.llm_response == {
+        "error": "No highlight-worthy passages found. "
+        "Try a wider page range or different categories.",
+    }
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_augment_shortlist_with_custom_queries_falls_back_to_original():
+    from app.api.routes.auto_highlight import _augment_shortlist_with_custom_queries
+
+    original_shortlist = [_Passage("original shortlist passage")]
+    mock_session = _mock_session()
+
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl, patch(
+        "app.api.routes.auto_highlight._chunk_for_analysis",
+        new_callable=AsyncMock,
+    ) as mock_chunk_for_analysis:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_chunk_for_analysis.return_value = []
+
+        result = await _augment_shortlist_with_custom_queries(
+            pdf_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            categories=["findings"],
+            pages=[1, 2],
+            tier="quick",
+            shortlist=original_shortlist,
+            custom_queries={"findings": "paper-specific findings query"},
+        )
+
+    assert result == original_shortlist
+    mock_chunk_for_analysis.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # _run_analysis_background
 # ---------------------------------------------------------------------------
 

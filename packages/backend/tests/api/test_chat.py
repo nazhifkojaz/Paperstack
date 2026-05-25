@@ -88,6 +88,7 @@ def _stream_patches(mocks, *, with_chat=True, with_llm=True):
     patches = [
         patch("app.api.routes.chat.EmbeddingService", return_value=mocks["embedding"]),
         patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]),
+        patch("app.services.chat_orchestrator.get_indexing_service", return_value=mocks["indexing"]),
     ]
     if with_llm:
         patches.append(patch("app.api.routes.chat.LLMService", return_value=mocks["llm"]))
@@ -516,6 +517,115 @@ class TestStreamMessage:
                 )
                 assert response.status_code == 200
                 assert "text/event-stream" in response.headers.get("content-type", "")
+
+    async def test_stream_message_persists_user_and_assistant_with_context_chunks(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Successful streaming persists both messages and assistant citations."""
+        _setup_stream_mocks()
+
+        from contextlib import ExitStack
+        from sqlalchemy import select
+        from app.db.models import ChatMessage, Citation
+
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="Citation Backed Paper",
+            filename="citation-backed.pdf",
+            github_sha="sha_citation_backed",
+        )
+        db_session.add(
+            Citation(
+                pdf_id=pdf.id,
+                user_id=test_user.id,
+                bibtex="@article{paper2024}",
+                authors="Ada Lovelace and Grace Hopper",
+                year=2024,
+            )
+        )
+        await db_session.commit()
+
+        conv_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"pdf_id": str(pdf.id)},
+            headers=auth_headers,
+        )
+        conv_id = conv_resp.json()["id"]
+
+        async def mock_stream_reply(*args, **kwargs):
+            yield "Answer "
+            yield "with citation."
+
+        chunk = MagicMock()
+        chunk.chunk_id = "chunk-1"
+        chunk.page_number = 2
+        chunk.end_page_number = 3
+        chunk.content = "This source passage supports the answer."
+        chunk.section_title = "Results"
+        chunk.section_level = 1
+        chunk.pdf_id = None
+        chunk.pdf_title = None
+
+        mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
+        mocks["chat"].build_context.return_value = "[Page 2]\nThis source passage supports the answer."
+
+        with patch(
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
+        ) as mock_resolve, patch(
+            "app.services.chat_orchestrator.vector_search_service.search_pdf",
+            new_callable=AsyncMock,
+        ) as mock_search_pdf:
+            mock_resolve.return_value = MagicMock(
+                provider="gemini",
+                api_key="fake-key",
+                model=None,
+                is_in_house=True,
+                quota_remaining=10,
+            )
+            mock_search_pdf.return_value = [chunk]
+
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
+                response = await client.post(
+                    f"/v1/chat/conversations/{conv_id}/stream",
+                    json={"content": "What did the paper find?"},
+                    headers=auth_headers,
+                )
+
+        assert response.status_code == 200
+        assert "Answer " in response.text
+        assert "with citation." in response.text
+        mocks["chat"].build_messages.assert_called_once()
+        assert mocks["chat"].build_messages.call_args.kwargs["paper_metadata"] == {
+            "title": "Citation Backed Paper",
+            "authors": "Ada Lovelace and Grace Hopper",
+            "year": 2024,
+        }
+
+        result = await db_session.execute(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conv_id)
+            .order_by(ChatMessage.created_at.asc())
+        )
+        messages = result.scalars().all()
+
+        assert [(message.role, message.content) for message in messages] == [
+            ("user", "What did the paper find?"),
+            ("assistant", "Answer with citation."),
+        ]
+        assert messages[1].context_chunks == [
+            {
+                "chunk_id": "chunk-1",
+                "page_number": 2,
+                "end_page_number": 3,
+                "snippet": "This source passage supports the answer.",
+                "section_title": "Results",
+                "section_level": 1,
+            }
+        ]
 
     # --- OpenRouter 429 handling -------------------------------------------------
 
