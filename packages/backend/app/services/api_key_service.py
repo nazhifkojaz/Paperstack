@@ -286,46 +286,6 @@ class ApiKeyService:
 
         return quota_row
 
-    async def decrement_quota(
-        self,
-        user_id: str,
-        quota_type: QuotaType,
-        db: AsyncSession,
-    ) -> int:
-        """Decrement a quota field and return the new value.
-
-        Args:
-            user_id: The user's ID
-            quota_type: Which quota to decrement
-            db: Database session (will be committed by caller)
-
-        Returns:
-            The updated quota value (0 if exhausted), or -1 if quota row doesn't exist
-
-        Note:
-            This should be called AFTER the API call succeeds for non-streaming.
-            For streaming, call it BEFORE starting the stream (optimistic decrement).
-        """
-        result = await db.execute(
-            select(UserUsageQuota).where(UserUsageQuota.user_id == user_id)
-        )
-        quota_row = result.scalar_one_or_none()
-
-        if quota_row:
-            quota_field = quota_type.value
-            current_value = getattr(quota_row, quota_field, 0)
-            new_value = max(0, current_value - 1)
-            setattr(quota_row, quota_field, new_value)
-            logger.info(
-                "Decremented %s for user %s: %d -> %d",
-                quota_field,
-                user_id,
-                current_value,
-                new_value,
-            )
-            return new_value
-
-        return -1
 
 
 # Singleton instance for use in routes
