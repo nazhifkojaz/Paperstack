@@ -1,6 +1,7 @@
 """Auto-highlight routes: retrieve-then-extract paper analysis."""
 
 import asyncio
+from dataclasses import dataclass
 import difflib
 import logging
 import re
@@ -224,6 +225,448 @@ async def _mark_cache_failed(cache_id: uuid.UUID, error_msg: str) -> None:
         )
 
 
+@dataclass(slots=True)
+class _AnalysisSetup:
+    pdf_title: str
+    abstract_text: str
+    shortlist: list
+
+
+async def _chunk_for_analysis(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    tier: str,
+    db: AsyncSession,
+    custom_queries: dict[str, str] | None = None,
+) -> list:
+    """Return candidate chunks for LLM analysis."""
+    return await highlight_shortlist_service.shortlist_chunks(
+        pdf_id=str(pdf_id),
+        user_id=str(user_id),
+        categories=categories,
+        pages=pages,
+        tier=tier,
+        db=db,
+        custom_queries=custom_queries,
+    )
+
+
+async def _fetch_paper_content(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    tier: str,
+) -> _AnalysisSetup:
+    """Validate the paper, ensure indexing, and gather text for analysis."""
+    async with SessionLocal() as db:
+        user_result = await db.execute(select(User).where(User.id == user_id))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise IndexingError("User not found.")
+
+        pdf_result = await db.execute(
+            select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == user_id)
+        )
+        pdf_row = pdf_result.scalar_one_or_none()
+        if not pdf_row:
+            raise IndexingError("PDF not found.")
+
+        idx_service = IndexingService(download_service=pdf_download_service)
+        idx_status = await idx_service.get_or_create_status(
+            str(pdf_id),
+            str(user_id),
+            db,
+        )
+        await db.commit()
+        await idx_service.ensure_indexed(pdf_row, user, idx_status, db)
+        await db.commit()
+
+        abstract_text = await _extract_abstract_text(pdf_id, user_id, db)
+        shortlist = await _chunk_for_analysis(
+            pdf_id,
+            user_id,
+            categories,
+            pages,
+            tier,
+            db,
+        )
+        if not shortlist:
+            raise IndexingError(
+                "No indexed text found for the selected pages. "
+                "Make sure the PDF is indexed and the pages contain text."
+            )
+
+        return _AnalysisSetup(
+            pdf_title=pdf_row.title,
+            abstract_text=abstract_text,
+            shortlist=shortlist,
+        )
+
+
+async def _prepare_analysis_setup(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    tier: str,
+) -> _AnalysisSetup | None:
+    try:
+        return await _fetch_paper_content(pdf_id, user_id, categories, pages, tier)
+    except IndexingError:
+        logger.exception(
+            "Setup phase failed (IndexingError): cache_id=%s",
+            cache_id,
+        )
+    except Exception:
+        logger.exception("Setup phase failed: cache_id=%s", cache_id)
+
+    await _mark_cache_failed(cache_id, "Setup failed")
+    return None
+
+
+async def _generate_custom_queries(
+    llm_svc: LLMService,
+    setup: _AnalysisSetup,
+    categories: list[str],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+) -> dict[str, str] | None:
+    """Ask the LLM for paper-specific retrieval queries when enough context exists."""
+    if not setup.pdf_title or len(setup.abstract_text) < 50:
+        return None
+
+    try:
+        custom_queries = await llm_svc.generate_paper_queries(
+            title=setup.pdf_title,
+            abstract=setup.abstract_text,
+            categories=categories,
+            provider=provider,
+            api_key=api_key,
+            model=model,
+        )
+        if custom_queries:
+            logger.info(
+                "Generated paper-specific queries for %d categories",
+                len(custom_queries),
+            )
+        return custom_queries
+    except Exception:
+        logger.exception(
+            "Failed to generate paper-specific queries, falling back to canned queries"
+        )
+        return None
+
+
+async def _augment_shortlist_with_custom_queries(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    tier: str,
+    shortlist: list,
+    custom_queries: dict[str, str] | None,
+) -> list:
+    """Re-run shortlisting with generated queries, falling back to the original list."""
+    if not custom_queries:
+        return shortlist
+
+    try:
+        async with SessionLocal() as db:
+            augmented = await _chunk_for_analysis(
+                pdf_id,
+                user_id,
+                categories,
+                pages,
+                tier,
+                db,
+                custom_queries=custom_queries,
+            )
+            return augmented or shortlist
+    except Exception:
+        logger.exception("Re-shortlist with custom queries failed, using original")
+        return shortlist
+
+
+async def _run_llm_analysis(
+    llm_svc: LLMService,
+    passages: list,
+    categories: list[str],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+    cache_id: uuid.UUID,
+    label: str,
+) -> list[dict] | None:
+    """Run extraction for a passage batch and validate quotes against the source."""
+    try:
+        highlights = await llm_svc.extract_highlights_from_passages(
+            passages,
+            categories,
+            provider,
+            api_key,
+            model=model,
+            db=None,
+        )
+    except Exception:
+        logger.exception(
+            "LLM extraction failed (%s): cache_id=%s",
+            label,
+            cache_id,
+        )
+        await _mark_cache_failed(cache_id, "LLM extraction failed")
+        return None
+
+    return _validate_highlights_against_chunks(highlights, passages)
+
+
+def _build_auto_highlight_annotation_set(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+) -> AnnotationSet:
+    return AnnotationSet(
+        pdf_id=pdf_id,
+        user_id=user_id,
+        name=_build_set_name(categories),
+        color="#a855f7",
+        source="auto_highlight",
+    )
+
+
+def _add_highlight_annotations(
+    db: AsyncSession,
+    set_id: uuid.UUID,
+    highlights: list[dict],
+) -> None:
+    for highlight in highlights:
+        db.add(
+            Annotation(
+                set_id=set_id,
+                page_number=max(1, highlight["page"]),
+                type="highlight",
+                rects=[],
+                selected_text=highlight["text"],
+                note_content=highlight["reason"],
+                color=CATEGORY_COLORS.get(highlight["category"], "#a855f7"),
+                ann_metadata={"category": highlight["category"]},
+            )
+        )
+
+
+def _set_no_highlights_failure(cache_row: AutoHighlightCache) -> None:
+    cache_row.status = "failed"
+    cache_row.progress_pct = 100
+    cache_row.llm_response = {
+        "error": "No highlight-worthy passages found. "
+        "Try a wider page range or different categories.",
+    }
+
+
+async def _parse_and_store_results(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    highlights: list[dict],
+    reasoning_trace: str | None,
+) -> bool:
+    """Persist the single-pass quick analysis result."""
+    try:
+        async with SessionLocal() as db:
+            cache_row = await _get_cache_row(db, cache_id)
+            if not highlights:
+                _set_no_highlights_failure(cache_row)
+                await db.commit()
+                return False
+
+            annotation_set = _build_auto_highlight_annotation_set(
+                pdf_id,
+                user_id,
+                categories,
+            )
+            db.add(annotation_set)
+            await db.flush()
+            _add_highlight_annotations(db, annotation_set.id, highlights)
+
+            cache_row.status = "complete"
+            cache_row.progress_pct = 100
+            cache_row.llm_response = highlights
+            cache_row.reasoning_trace = reasoning_trace
+            cache_row.annotation_set_id = annotation_set.id
+            await db.commit()
+            return True
+    except Exception:
+        logger.exception(
+            "Failed to persist highlights (quick): cache_id=%s",
+            cache_id,
+        )
+        await _mark_cache_failed(cache_id, "Persistence failed")
+        return False
+
+
+async def _persist_thorough_batch(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    batch_highlights: list[dict],
+    batch_index: int,
+    total_batches: int,
+) -> bool:
+    try:
+        async with SessionLocal() as db:
+            cache_row = await _get_cache_row(db, cache_id)
+
+            set_id = cache_row.annotation_set_id
+            if set_id is None and batch_highlights:
+                annotation_set = _build_auto_highlight_annotation_set(
+                    pdf_id,
+                    user_id,
+                    categories,
+                )
+                db.add(annotation_set)
+                await db.flush()
+                set_id = annotation_set.id
+                cache_row.annotation_set_id = set_id
+
+            if set_id:
+                _add_highlight_annotations(db, set_id, batch_highlights)
+
+            cache_row.progress_pct = int(batch_index / total_batches * 100)
+            await db.commit()
+            return True
+    except Exception:
+        logger.exception(
+            "Failed to persist batch %d/%d: cache_id=%s",
+            batch_index,
+            total_batches,
+            cache_id,
+        )
+        await _mark_cache_failed(cache_id, "Persistence failed")
+        return False
+
+
+async def _finalize_thorough_results(
+    cache_id: uuid.UUID,
+    all_highlights: list[dict],
+    batch_reasoning_traces: list[tuple[int, int, str]],
+) -> bool:
+    try:
+        async with SessionLocal() as db:
+            cache_row = await _get_cache_row(db, cache_id)
+            if not all_highlights:
+                _set_no_highlights_failure(cache_row)
+                await db.commit()
+                return False
+
+            cache_row.status = "complete"
+            cache_row.progress_pct = 100
+            cache_row.llm_response = all_highlights
+            cache_row.reasoning_trace = _combine_batch_reasoning_traces(
+                batch_reasoning_traces
+            )
+            await db.commit()
+            return True
+    except Exception:
+        logger.exception("Failed to finalize cache status: cache_id=%s", cache_id)
+        return False
+
+
+async def _run_quick_analysis(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+    llm_svc: LLMService,
+    shortlist: list,
+) -> bool:
+    highlights = await _run_llm_analysis(
+        llm_svc,
+        shortlist,
+        categories,
+        provider,
+        api_key,
+        model,
+        cache_id,
+        "quick",
+    )
+    if highlights is None:
+        return False
+
+    return await _parse_and_store_results(
+        cache_id,
+        pdf_id,
+        user_id,
+        categories,
+        highlights,
+        llm_svc.last_reasoning_trace,
+    )
+
+
+async def _run_thorough_analysis(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+    llm_svc: LLMService,
+    shortlist: list,
+) -> bool:
+    batches = [
+        shortlist[i : i + _BATCH_SIZE_THOROUGH]
+        for i in range(0, len(shortlist), _BATCH_SIZE_THOROUGH)
+    ]
+    total = len(batches)
+    all_highlights = []
+    batch_reasoning_traces: list[tuple[int, int, str]] = []
+
+    for idx, batch in enumerate(batches, 1):
+        batch_highlights = await _run_llm_analysis(
+            llm_svc,
+            batch,
+            categories,
+            provider,
+            api_key,
+            model,
+            cache_id,
+            f"thorough, batch {idx}/{total}",
+        )
+        if batch_highlights is None:
+            return False
+
+        if llm_svc.last_reasoning_trace:
+            batch_reasoning_traces.append((idx, total, llm_svc.last_reasoning_trace))
+
+        all_highlights.extend(batch_highlights)
+        persisted = await _persist_thorough_batch(
+            cache_id,
+            pdf_id,
+            user_id,
+            categories,
+            batch_highlights,
+            idx,
+            total,
+        )
+        if not persisted:
+            return False
+
+    return await _finalize_thorough_results(
+        cache_id,
+        all_highlights,
+        batch_reasoning_traces,
+    )
+
+
 async def _run_analysis_background(
     cache_id: uuid.UUID,
     pdf_id: uuid.UUID,
@@ -236,315 +679,67 @@ async def _run_analysis_background(
     tier: str,
     llm_client,
 ) -> None:
-    """Background task: ensure indexed → shortlist → LLM extract → annotations.
-
-    Uses short-lived DB sessions to avoid stale connections from long LLM
-    calls (Neon serverless closes idle connections behind load balancers).
-    """
+    """Background task: ensure indexed -> shortlist -> LLM extract -> annotations."""
     llm_svc = LLMService(http_client=llm_client)
-    pdf_title = ""
-    abstract_text = ""
-    shortlist = []
-
-    # ── Phase 1: Setup (validation, indexing, abstract, shortlist) ──────
-    try:
-        async with SessionLocal() as db:
-            user_result = await db.execute(select(User).where(User.id == user_id))
-            user = user_result.scalar_one_or_none()
-            if not user:
-                raise IndexingError("User not found.")
-
-            pdf_result = await db.execute(
-                select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == user_id)
-            )
-            pdf_row = pdf_result.scalar_one_or_none()
-            if not pdf_row:
-                raise IndexingError("PDF not found.")
-
-            pdf_title = pdf_row.title
-
-            # Step 1: ensure indexed
-            idx_service = IndexingService(download_service=pdf_download_service)
-            idx_status = await idx_service.get_or_create_status(
-                str(pdf_id),
-                str(user_id),
-                db,
-            )
-            await db.commit()
-            await idx_service.ensure_indexed(pdf_row, user, idx_status, db)
-            await db.commit()
-
-            abstract_text = await _extract_abstract_text(
-                pdf_id,
-                user_id,
-                db,
-            )
-
-            # Step 2: shortlist candidate chunks
-            # (done before LLM call so we don't hold session across it)
-            shortlist_raw = await highlight_shortlist_service.shortlist_chunks(
-                pdf_id=str(pdf_id),
-                user_id=str(user_id),
-                categories=categories,
-                pages=pages,
-                tier=tier,
-                db=db,
-                custom_queries=None,
-            )
-
-            if not shortlist_raw:
-                raise IndexingError(
-                    "No indexed text found for the selected pages. "
-                    "Make sure the PDF is indexed and the pages contain text."
-                )
-
-            shortlist = shortlist_raw
-
-    except IndexingError:
-        logger.exception(
-            "Setup phase failed (IndexingError): cache_id=%s",
-            cache_id,
-        )
-        await _mark_cache_failed(cache_id, "Setup failed")
-        return
-    except Exception:
-        logger.exception(
-            "Setup phase failed: cache_id=%s",
-            cache_id,
-        )
-        await _mark_cache_failed(cache_id, "Setup failed")
-        return
-
-    # ── Phase 2: LLM query generation (no DB session held) ──────────────
-    custom_queries: dict[str, str] | None = None
-    try:
-        if pdf_title and len(abstract_text) >= 50:
-            custom_queries = await llm_svc.generate_paper_queries(
-                title=pdf_title,
-                abstract=abstract_text,
-                categories=categories,
-                provider=provider,
-                api_key=api_key,
-                model=model,
-            )
-            if custom_queries:
-                logger.info(
-                    "Generated paper-specific queries for %d categories",
-                    len(custom_queries),
-                )
-    except Exception:
-        logger.exception(
-            "Failed to generate paper-specific queries, falling back to canned queries"
-        )
-
-    # ── Phase 3: Re-shortlist with custom queries if available ──────────
-    if custom_queries:
-        try:
-            async with SessionLocal() as db:
-                augmented = await highlight_shortlist_service.shortlist_chunks(
-                    pdf_id=str(pdf_id),
-                    user_id=str(user_id),
-                    categories=categories,
-                    pages=pages,
-                    tier=tier,
-                    db=db,
-                    custom_queries=custom_queries,
-                )
-                if augmented:
-                    shortlist = augmented
-        except Exception:
-            logger.exception("Re-shortlist with custom queries failed, using original")
-
-    # ── Phase 4: LLM extraction + persistence ───────────────────────────
-    if tier == "quick":
-        # LLM call — no DB session held during the call
-        try:
-            highlights = await llm_svc.extract_highlights_from_passages(
-                shortlist,
-                categories,
-                provider,
-                api_key,
-                model=model,
-                db=None,
-            )
-        except Exception:
-            logger.exception("LLM extraction failed (quick): cache_id=%s", cache_id)
-            await _mark_cache_failed(cache_id, "LLM extraction failed")
-            return
-
-        highlights = _validate_highlights_against_chunks(highlights, shortlist)
-
-        # Persist — short-lived session
-        try:
-            async with SessionLocal() as db:
-                cache_row = await _get_cache_row(db, cache_id)
-                if not highlights:
-                    cache_row.status = "failed"
-                    cache_row.progress_pct = 100
-                    cache_row.llm_response = {
-                        "error": "No highlight-worthy passages found. "
-                        "Try a wider page range or different categories.",
-                    }
-                    await db.commit()
-                    return
-
-                annotation_set = AnnotationSet(
-                    pdf_id=pdf_id,
-                    user_id=user_id,
-                    name=_build_set_name(categories),
-                    color="#a855f7",
-                    source="auto_highlight",
-                )
-                db.add(annotation_set)
-                await db.flush()
-
-                for h in highlights:
-                    db.add(
-                        Annotation(
-                            set_id=annotation_set.id,
-                            page_number=max(1, h["page"]),
-                            type="highlight",
-                            rects=[],
-                            selected_text=h["text"],
-                            note_content=h["reason"],
-                            color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
-                            ann_metadata={"category": h["category"]},
-                        )
-                    )
-
-                cache_row.status = "complete"
-                cache_row.progress_pct = 100
-                cache_row.llm_response = highlights
-                cache_row.reasoning_trace = llm_svc.last_reasoning_trace
-                cache_row.annotation_set_id = annotation_set.id
-                await db.commit()
-        except Exception:
-            logger.exception(
-                "Failed to persist highlights (quick): cache_id=%s",
-                cache_id,
-            )
-            await _mark_cache_failed(cache_id, "Persistence failed")
-            return
-
-    else:
-        # Thorough: sequential batches with progressive saves.
-        # Each batch: LLM call (no DB) → fresh session for persistence.
-        batches = [
-            shortlist[i : i + _BATCH_SIZE_THOROUGH]
-            for i in range(0, len(shortlist), _BATCH_SIZE_THOROUGH)
-        ]
-        total = len(batches)
-        all_highlights = []
-        batch_reasoning_traces: list[tuple[int, int, str]] = []
-
-        for idx, batch in enumerate(batches, 1):
-            # LLM call — no DB session held
-            try:
-                batch_highlights = await llm_svc.extract_highlights_from_passages(
-                    batch,
-                    categories,
-                    provider,
-                    api_key,
-                    model=model,
-                    db=None,
-                )
-            except Exception:
-                logger.exception(
-                    "LLM extraction failed (thorough, batch %d/%d): cache_id=%s",
-                    idx,
-                    total,
-                    cache_id,
-                )
-                await _mark_cache_failed(cache_id, "LLM extraction failed")
-                return
-
-            if llm_svc.last_reasoning_trace:
-                batch_reasoning_traces.append(
-                    (idx, total, llm_svc.last_reasoning_trace)
-                )
-
-            batch_highlights = _validate_highlights_against_chunks(
-                batch_highlights,
-                batch,
-            )
-            all_highlights.extend(batch_highlights)
-
-            # Persist batch — fresh session
-            try:
-                async with SessionLocal() as db:
-                    cache_row = await _get_cache_row(db, cache_id)
-
-                    set_id = cache_row.annotation_set_id
-                    if set_id is None and batch_highlights:
-                        annotation_set = AnnotationSet(
-                            pdf_id=pdf_id,
-                            user_id=user_id,
-                            name=_build_set_name(categories),
-                            color="#a855f7",
-                            source="auto_highlight",
-                        )
-                        db.add(annotation_set)
-                        await db.flush()
-                        set_id = annotation_set.id
-                        cache_row.annotation_set_id = set_id
-
-                    if set_id:
-                        for h in batch_highlights:
-                            db.add(
-                                Annotation(
-                                    set_id=set_id,
-                                    page_number=max(1, h["page"]),
-                                    type="highlight",
-                                    rects=[],
-                                    selected_text=h["text"],
-                                    note_content=h["reason"],
-                                    color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
-                                    ann_metadata={"category": h["category"]},
-                                )
-                            )
-
-                    cache_row.progress_pct = int(idx / total * 100)
-                    await db.commit()
-            except Exception:
-                logger.exception(
-                    "Failed to persist batch %d/%d: cache_id=%s",
-                    idx,
-                    total,
-                    cache_id,
-                )
-                await _mark_cache_failed(cache_id, "Persistence failed")
-                return
-
-        # Final status update
-        try:
-            async with SessionLocal() as db:
-                cache_row = await _get_cache_row(db, cache_id)
-                if not all_highlights:
-                    cache_row.status = "failed"
-                    cache_row.progress_pct = 100
-                    cache_row.llm_response = {
-                        "error": "No highlight-worthy passages found. "
-                        "Try a wider page range or different categories.",
-                    }
-                else:
-                    cache_row.status = "complete"
-                    cache_row.progress_pct = 100
-                    cache_row.llm_response = all_highlights
-                    cache_row.reasoning_trace = _combine_batch_reasoning_traces(
-                        batch_reasoning_traces
-                    )
-                await db.commit()
-        except Exception:
-            logger.exception(
-                "Failed to finalize cache status: cache_id=%s",
-                cache_id,
-            )
-
-    logger.info(
-        "Background analysis complete: cache_id=%s, tier=%s",
+    setup = await _prepare_analysis_setup(
         cache_id,
+        pdf_id,
+        user_id,
+        categories,
+        pages,
         tier,
     )
+    if not setup:
+        return
+
+    custom_queries = await _generate_custom_queries(
+        llm_svc,
+        setup,
+        categories,
+        provider,
+        api_key,
+        model,
+    )
+    shortlist = await _augment_shortlist_with_custom_queries(
+        pdf_id,
+        user_id,
+        categories,
+        pages,
+        tier,
+        setup.shortlist,
+        custom_queries,
+    )
+    completed = await (
+        _run_quick_analysis(
+            cache_id,
+            pdf_id,
+            user_id,
+            categories,
+            provider,
+            api_key,
+            model,
+            llm_svc,
+            shortlist,
+        )
+        if tier == "quick"
+        else _run_thorough_analysis(
+            cache_id,
+            pdf_id,
+            user_id,
+            categories,
+            provider,
+            api_key,
+            model,
+            llm_svc,
+            shortlist,
+        )
+    )
+    if completed:
+        logger.info(
+            "Background analysis complete: cache_id=%s, tier=%s",
+            cache_id,
+            tier,
+        )
 
 
 @router.post("/analyze", response_model=AutoHighlightResponse, status_code=202)
