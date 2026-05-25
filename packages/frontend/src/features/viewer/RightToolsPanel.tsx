@@ -4,7 +4,7 @@ import { Separator } from '@/components/ui/separator';
 import { useCitationStore } from '@/stores/citationStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useAnnotationStore } from '@/stores/annotationStore';
-import { usePdfViewerStore } from '@/stores/pdfViewerStore';
+import { useNewPdfViewerStore } from '@/features/pdf-viewer/pdfViewerStore';
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { apiFetchBlob, ApiError } from '@/api/client';
@@ -17,9 +17,10 @@ export const RightToolsPanel = () => {
     const { isChatPanelOpen, toggleChatPanel, setChatPanelOpen } = useChatStore();
     const isDrawingRect = useAnnotationStore(s => s.isDrawingRect);
     const setIsDrawingRect = useAnnotationStore(s => s.setIsDrawingRect);
-    const zoom = usePdfViewerStore(s => s.zoom);
-    const setZoom = usePdfViewerStore(s => s.setZoom);
-    const setRotation = usePdfViewerStore(s => s.setRotation);
+    const zoom = useNewPdfViewerStore(s => s.zoom);
+    const zoomMode = useNewPdfViewerStore(s => s.zoomMode);
+    const setZoomMode = useNewPdfViewerStore(s => s.setZoomMode);
+    const setRotation = useNewPdfViewerStore(s => s.setRotation);
 
     const [isExporting, setIsExporting] = useState(false);
 
@@ -52,7 +53,7 @@ export const RightToolsPanel = () => {
     };
 
     const handleFitWidth = () => {
-        setZoom(1.0);
+        setZoomMode('fit-width');
     };
 
     return (
@@ -80,10 +81,10 @@ export const RightToolsPanel = () => {
             <Separator orientation="horizontal" className="w-6 my-1" />
 
             <Button
-                variant="ghost"
+                variant={zoomMode === 'fit-width' ? 'default' : 'ghost'}
                 size="icon"
                 className="h-9 w-9"
-                onClick={() => setRotation((r: number) => (r + 90) % 360)}
+                onClick={() => setRotation((r) => ((r + 90) % 360) as 0 | 90 | 180 | 270)}
                 title="Rotate Clockwise"
             >
                 <RotateCw className="h-4 w-4" />

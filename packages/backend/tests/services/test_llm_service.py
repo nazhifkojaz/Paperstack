@@ -127,3 +127,43 @@ class TestCallOpenRouter:
         svc = LLMService(http_client=mock_client)
         with pytest.raises(LLMProviderError, match="timed out"):
             await svc.call_openrouter("sys", "user", "test-key")
+
+    async def test_reasoning_400_retries_without_reasoning(self):
+        import copy
+
+        error_response = MagicMock()
+        error_response.status_code = 400
+        error_response.text = "Unsupported reasoning parameter"
+        error_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "400", request=MagicMock(), response=error_response
+            )
+        )
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {
+            "choices": [{"message": {"content": "Fallback response"}}]
+        }
+
+        captured_payloads = []
+
+        async def post_side_effect(*_args, **kwargs):
+            captured_payloads.append(copy.deepcopy(kwargs["json"]))
+            return error_response if len(captured_payloads) == 1 else success_response
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=post_side_effect)
+
+        svc = LLMService(http_client=mock_client)
+        result = await svc.call_openrouter(
+            "sys", "user", "test-key", reasoning_effort="medium"
+        )
+
+        assert result == "Fallback response"
+        assert mock_client.post.call_count == 2
+        first_payload = captured_payloads[0]
+        second_payload = captured_payloads[1]
+        assert first_payload["reasoning"] == {"effort": "medium"}
+        assert "reasoning" not in second_payload

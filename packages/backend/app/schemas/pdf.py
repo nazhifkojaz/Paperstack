@@ -9,9 +9,6 @@ class PdfBase(BaseModel):
     doi: Optional[str] = None
     isbn: Optional[str] = None
 
-class PdfCreate(PdfBase):
-    pass
-
 class PdfLinkCreate(BaseModel):
     title: str
     source_url: HttpUrl

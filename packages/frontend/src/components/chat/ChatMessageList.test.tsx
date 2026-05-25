@@ -182,4 +182,60 @@ describe('ChatMessageList', () => {
       expect(screen.getByText('No messages yet.')).toBeInTheDocument()
     })
   })
+
+  describe('error state', () => {
+    it('shows error message and retry/dismiss buttons when message has error', () => {
+      const errorMsg = 'API rate limit exceeded'
+      render(
+        <ChatMessageList
+          messages={[createMockMessage({ error: errorMsg })]}
+        />
+      )
+
+      expect(screen.getByText('Failed to generate response')).toBeInTheDocument()
+      expect(screen.getByText(errorMsg)).toBeInTheDocument()
+      expect(screen.getByText('Retry')).toBeInTheDocument()
+      expect(screen.getByText('Dismiss')).toBeInTheDocument()
+    })
+
+    it('calls onRetryFailed when retry button is clicked', () => {
+      const onRetryFailed = vi.fn()
+
+      render(
+        <ChatMessageList
+          messages={[createMockMessage({ error: 'Something went wrong' })]}
+          onRetryFailed={onRetryFailed}
+        />
+      )
+
+      fireEvent.click(screen.getByText('Retry'))
+      expect(onRetryFailed).toHaveBeenCalledWith('msg-1')
+    })
+
+    it('calls onDismissFailed when dismiss button is clicked', () => {
+      const onDismissFailed = vi.fn()
+
+      render(
+        <ChatMessageList
+          messages={[createMockMessage({ error: 'Something went wrong' })]}
+          onDismissFailed={onDismissFailed}
+        />
+      )
+
+      fireEvent.click(screen.getByText('Dismiss'))
+      expect(onDismissFailed).toHaveBeenCalledWith('msg-1')
+    })
+
+    it('does not show copy button for errored messages', () => {
+      render(
+        <ChatMessageList
+          messages={[createMockMessage({ error: 'Something went wrong' })]}
+        />
+      )
+
+      // The copy button shouldn't exist for errored messages
+      const copyButton = screen.queryByTitle('Copy to clipboard')
+      expect(copyButton).not.toBeInTheDocument()
+    })
+  })
 })

@@ -201,6 +201,35 @@ class TestCreateAnnotation:
         assert data["page_number"] == 1
         assert data["selected_text"] == "Selected text"
 
+    async def test_create_annotation_persists_metadata(self, client: AsyncClient, auth_headers, db_session, test_user) -> None:
+        """Test selector metadata round-trips on create."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id, title="Test PDF", filename="test.pdf", github_sha="abc")
+        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id, name="Test Set")
+        await db_session.commit()
+
+        metadata = {
+            "selector_version": 1,
+            "text_range": {"page": 1, "start": 12, "end": 28},
+            "quote": {"exact": "Selected text", "prefix": "before ", "suffix": " after"},
+            "resolver": {"method": "selection"},
+        }
+
+        response = await client.post(
+            "/v1/annotations/items",
+            json={
+                "set_id": str(ann_set.id),
+                "page_number": 1,
+                "type": "highlight",
+                "rects": [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}],
+                "selected_text": "Selected text",
+                "metadata": metadata,
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 201
+        assert response.json()["metadata"] == metadata
+
     async def test_create_annotation_other_users_set_returns_404(self, client: AsyncClient, auth_headers) -> None:
         """Test creating annotation in another user's set returns 404."""
         fake_set_id = uuid.uuid4()
@@ -242,6 +271,29 @@ class TestUpdateAnnotation:
         data = response.json()
         assert data["color"] == "#FF0000"
         assert data["note_content"] == "Updated note"
+
+    async def test_update_annotation_persists_metadata(self, client: AsyncClient, auth_headers, db_session, test_user) -> None:
+        """Test selector metadata round-trips on update."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id, title="Test PDF", filename="test.pdf", github_sha="abc")
+        ann_set = await create_test_annotation_set(db_session, pdf_id=pdf.id, user_id=test_user.id, name="Test Set")
+        ann = await create_test_annotation(db_session, set_id=ann_set.id, page_number=1, type="highlight")
+        await db_session.commit()
+
+        metadata = {
+            "selector_version": 1,
+            "text_range": {"page": 1, "start": 4, "end": 18},
+            "quote": {"exact": "Updated text", "prefix": "left ", "suffix": " right"},
+            "resolver": {"method": "normalized", "score": 0.95},
+        }
+
+        response = await client.patch(
+            f"/v1/annotations/items/{ann.id}",
+            json={"metadata": metadata},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["metadata"] == metadata
 
     async def test_update_other_users_annotation_returns_404(self, client: AsyncClient, auth_headers, db_session, test_user_2) -> None:
         """Test updating another user's annotation returns 404."""

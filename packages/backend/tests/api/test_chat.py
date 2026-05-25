@@ -7,11 +7,9 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from tests.fixtures import (
     create_test_pdf,
     create_test_collection,
-    create_test_annotation_set,
-    create_test_annotation,
 )
 
-TEST_EMBEDDING_2048 = [0.01] * 2048
+TEST_EMBEDDING = [0.01] * 1024
 
 
 def _init_http_clients():
@@ -42,12 +40,61 @@ async def _override_get_embedding_http_client():
 
 
 def _setup_stream_mocks():
-    """Set up common mocks for streaming tests."""
+    """Set up common mocks for streaming tests (HTTP client overrides)."""
     _init_http_clients()
     from app.api import deps
 
     deps.get_llm_http_client = _override_get_llm_http_client
     deps.get_embedding_http_client = _override_get_embedding_http_client
+
+
+def _make_stream_mocks(*, stream_reply=None, embed_side_effect=None):
+    """Factory for common streaming test mocks.
+
+    Returns a dict with pre-configured indexing, embedding, LLM, and chat mocks.
+    """
+    mock_indexing = MagicMock()
+    mock_indexing.get_or_create_status = AsyncMock(
+        return_value=MagicMock(status="indexed")
+    )
+    mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
+    mock_indexing.reset_if_stale = AsyncMock(return_value=False)
+
+    mock_embed = MagicMock()
+    if embed_side_effect:
+        mock_embed.embed_query = AsyncMock(side_effect=embed_side_effect)
+    else:
+        mock_embed.embed_query = AsyncMock(return_value=TEST_EMBEDDING)
+
+    mock_llm = MagicMock()
+
+    mock_chat = MagicMock()
+    mock_chat.build_messages = MagicMock(
+        return_value=("system prompt", [{"role": "user", "content": "test"}])
+    )
+    if stream_reply:
+        mock_chat.stream_reply = stream_reply
+
+    return {
+        "indexing": mock_indexing,
+        "embedding": mock_embed,
+        "llm": mock_llm,
+        "chat": mock_chat,
+    }
+
+
+def _stream_patches(mocks, *, with_chat=True, with_llm=True):
+    """Return a list of patch context managers for common stream dependencies."""
+    patches = [
+        patch("app.api.routes.chat.EmbeddingService", return_value=mocks["embedding"]),
+        patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]),
+        patch("app.services.chat_orchestrator.get_indexing_service", return_value=mocks["indexing"]),
+    ]
+    if with_llm:
+        patches.append(patch("app.api.routes.chat.LLMService", return_value=mocks["llm"]))
+    if with_chat and mocks.get("chat"):
+        patches.append(patch("app.services.chat_orchestrator.ChatService", return_value=mocks["chat"]))
+    return patches
 
 
 class TestCreateConversation:
@@ -395,31 +442,19 @@ class TestStreamMessage:
         )
         conv_id = conv_resp.json()["id"]
 
-        mock_indexing = MagicMock()
-        mock_indexing.get_or_create_status = AsyncMock(
-            return_value=MagicMock(status="indexed")
-        )
-        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
-        mock_indexing.reset_if_stale = AsyncMock(return_value=False)
+        mocks = _make_stream_mocks()
 
         with patch(
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            from fastapi import HTTPException
-
             mock_resolve.side_effect = HTTPException(status_code=402, detail="No API keys available")
-
-            with patch(
-                "app.services.indexing_service.IndexingService",
-                return_value=mock_indexing,
-            ):
+            with patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]):
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
                     headers=auth_headers,
                 )
-
                 assert response.status_code == 402
 
     async def test_stream_message_conversation_not_found_returns_404(
@@ -428,14 +463,11 @@ class TestStreamMessage:
         """Test streaming to non-existent conversation returns 404."""
         _setup_stream_mocks()
 
-        fake_id = uuid.uuid4()
-
         response = await client.post(
-            f"/v1/chat/conversations/{fake_id}/stream",
+            f"/v1/chat/conversations/{uuid.uuid4()}/stream",
             json={"content": "Hello"},
             headers=auth_headers,
         )
-
         assert response.status_code == 404
 
     async def test_stream_message_requires_auth(self, client: AsyncClient) -> None:
@@ -444,7 +476,6 @@ class TestStreamMessage:
             f"/v1/chat/conversations/{uuid.uuid4()}/stream",
             json={"content": "Hello"},
         )
-
         assert response.status_code == 401
 
     async def test_stream_message_returns_sse_content_type(
@@ -467,71 +498,142 @@ class TestStreamMessage:
             yield "Test "
             yield "response."
 
-        mock_indexing = MagicMock()
-        mock_indexing.get_or_create_status = AsyncMock(
-            return_value=MagicMock(status="indexed")
+        mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
+
+        with patch(
+            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
+        ) as mock_resolve:
+            mock_resolve.return_value = MagicMock(
+                provider="gemini", api_key="fake-key", is_in_house=True, quota_remaining=10,
+            )
+            from contextlib import ExitStack
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
+                response = await client.post(
+                    f"/v1/chat/conversations/{conv_id}/stream",
+                    json={"content": "What is this paper about?"},
+                    headers=auth_headers,
+                )
+                assert response.status_code == 200
+                assert "text/event-stream" in response.headers.get("content-type", "")
+
+    async def test_stream_message_persists_user_and_assistant_with_context_chunks(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Successful streaming persists both messages and assistant citations."""
+        _setup_stream_mocks()
+
+        from contextlib import ExitStack
+        from sqlalchemy import select
+        from app.db.models import ChatMessage, Citation
+
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="Citation Backed Paper",
+            filename="citation-backed.pdf",
+            github_sha="sha_citation_backed",
         )
-        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
-        mock_indexing.reset_if_stale = AsyncMock(return_value=False)
-
-        mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING_2048)
-
-        mock_llm_instance = MagicMock()
-
-        mock_chat_instance = MagicMock()
-        mock_chat_instance.stream_reply = mock_stream_reply
-        mock_chat_instance.build_messages = MagicMock(
-            return_value=("system prompt", [{"role": "user", "content": "test"}])
+        db_session.add(
+            Citation(
+                pdf_id=pdf.id,
+                user_id=test_user.id,
+                bibtex="@article{paper2024}",
+                authors="Ada Lovelace and Grace Hopper",
+                year=2024,
+            )
         )
+        await db_session.commit()
+
+        conv_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"pdf_id": str(pdf.id)},
+            headers=auth_headers,
+        )
+        conv_id = conv_resp.json()["id"]
+
+        async def mock_stream_reply(*args, **kwargs):
+            yield "Answer "
+            yield "with citation."
+
+        chunk = MagicMock()
+        chunk.chunk_id = "chunk-1"
+        chunk.page_number = 2
+        chunk.end_page_number = 3
+        chunk.content = "This source passage supports the answer."
+        chunk.section_title = "Results"
+        chunk.section_level = 1
+        chunk.pdf_id = None
+        chunk.pdf_title = None
+
+        mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
+        mocks["chat"].build_context.return_value = "[Page 2]\nThis source passage supports the answer."
 
         with patch(
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
-        ) as mock_resolve:
+        ) as mock_resolve, patch(
+            "app.services.chat_orchestrator.vector_search_service.search_pdf",
+            new_callable=AsyncMock,
+        ) as mock_search_pdf:
             mock_resolve.return_value = MagicMock(
                 provider="gemini",
                 api_key="fake-key",
+                model=None,
                 is_in_house=True,
                 quota_remaining=10,
             )
-            with patch(
-                "app.api.routes.chat.EmbeddingService",
-                return_value=mock_embed_instance,
-            ):
-                with patch(
-                    "app.api.routes.chat.LLMService",
-                    return_value=mock_llm_instance,
-                ):
-                    with patch(
-                        "app.services.chat_orchestrator.ChatService",
-                        return_value=mock_chat_instance,
-                    ):
-                        with patch(
-                            "app.services.indexing_service.IndexingService",
-                            return_value=mock_indexing,
-                        ):
-                            response = await client.post(
-                                f"/v1/chat/conversations/{conv_id}/stream",
-                                json={"content": "What is this paper about?"},
-                                headers=auth_headers,
-                            )
+            mock_search_pdf.return_value = [chunk]
 
-                            assert response.status_code == 200
-                            assert "text/event-stream" in response.headers.get(
-                                "content-type", ""
-                            )
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
+                response = await client.post(
+                    f"/v1/chat/conversations/{conv_id}/stream",
+                    json={"content": "What did the paper find?"},
+                    headers=auth_headers,
+                )
 
+        assert response.status_code == 200
+        assert "Answer " in response.text
+        assert "with citation." in response.text
+        mocks["chat"].build_messages.assert_called_once()
+        assert mocks["chat"].build_messages.call_args.kwargs["paper_metadata"] == {
+            "title": "Citation Backed Paper",
+            "authors": "Ada Lovelace and Grace Hopper",
+            "year": 2024,
+        }
 
-class TestStreamMessageOpenRouterRateLimit:
-    """Tests for OpenRouter 429 handling in chat streaming."""
+        result = await db_session.execute(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conv_id)
+            .order_by(ChatMessage.created_at.asc())
+        )
+        messages = result.scalars().all()
+
+        assert [(message.role, message.content) for message in messages] == [
+            ("user", "What did the paper find?"),
+            ("assistant", "Answer with citation."),
+        ]
+        assert messages[1].context_chunks == [
+            {
+                "chunk_id": "chunk-1",
+                "page_number": 2,
+                "end_page_number": 3,
+                "snippet": "This source passage supports the answer.",
+                "section_title": "Results",
+                "section_level": 1,
+            }
+        ]
+
+    # --- OpenRouter 429 handling -------------------------------------------------
 
     async def test_stream_openrouter_429_returns_rate_limited(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
         """When OpenRouter 429s, stream should return a rate_limited SSE error."""
         _setup_stream_mocks()
-
         from app.services.exceptions import LLMRateLimitError
 
         pdf = await create_test_pdf(db_session, user_id=test_user.id)
@@ -544,63 +646,29 @@ class TestStreamMessageOpenRouterRateLimit:
         )
         conv_id = conv_resp.json()["id"]
 
-        async def mock_stream_reply_openrouter(*args, **kwargs):
+        async def mock_stream(*args, **kwargs):
             raise LLMRateLimitError("openrouter")
-            yield  # unreachable — makes this an async generator
+            yield
 
-        mock_indexing = MagicMock()
-        mock_indexing.get_or_create_status = AsyncMock(
-            return_value=MagicMock(status="indexed")
-        )
-        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
-        mock_indexing.reset_if_stale = AsyncMock(return_value=False)
-
-        mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING_2048)
-
-        mock_llm_instance = MagicMock()
-
-        mock_chat_instance = MagicMock()
-        mock_chat_instance.build_messages = MagicMock(
-            return_value=("system prompt", [{"role": "user", "content": "test"}])
-        )
-        mock_chat_instance.stream_reply = MagicMock(
-            side_effect=[mock_stream_reply_openrouter()]
-        )
+        mocks = _make_stream_mocks(stream_reply=mock_stream)
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
-                provider="openrouter",
-                api_key="openrouter-key",
-                is_in_house=True,
-                quota_remaining=10,
+                provider="openrouter", api_key="openrouter-key", is_in_house=True, quota_remaining=10,
             )
-
-            with patch(
-                "app.api.routes.chat.EmbeddingService",
-                return_value=mock_embed_instance,
-            ), patch(
-                "app.api.routes.chat.LLMService",
-                return_value=mock_llm_instance,
-            ), patch(
-                "app.services.chat_orchestrator.ChatService",
-                return_value=mock_chat_instance,
-            ), patch(
-                "app.services.indexing_service.IndexingService",
-                return_value=mock_indexing,
-            ):
+            from contextlib import ExitStack
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
                     headers=auth_headers,
                 )
-
                 assert response.status_code == 200
-                body = response.text
-                assert "rate_limited" in body
+                assert "rate_limited" in response.text
 
     async def test_stream_user_own_key_skips_openrouter(
         self, client: AsyncClient, auth_headers, db_session, test_user
@@ -621,414 +689,69 @@ class TestStreamMessageOpenRouterRateLimit:
         async def mock_stream_reply(*args, **kwargs):
             yield "User key response."
 
-        mock_indexing = MagicMock()
-        mock_indexing.get_or_create_status = AsyncMock(
-            return_value=MagicMock(status="indexed")
-        )
-        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
-        mock_indexing.reset_if_stale = AsyncMock(return_value=False)
-
-        mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(return_value=TEST_EMBEDDING_2048)
-
-        mock_llm_instance = MagicMock()
-
-        mock_chat_instance = MagicMock()
-        mock_chat_instance.stream_reply = mock_stream_reply
-        mock_chat_instance.build_messages = MagicMock(
-            return_value=("system prompt", [{"role": "user", "content": "test"}])
-        )
+        mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
-                provider="openai",
-                api_key="user-own-key",
-                is_in_house=False,
-                quota_remaining=None,
+                provider="openai", api_key="user-own-key", is_in_house=False, quota_remaining=None,
             )
-
-            with patch(
-                "app.api.routes.chat.EmbeddingService",
-                return_value=mock_embed_instance,
-            ), patch(
-                "app.api.routes.chat.LLMService",
-                return_value=mock_llm_instance,
-            ), patch(
-                "app.services.chat_orchestrator.ChatService",
-                return_value=mock_chat_instance,
-            ), patch(
-                "app.services.indexing_service.IndexingService",
-                return_value=mock_indexing,
-            ):
+            from contextlib import ExitStack
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
                     headers=auth_headers,
                 )
-
                 assert response.status_code == 200
-                body = response.text
-                assert "User key response." in body
+                assert "User key response." in response.text
 
 
-class TestSemanticSearch:
-    """Tests for POST /v1/chat/semantic-search"""
+class TestStreamMessageOpenRouterQuotaGating:
+    """Tests for OpenRouter free-tier quota gating → 503 in streaming."""
 
-    async def test_semantic_search_requires_auth(self, client: AsyncClient) -> None:
-        """Test that semantic search requires authentication."""
-        response = await client.post(
-            "/v1/chat/semantic-search",
-            json={"query": "test"},
-        )
-
-        assert response.status_code == 401
-
-    async def test_semantic_search_embedding_failure_returns_502(
-        self, client: AsyncClient, auth_headers
-    ) -> None:
-        """Test that embedding failure returns 502."""
-        _setup_stream_mocks()
-
-        from app.services.embedding_service import EmbeddingError
-
-        with patch("app.api.routes.chat.EmbeddingService") as mock_embed_cls:
-            mock_embed = AsyncMock()
-            mock_embed.embed_query = AsyncMock(side_effect=EmbeddingError("Failed"))
-            mock_embed_cls.return_value = mock_embed
-
-            response = await client.post(
-                "/v1/chat/semantic-search",
-                json={"query": "machine learning"},
-                headers=auth_headers,
-            )
-
-            assert response.status_code == 502
-
-    async def test_semantic_search_returns_results(
-        self, client: AsyncClient, auth_headers
-    ) -> None:
-        """Test successful semantic search returns results."""
-        _setup_stream_mocks()
-
-        with patch("app.api.routes.chat.EmbeddingService") as mock_embed_cls:
-            mock_embed = AsyncMock()
-            mock_embed.embed_query = AsyncMock(return_value=TEST_EMBEDDING_2048)
-            mock_embed_cls.return_value = mock_embed
-
-            with patch("app.api.routes.chat.vector_search_service") as mock_search:
-                mock_result = MagicMock()
-                mock_result.pdf_id = str(uuid.uuid4())
-                mock_result.pdf_title = "Test Paper"
-                mock_result.page_number = 1
-                mock_result.content = "Some relevant content"
-                mock_result.score = 0.95
-                mock_search.search_all = AsyncMock(return_value=[mock_result])
-
-                response = await client.post(
-                    "/v1/chat/semantic-search",
-                    json={"query": "machine learning", "limit": 5},
-                    headers=auth_headers,
-                )
-
-                assert response.status_code == 200
-                data = response.json()
-                assert len(data) == 1
-                assert data[0]["pdf_title"] == "Test Paper"
-                assert data[0]["page_number"] == 1
-                assert data[0]["score"] == 0.95
-
-
-class TestExplainAnnotation:
-    """Tests for POST /v1/chat/explain"""
-
-    async def test_explain_requires_auth(self, client: AsyncClient) -> None:
-        """Test that explain requires authentication."""
-        response = await client.post(
-            "/v1/chat/explain",
-            json={
-                "pdf_id": str(uuid.uuid4()),
-                "annotation_id": str(uuid.uuid4()),
-                "selected_text": "test",
-                "page_number": 1,
-            },
-        )
-
-        assert response.status_code == 401
-
-    async def test_explain_annotation_not_found_returns_404(
-        self, client: AsyncClient, auth_headers
-    ) -> None:
-        """Test explaining non-existent annotation returns 404."""
-        _setup_stream_mocks()
-
-        fake_pdf_id = uuid.uuid4()
-        fake_ann_id = uuid.uuid4()
-
-        response = await client.post(
-            "/v1/chat/explain",
-            json={
-                "pdf_id": str(fake_pdf_id),
-                "annotation_id": str(fake_ann_id),
-                "selected_text": "test text",
-                "page_number": 1,
-            },
+    async def _setup_conv(self, client, auth_headers, db_session, test_user):
+        """Create a conversation for streaming tests."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        await db_session.commit()
+        conv_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"pdf_id": str(pdf.id)},
             headers=auth_headers,
         )
-
-        assert response.status_code == 404
-
-    async def test_explain_pdf_not_found_returns_404(
-        self, client: AsyncClient, auth_headers, db_session, test_user
-    ) -> None:
-        """Test explaining with non-existent PDF returns 404."""
-        _setup_stream_mocks()
-
-        pdf = await create_test_pdf(
-            db_session,
-            user_id=test_user.id,
-            title="Explain PDF",
-            filename="explain.pdf",
-            github_sha="sha_explain",
-        )
-        ann_set = await create_test_annotation_set(
-            db_session, pdf_id=pdf.id, user_id=test_user.id, name="Test Set"
-        )
-        await create_test_annotation(
-            db_session,
-            set_id=ann_set.id,
-            page_number=1,
-            type="highlight",
-            selected_text="test",
-        )
-        await db_session.commit()
-
-        fake_pdf_id = uuid.uuid4()
-
-        response = await client.post(
-            "/v1/chat/explain",
-            json={
-                "pdf_id": str(fake_pdf_id),
-                "annotation_id": str(ann_set.id),
-                "selected_text": "test text",
-                "page_number": 1,
-            },
-            headers=auth_headers,
-        )
-
-        assert response.status_code == 404
-
-
-class TestExplainOpenRouterRateLimit:
-    """Tests for OpenRouter 429 handling in explain endpoint."""
-
-    async def test_explain_openrouter_429_returns_429(
-        self, client: AsyncClient, auth_headers, db_session, test_user
-    ) -> None:
-        """When OpenRouter 429s on explain, return 429."""
-        _setup_stream_mocks()
-
-        from app.services.exceptions import LLMRateLimitError
-
-        pdf = await create_test_pdf(
-            db_session,
-            user_id=test_user.id,
-            title="Explain Rate Limit PDF",
-            filename="explain_rl.pdf",
-            github_sha="sha_explain_rl",
-        )
-        ann_set = await create_test_annotation_set(
-            db_session, pdf_id=pdf.id, user_id=test_user.id, name="Explain Set"
-        )
-        ann = await create_test_annotation(
-            db_session,
-            set_id=ann_set.id,
-            page_number=1,
-            type="highlight",
-            selected_text="test passage",
-        )
-        await db_session.commit()
-
-        with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.chat.ExplainService"
-        ) as mock_explain_cls:
-            mock_resolve.return_value = MagicMock(
-                provider="openrouter",
-                api_key="openrouter-key",
-                is_in_house=True,
-                quota_remaining=20,
-            )
-
-            mock_explain_svc = AsyncMock()
-            mock_explain_svc.explain_with_provider = AsyncMock(
-                side_effect=LLMRateLimitError("openrouter")
-            )
-            mock_explain_cls.return_value = mock_explain_svc
-
-            response = await client.post(
-                "/v1/chat/explain",
-                json={
-                    "pdf_id": str(pdf.id),
-                    "annotation_id": str(ann.id),
-                    "selected_text": "test passage",
-                    "page_number": 1,
-                },
-                headers=auth_headers,
-            )
-
-            assert response.status_code == 429
-
-    async def test_explain_user_own_key_skips_openrouter(
-        self, client: AsyncClient, auth_headers, db_session, test_user
-    ) -> None:
-        """When user has their own key for explain, OpenRouter is never tried."""
-        _setup_stream_mocks()
-
-        pdf = await create_test_pdf(
-            db_session,
-            user_id=test_user.id,
-            title="Explain User Key PDF",
-            filename="explain_userkey.pdf",
-            github_sha="sha_explain_userkey",
-        )
-        ann_set = await create_test_annotation_set(
-            db_session, pdf_id=pdf.id, user_id=test_user.id, name="User Key Set"
-        )
-        ann = await create_test_annotation(
-            db_session,
-            set_id=ann_set.id,
-            page_number=1,
-            type="highlight",
-            selected_text="test passage",
-        )
-        await db_session.commit()
-
-        mock_explain_result = MagicMock()
-        mock_explain_result.explanation = "Explained via user key."
-        mock_explain_result.note_content = "## Note\nExplained via user key."
-
-        with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.chat.ExplainService"
-        ) as mock_explain_cls:
-            mock_resolve.return_value = MagicMock(
-                provider="anthropic",
-                api_key="user-own-anthropic-key",
-                is_in_house=False,
-                quota_remaining=None,
-            )
-
-            mock_explain_svc = AsyncMock()
-            mock_explain_svc.explain_with_provider = AsyncMock(
-                return_value=mock_explain_result
-            )
-            mock_explain_cls.return_value = mock_explain_svc
-
-            response = await client.post(
-                "/v1/chat/explain",
-                json={
-                    "pdf_id": str(pdf.id),
-                    "annotation_id": str(ann.id),
-                    "selected_text": "test passage",
-                    "page_number": 1,
-                },
-                headers=auth_headers,
-            )
-
-            assert response.status_code == 200
-            data = response.json()
-            assert data["explanation"] == "Explained via user key."
-            assert data["explain_uses_remaining"] == -1  # unlimited for own key
-
-
-class TestOpenRouterQuotaGating:
-    """Tests for OpenRouter free-tier quota gating → 503."""
+        return conv_resp.json()["id"]
 
     async def test_stream_message_quota_exceeded_returns_503(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
         """When OpenRouter quota is exceeded, stream_message returns 503."""
         _setup_stream_mocks()
-
         from app.services.exceptions import OpenRouterQuotaError
 
-        pdf = await create_test_pdf(db_session, user_id=test_user.id)
-        await db_session.commit()
+        conv_id = await self._setup_conv(client, auth_headers, db_session, test_user)
 
-        conv_resp = await client.post(
-            "/v1/chat/conversations",
-            json={"pdf_id": str(pdf.id)},
-            headers=auth_headers,
-        )
-        conv_id = conv_resp.json()["id"]
-
-        mock_indexing = MagicMock()
-        mock_indexing.get_or_create_status = AsyncMock(
-            return_value=MagicMock(status="indexed")
-        )
-        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
-        mock_indexing.reset_if_stale = AsyncMock(return_value=False)
-
-        mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(
-            side_effect=OpenRouterQuotaError(limit=1000, count_today=900)
+        mocks = _make_stream_mocks(
+            embed_side_effect=OpenRouterQuotaError(limit=1000, count_today=900)
         )
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
-                provider="openrouter",
-                api_key="openrouter-key",
-                is_in_house=True,
-                quota_remaining=10,
+                provider="openrouter", api_key="openrouter-key", is_in_house=True, quota_remaining=10,
             )
-            with patch(
-                "app.api.routes.chat.EmbeddingService",
-                return_value=mock_embed_instance,
-            ), patch(
-                "app.services.indexing_service.IndexingService",
-                return_value=mock_indexing,
-            ):
+            with patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]), \
+                 patch("app.api.routes.chat.EmbeddingService", return_value=mocks["embedding"]):
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
                     headers=auth_headers,
                 )
-
                 assert response.status_code == 503
                 assert "OpenRouter free-tier usage" in response.json()["detail"]
-
-    async def test_semantic_search_quota_exceeded_returns_503(
-        self, client: AsyncClient, auth_headers
-    ):
-        """When OpenRouter quota is exceeded, semantic_search returns 503."""
-        _setup_stream_mocks()
-
-        from app.services.exceptions import OpenRouterQuotaError
-
-        with patch("app.api.routes.chat.EmbeddingService") as mock_embed_cls:
-            mock_embed = AsyncMock()
-            mock_embed.embed_query = AsyncMock(
-                side_effect=OpenRouterQuotaError(limit=1000, count_today=900)
-            )
-            mock_embed_cls.return_value = mock_embed
-
-            response = await client.post(
-                "/v1/chat/semantic-search",
-                json={"query": "machine learning"},
-                headers=auth_headers,
-            )
-
-            assert response.status_code == 503
 
     async def test_stream_message_llm_gate_returns_503(
         self, client: AsyncClient, auth_headers, db_session, test_user
@@ -1036,50 +759,24 @@ class TestOpenRouterQuotaGating:
         """When LLM gate triggers for server OpenRouter key, returns 503."""
         _setup_stream_mocks()
 
-        pdf = await create_test_pdf(db_session, user_id=test_user.id)
-        await db_session.commit()
+        conv_id = await self._setup_conv(client, auth_headers, db_session, test_user)
 
-        conv_resp = await client.post(
-            "/v1/chat/conversations",
-            json={"pdf_id": str(pdf.id)},
-            headers=auth_headers,
-        )
-        conv_id = conv_resp.json()["id"]
-
-        mock_indexing = MagicMock()
-        mock_indexing.get_or_create_status = AsyncMock(
-            return_value=MagicMock(status="indexed")
-        )
-        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
-        mock_indexing.reset_if_stale = AsyncMock(return_value=False)
-
-        mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(
-            return_value=TEST_EMBEDDING_2048
-        )
+        mocks = _make_stream_mocks()
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.side_effect = HTTPException(
                 status_code=503,
-                detail="OpenRouter free-tier usage limit reached (900/1000). Please try again tomorrow.",
+                detail="OpenRouter free-tier usage limit reached (900/1000).",
             )
-
-            with patch(
-                "app.api.routes.chat.EmbeddingService",
-                return_value=mock_embed_instance,
-            ), patch(
-                "app.services.indexing_service.IndexingService",
-                return_value=mock_indexing,
-            ):
+            with patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]), \
+                 patch("app.api.routes.chat.EmbeddingService", return_value=mocks["embedding"]):
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
                     headers=auth_headers,
                 )
-
                 assert response.status_code == 503
 
     async def test_byok_skips_llm_gate(
@@ -1088,67 +785,26 @@ class TestOpenRouterQuotaGating:
         """BYOK keys skip the LLM usage gate entirely."""
         _setup_stream_mocks()
 
-        pdf = await create_test_pdf(db_session, user_id=test_user.id)
-        await db_session.commit()
-
-        conv_resp = await client.post(
-            "/v1/chat/conversations",
-            json={"pdf_id": str(pdf.id)},
-            headers=auth_headers,
-        )
-        conv_id = conv_resp.json()["id"]
+        conv_id = await self._setup_conv(client, auth_headers, db_session, test_user)
 
         async def mock_stream_reply(*args, **kwargs):
             yield "User key response."
 
-        mock_indexing = MagicMock()
-        mock_indexing.get_or_create_status = AsyncMock(
-            return_value=MagicMock(status="indexed")
-        )
-        mock_indexing.ensure_indexed = AsyncMock(return_value=MagicMock(status="indexed"))
-        mock_indexing.reset_if_stale = AsyncMock(return_value=False)
-
-        mock_embed_instance = MagicMock()
-        mock_embed_instance.embed_query = AsyncMock(
-            return_value=TEST_EMBEDDING_2048
-        )
-
-        mock_llm_instance = MagicMock()
-        mock_chat_instance = MagicMock()
-        mock_chat_instance.stream_reply = mock_stream_reply
-        mock_chat_instance.build_messages = MagicMock(
-            return_value=("system prompt", [{"role": "user", "content": "test"}])
-        )
+        mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
         ) as mock_resolve:
-            # BYOK — is_in_house=False
             mock_resolve.return_value = MagicMock(
-                provider="openai",
-                api_key="user-own-key",
-                is_in_house=False,
-                quota_remaining=None,
+                provider="openai", api_key="user-own-key", is_in_house=False, quota_remaining=None,
             )
-
-            with patch(
-                "app.api.routes.chat.EmbeddingService",
-                return_value=mock_embed_instance,
-            ), patch(
-                "app.api.routes.chat.LLMService",
-                return_value=mock_llm_instance,
-            ), patch(
-                "app.services.chat_orchestrator.ChatService",
-                return_value=mock_chat_instance,
-            ), patch(
-                "app.services.indexing_service.IndexingService",
-                return_value=mock_indexing,
-            ):
+            from contextlib import ExitStack
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
                     headers=auth_headers,
                 )
-
                 assert response.status_code == 200

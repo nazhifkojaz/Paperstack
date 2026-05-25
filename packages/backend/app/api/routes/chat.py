@@ -307,9 +307,7 @@ async def semantic_search(
     """Search across indexed PDFs using semantic similarity."""
     try:
         embedding_svc = EmbeddingService(http_client=embedding_client)
-        query_vector = await embedding_svc.embed_query(data.query, db=db)
-    except OpenRouterQuotaError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        query_vector = await embedding_svc.embed_query(data.query)
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 

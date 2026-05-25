@@ -249,9 +249,10 @@ class TestStreamOpenRouter:
 
     @pytest.mark.asyncio
     async def test_429_before_stream_raises_http_error(self):
-        """429 on streaming endpoint should raise httpx.HTTPStatusError."""
+        """429 on streaming endpoint should raise LLMRateLimitError."""
         import respx
         from app.services.llm_service import OPENROUTER_BASE_URL
+        from app.services.exceptions import LLMRateLimitError
 
         async with httpx.AsyncClient() as client:
             service = LLMService(http_client=client)
@@ -259,9 +260,9 @@ class TestStreamOpenRouter:
                 respx.post(f"{OPENROUTER_BASE_URL}/chat/completions").mock(
                     return_value=httpx.Response(429, text="Rate limited")
                 )
-                with pytest.raises(httpx.HTTPStatusError) as exc_info:
+                with pytest.raises(LLMRateLimitError) as exc_info:
                     async for _ in service.stream_openrouter(
                         "sys", [{"role": "user", "content": "hi"}], "test-key"
                     ):
                         pass
-                assert exc_info.value.response.status_code == 429
+                assert "OPENROUTER" in str(exc_info.value)

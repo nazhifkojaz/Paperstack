@@ -1,7 +1,24 @@
 """Tests for GitHub repo service."""
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch
 from fastapi import HTTPException
+
+
+def _make_fake_github_client(get=None, put=None, request=None, post=None):
+    """Create a fake GitHub client with sync headers.update and async methods."""
+    client = MagicMock()
+    client.headers = MagicMock()
+    client.headers.update = MagicMock()
+    if get is not None:
+        client.get = get
+    if put is not None:
+        client.put = put
+    if request is not None:
+        client.request = request
+    if post is not None:
+        client.post = post
+    return client
 
 
 class TestEnsureUserRepo:
@@ -127,7 +144,8 @@ class TestDownloadPdfFromGitHub:
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = mock_get
+            fake_client = _make_fake_github_client(get=mock_get)
+            mock_client.return_value.__aenter__.return_value = fake_client
 
             result = await download_pdf_from_github(
                 "encrypted_token",
@@ -148,7 +166,8 @@ class TestDownloadPdfFromGitHub:
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = mock_get
+            fake_client = _make_fake_github_client(get=mock_get)
+            mock_client.return_value.__aenter__.return_value = fake_client
 
             with pytest.raises(HTTPException) as exc:
                 await download_pdf_from_github(

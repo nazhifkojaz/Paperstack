@@ -1,19 +1,22 @@
 """Auto-highlight routes: retrieve-then-extract paper analysis."""
 
 import asyncio
+from dataclasses import dataclass
 import difflib
 import logging
 import re
+from time import perf_counter
 import unicodedata
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user, resolve_api_key_with_quota
-from app.services.exceptions import IndexingError
+from app.services.exceptions import IndexingError, LLMProviderError, LLMRateLimitError
 from app.core.config import settings
 from app.core.http_client import HTTPClientState
 from app.db.engine import SessionLocal
@@ -45,6 +48,87 @@ router = APIRouter()
 
 _MAX_PAGES = 100
 _BATCH_SIZE_THOROUGH = 5
+_LLM_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+_TRANSIENT_LLM_STATUS_CODES = {0, 408, 409, 425, 429, 500, 502, 503, 504, 524}
+
+
+async def _run_logged_step(
+    step: str,
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    tier: str,
+    operation,
+):
+    started = perf_counter()
+    log_context = {
+        "auto_highlight_step": step,
+        "cache_id": str(cache_id),
+        "pdf_id": str(pdf_id),
+        "user_id": str(user_id),
+        "tier": tier,
+    }
+    logger.info(
+        "Auto-highlight step started: step=%s cache_id=%s pdf_id=%s user_id=%s tier=%s",
+        step,
+        cache_id,
+        pdf_id,
+        user_id,
+        tier,
+        extra=log_context,
+    )
+    try:
+        result = await operation()
+    except Exception:
+        duration_ms = int((perf_counter() - started) * 1000)
+        logger.exception(
+            "Auto-highlight step failed: step=%s cache_id=%s duration_ms=%d",
+            step,
+            cache_id,
+            duration_ms,
+            extra={**log_context, "duration_ms": duration_ms},
+        )
+        raise
+
+    duration_ms = int((perf_counter() - started) * 1000)
+    logger.info(
+        "Auto-highlight step completed: step=%s cache_id=%s duration_ms=%d",
+        step,
+        cache_id,
+        duration_ms,
+        extra={**log_context, "duration_ms": duration_ms},
+    )
+    return result
+
+
+def _log_background_stop(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    tier: str,
+    run_started: float,
+    status: str,
+    reason: str,
+) -> None:
+    duration_ms = int((perf_counter() - run_started) * 1000)
+    logger.info(
+        "Background analysis stopped: cache_id=%s tier=%s status=%s "
+        "reason=%s duration_ms=%d",
+        cache_id,
+        tier,
+        status,
+        reason,
+        duration_ms,
+        extra={
+            "cache_id": str(cache_id),
+            "pdf_id": str(pdf_id),
+            "user_id": str(user_id),
+            "tier": tier,
+            "duration_ms": duration_ms,
+            "auto_highlight_status": status,
+            "stop_reason": reason,
+        },
+    )
 
 
 def _build_set_name(categories: list[str]) -> str:
@@ -181,6 +265,18 @@ def _validate_highlights_against_chunks(
     return valid
 
 
+def _combine_batch_reasoning_traces(
+    traces: list[tuple[int, int, str]],
+) -> str | None:
+    """Combine non-empty thorough-mode reasoning traces with batch headers."""
+    parts = []
+    for idx, total, trace in traces:
+        cleaned = trace.strip()
+        if cleaned:
+            parts.append(f"## Batch {idx}/{total}\n{cleaned}")
+    return "\n\n".join(parts) if parts else None
+
+
 async def _get_cache_row(
     db: AsyncSession,
     cache_id: uuid.UUID,
@@ -192,6 +288,116 @@ async def _get_cache_row(
     return result.scalar_one()
 
 
+async def _mark_cache_running(cache_id: uuid.UUID) -> bool:
+    """Update the cache row status to 'running' in a short-lived session."""
+    try:
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+            )
+            cache_row = result.scalar_one_or_none()
+            if not cache_row:
+                return False
+            if cache_row.status == "cancelled":
+                return False
+            if cache_row.status in {"pending", "running"}:
+                cache_row.status = "running"
+                cache_row.progress_pct = max(cache_row.progress_pct or 0, 1)
+                await db.commit()
+                return True
+            return False
+    except Exception:
+        logger.exception(
+            "Failed to mark cache as running for cache_id=%s",
+            cache_id,
+        )
+        return False
+
+
+async def _set_cache_cancelled(
+    db: AsyncSession,
+    cache_row: AutoHighlightCache,
+) -> AutoHighlightCache:
+    if cache_row.status in {"pending", "running"}:
+        if cache_row.annotation_set_id:
+            await db.execute(
+                delete(AnnotationSet).where(
+                    AnnotationSet.id == cache_row.annotation_set_id
+                )
+            )
+        cache_row.status = "cancelled"
+        cache_row.progress_pct = 100
+        cache_row.llm_response = {"error": "Analysis cancelled."}
+        cache_row.annotation_set_id = None
+        await db.commit()
+        await db.refresh(cache_row)
+        logger.info(
+            "Auto-highlight cancelled: cache_id=%s",
+            cache_row.id,
+            extra={
+                "cache_id": str(cache_row.id),
+                "auto_highlight_status": "cancelled",
+            },
+        )
+    return cache_row
+
+
+async def _mark_cache_cancelled(cache_id: uuid.UUID) -> AutoHighlightCache | None:
+    """Mark a running or pending analysis as cancelled."""
+    try:
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+            )
+            cache_row = result.scalar_one_or_none()
+            if not cache_row:
+                return None
+
+            return await _set_cache_cancelled(db, cache_row)
+    except Exception:
+        logger.exception(
+            "Failed to mark cache as cancelled for cache_id=%s",
+            cache_id,
+        )
+        return None
+
+
+async def _is_cache_cancelled(cache_id: uuid.UUID) -> bool:
+    """Return true when cancellation was requested or the cache row disappeared."""
+    try:
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(AutoHighlightCache.status).where(
+                    AutoHighlightCache.id == cache_id
+                )
+            )
+            status = result.scalar_one_or_none()
+            return status is None or status == "cancelled"
+    except Exception:
+        logger.exception(
+            "Failed to check cancellation status for cache_id=%s",
+            cache_id,
+        )
+        return False
+
+
+async def _stop_if_cancelled(cache_id: uuid.UUID, step: str) -> bool:
+    if not await _is_cache_cancelled(cache_id):
+        return False
+
+    logger.info(
+        "Auto-highlight cancellation observed: cache_id=%s step=%s",
+        cache_id,
+        step,
+        extra={
+            "cache_id": str(cache_id),
+            "auto_highlight_status": "cancelled",
+            "auto_highlight_step": step,
+        },
+    )
+    return True
+
+
 async def _mark_cache_failed(cache_id: uuid.UUID, error_msg: str) -> None:
     """Update the cache row status to 'failed' in a short-lived session."""
     try:
@@ -201,15 +407,643 @@ async def _mark_cache_failed(cache_id: uuid.UUID, error_msg: str) -> None:
             )
             cache_row = result.scalar_one_or_none()
             if cache_row:
+                if cache_row.status == "cancelled":
+                    return
                 cache_row.status = "failed"
                 cache_row.progress_pct = 100
                 cache_row.llm_response = {"error": error_msg}
                 await db.commit()
+                logger.info(
+                    "Auto-highlight failed: cache_id=%s error=%s",
+                    cache_id,
+                    error_msg,
+                    extra={
+                        "cache_id": str(cache_id),
+                        "auto_highlight_status": "failed",
+                        "error_message": error_msg,
+                    },
+                )
     except Exception:
         logger.exception(
             "Failed to mark cache as failed for cache_id=%s",
             cache_id,
         )
+
+
+@dataclass(slots=True)
+class _AnalysisSetup:
+    pdf_title: str
+    abstract_text: str
+    shortlist: list
+
+
+async def _chunk_for_analysis(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    tier: str,
+    db: AsyncSession,
+    custom_queries: dict[str, str] | None = None,
+) -> list:
+    """Return candidate chunks for LLM analysis."""
+    return await highlight_shortlist_service.shortlist_chunks(
+        pdf_id=str(pdf_id),
+        user_id=str(user_id),
+        categories=categories,
+        pages=pages,
+        tier=tier,
+        db=db,
+        custom_queries=custom_queries,
+    )
+
+
+async def _fetch_paper_content(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    tier: str,
+) -> _AnalysisSetup:
+    """Validate the paper, ensure indexing, and gather text for analysis."""
+    async with SessionLocal() as db:
+        user_result = await db.execute(select(User).where(User.id == user_id))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise IndexingError("User not found.")
+
+        pdf_result = await db.execute(
+            select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == user_id)
+        )
+        pdf_row = pdf_result.scalar_one_or_none()
+        if not pdf_row:
+            raise IndexingError("PDF not found.")
+
+        idx_service = IndexingService(download_service=pdf_download_service)
+        idx_status = await idx_service.get_or_create_status(
+            str(pdf_id),
+            str(user_id),
+            db,
+        )
+        await db.commit()
+        await idx_service.ensure_indexed(pdf_row, user, idx_status, db)
+        await db.commit()
+
+        abstract_text = await _extract_abstract_text(pdf_id, user_id, db)
+        shortlist = await _chunk_for_analysis(
+            pdf_id,
+            user_id,
+            categories,
+            pages,
+            tier,
+            db,
+        )
+        if not shortlist:
+            raise IndexingError(
+                "No indexed text found for the selected pages. "
+                "Make sure the PDF is indexed and the pages contain text."
+            )
+
+        return _AnalysisSetup(
+            pdf_title=pdf_row.title,
+            abstract_text=abstract_text,
+            shortlist=shortlist,
+        )
+
+
+async def _prepare_analysis_setup(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    tier: str,
+) -> _AnalysisSetup | None:
+    try:
+        return await _fetch_paper_content(pdf_id, user_id, categories, pages, tier)
+    except IndexingError as exc:
+        logger.exception(
+            "Setup phase failed (IndexingError): cache_id=%s",
+            cache_id,
+        )
+        await _mark_cache_failed(cache_id, str(exc))
+        return None
+    except Exception:
+        logger.exception("Setup phase failed: cache_id=%s", cache_id)
+
+    await _mark_cache_failed(cache_id, "Setup failed")
+    return None
+
+
+async def _generate_custom_queries(
+    llm_svc: LLMService,
+    setup: _AnalysisSetup,
+    categories: list[str],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+) -> dict[str, str] | None:
+    """Ask the LLM for paper-specific retrieval queries when enough context exists."""
+    if not setup.pdf_title or len(setup.abstract_text) < 50:
+        return None
+
+    try:
+        custom_queries = await llm_svc.generate_paper_queries(
+            title=setup.pdf_title,
+            abstract=setup.abstract_text,
+            categories=categories,
+            provider=provider,
+            api_key=api_key,
+            model=model,
+        )
+        if custom_queries:
+            logger.info(
+                "Generated paper-specific queries for %d categories",
+                len(custom_queries),
+            )
+        return custom_queries
+    except Exception:
+        logger.exception(
+            "Failed to generate paper-specific queries, falling back to canned queries"
+        )
+        return None
+
+
+async def _augment_shortlist_with_custom_queries(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    pages: list[int],
+    tier: str,
+    shortlist: list,
+    custom_queries: dict[str, str] | None,
+) -> list:
+    """Re-run shortlisting with generated queries, falling back to the original list."""
+    if not custom_queries:
+        return shortlist
+
+    try:
+        async with SessionLocal() as db:
+            augmented = await _chunk_for_analysis(
+                pdf_id,
+                user_id,
+                categories,
+                pages,
+                tier,
+                db,
+                custom_queries=custom_queries,
+            )
+            return augmented or shortlist
+    except Exception:
+        logger.exception("Re-shortlist with custom queries failed, using original")
+        return shortlist
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    if isinstance(exc, LLMRateLimitError):
+        return True
+    if isinstance(exc, LLMProviderError):
+        return exc.status_code in _TRANSIENT_LLM_STATUS_CODES
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    return False
+
+
+def _llm_user_error_message(exc: Exception) -> str:
+    if isinstance(exc, LLMRateLimitError):
+        return str(exc)
+    if isinstance(exc, LLMProviderError):
+        if exc.status_code in (401, 403):
+            return "LLM authentication failed. Check the configured API key."
+        if exc.status_code == 402:
+            return "LLM quota or billing is unavailable. Check the configured API key."
+        if exc.status_code == 429:
+            return "LLM rate limit exceeded. Please try again shortly."
+        if exc.status_code >= 500 or exc.status_code in (0, 408, 524):
+            return "LLM provider is temporarily unavailable. Please try again."
+    return "LLM extraction failed"
+
+
+def _passage_char_count(passages: list) -> int:
+    return sum(len(getattr(passage, "content", "")) for passage in passages)
+
+
+async def _run_llm_analysis(
+    llm_svc: LLMService,
+    passages: list,
+    categories: list[str],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+    cache_id: uuid.UUID,
+    label: str,
+) -> list[dict] | None:
+    """Run extraction for a passage batch and validate quotes against the source."""
+    max_attempts = len(_LLM_RETRY_DELAYS_SECONDS) + 1
+    started = perf_counter()
+    highlights = None
+    for attempt in range(1, max_attempts + 1):
+        attempt_started = perf_counter()
+        passage_chars = _passage_char_count(passages)
+        try:
+            logger.info(
+                "LLM extraction started: cache_id=%s label=%s attempt=%d/%d "
+                "provider=%s model=%s passages=%d chars=%d",
+                cache_id,
+                label,
+                attempt,
+                max_attempts,
+                provider,
+                model or "default",
+                len(passages),
+                passage_chars,
+                extra={
+                    "cache_id": str(cache_id),
+                    "auto_highlight_step": "llm_extract",
+                    "analysis_label": label,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "provider": provider,
+                    "model": model or "default",
+                    "passage_count": len(passages),
+                    "passage_chars": passage_chars,
+                },
+            )
+            highlights = await llm_svc.extract_highlights_from_passages(
+                passages,
+                categories,
+                provider,
+                api_key,
+                model=model,
+                db=None,
+            )
+            latency_ms = int((perf_counter() - attempt_started) * 1000)
+            reasoning_trace = llm_svc.last_reasoning_trace
+            reasoning_chars = (
+                len(reasoning_trace) if isinstance(reasoning_trace, str) else 0
+            )
+            logger.info(
+                "LLM extraction completed: cache_id=%s label=%s attempt=%d "
+                "latency_ms=%d highlights=%d reasoning_chars=%d",
+                cache_id,
+                label,
+                attempt,
+                latency_ms,
+                len(highlights),
+                reasoning_chars,
+                extra={
+                    "cache_id": str(cache_id),
+                    "auto_highlight_step": "llm_extract",
+                    "analysis_label": label,
+                    "attempt": attempt,
+                    "latency_ms": latency_ms,
+                    "provider": provider,
+                    "model": model or "default",
+                    "highlight_count": len(highlights),
+                    "reasoning_chars": reasoning_chars,
+                },
+            )
+            break
+        except Exception as exc:
+            latency_ms = int((perf_counter() - attempt_started) * 1000)
+            retryable = _is_transient_llm_error(exc)
+            if retryable and attempt < max_attempts:
+                delay = _LLM_RETRY_DELAYS_SECONDS[attempt - 1]
+                logger.warning(
+                    "Transient LLM extraction failure: cache_id=%s label=%s "
+                    "attempt=%d/%d latency_ms=%d retry_delay=%.1f error=%s",
+                    cache_id,
+                    label,
+                    attempt,
+                    max_attempts,
+                    latency_ms,
+                    delay,
+                    exc,
+                    extra={
+                        "cache_id": str(cache_id),
+                        "auto_highlight_step": "llm_extract",
+                        "analysis_label": label,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "latency_ms": latency_ms,
+                        "retry_delay_seconds": delay,
+                        "provider": provider,
+                        "model": model or "default",
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            logger.exception(
+                "LLM extraction failed: cache_id=%s label=%s attempt=%d/%d "
+                "latency_ms=%d retryable=%s",
+                cache_id,
+                label,
+                attempt,
+                max_attempts,
+                latency_ms,
+                retryable,
+                extra={
+                    "cache_id": str(cache_id),
+                    "auto_highlight_step": "llm_extract",
+                    "analysis_label": label,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "latency_ms": latency_ms,
+                    "provider": provider,
+                    "model": model or "default",
+                    "error_type": type(exc).__name__,
+                    "retryable": retryable,
+                },
+            )
+            await _mark_cache_failed(cache_id, _llm_user_error_message(exc))
+            return None
+
+    total_latency_ms = int((perf_counter() - started) * 1000)
+    valid_highlights = _validate_highlights_against_chunks(highlights or [], passages)
+    logger.info(
+        "LLM extraction validated: cache_id=%s label=%s latency_ms=%d "
+        "valid_highlights=%d raw_highlights=%d",
+        cache_id,
+        label,
+        total_latency_ms,
+        len(valid_highlights),
+        len(highlights or []),
+        extra={
+            "cache_id": str(cache_id),
+            "auto_highlight_step": "llm_extract_validate",
+            "analysis_label": label,
+            "latency_ms": total_latency_ms,
+            "valid_highlight_count": len(valid_highlights),
+            "raw_highlight_count": len(highlights or []),
+            "provider": provider,
+            "model": model or "default",
+        },
+    )
+    return valid_highlights
+
+
+def _build_auto_highlight_annotation_set(
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+) -> AnnotationSet:
+    return AnnotationSet(
+        pdf_id=pdf_id,
+        user_id=user_id,
+        name=_build_set_name(categories),
+        color="#a855f7",
+        source="auto_highlight",
+    )
+
+
+def _add_highlight_annotations(
+    db: AsyncSession,
+    set_id: uuid.UUID,
+    highlights: list[dict],
+) -> None:
+    for highlight in highlights:
+        db.add(
+            Annotation(
+                set_id=set_id,
+                page_number=max(1, highlight["page"]),
+                type="highlight",
+                rects=[],
+                selected_text=highlight["text"],
+                note_content=highlight["reason"],
+                color=CATEGORY_COLORS.get(highlight["category"], "#a855f7"),
+                ann_metadata={"category": highlight["category"]},
+            )
+        )
+
+
+def _set_no_highlights_failure(cache_row: AutoHighlightCache) -> None:
+    cache_row.status = "failed"
+    cache_row.progress_pct = 100
+    cache_row.llm_response = {
+        "error": "No highlight-worthy passages found. "
+        "Try a wider page range or different categories.",
+    }
+
+
+async def _parse_and_store_results(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    highlights: list[dict],
+    reasoning_trace: str | None,
+) -> bool:
+    """Persist the single-pass quick analysis result."""
+    try:
+        async with SessionLocal() as db:
+            cache_row = await _get_cache_row(db, cache_id)
+            if cache_row.status == "cancelled":
+                return False
+            if not highlights:
+                _set_no_highlights_failure(cache_row)
+                await db.commit()
+                return False
+
+            annotation_set = _build_auto_highlight_annotation_set(
+                pdf_id,
+                user_id,
+                categories,
+            )
+            db.add(annotation_set)
+            await db.flush()
+            _add_highlight_annotations(db, annotation_set.id, highlights)
+
+            cache_row.status = "complete"
+            cache_row.progress_pct = 100
+            cache_row.llm_response = highlights
+            cache_row.reasoning_trace = reasoning_trace
+            cache_row.annotation_set_id = annotation_set.id
+            await db.commit()
+            return True
+    except Exception:
+        logger.exception(
+            "Failed to persist highlights (quick): cache_id=%s",
+            cache_id,
+        )
+        await _mark_cache_failed(cache_id, "Persistence failed")
+        return False
+
+
+async def _persist_thorough_batch(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    batch_highlights: list[dict],
+    batch_index: int,
+    total_batches: int,
+) -> bool:
+    try:
+        async with SessionLocal() as db:
+            cache_row = await _get_cache_row(db, cache_id)
+            if cache_row.status == "cancelled":
+                return False
+
+            set_id = cache_row.annotation_set_id
+            if set_id is None and batch_highlights:
+                annotation_set = _build_auto_highlight_annotation_set(
+                    pdf_id,
+                    user_id,
+                    categories,
+                )
+                db.add(annotation_set)
+                await db.flush()
+                set_id = annotation_set.id
+                cache_row.annotation_set_id = set_id
+
+            if set_id:
+                _add_highlight_annotations(db, set_id, batch_highlights)
+
+            cache_row.progress_pct = int(batch_index / total_batches * 100)
+            await db.commit()
+            return True
+    except Exception:
+        logger.exception(
+            "Failed to persist batch %d/%d: cache_id=%s",
+            batch_index,
+            total_batches,
+            cache_id,
+        )
+        await _mark_cache_failed(cache_id, "Persistence failed")
+        return False
+
+
+async def _finalize_thorough_results(
+    cache_id: uuid.UUID,
+    all_highlights: list[dict],
+    batch_reasoning_traces: list[tuple[int, int, str]],
+) -> bool:
+    try:
+        async with SessionLocal() as db:
+            cache_row = await _get_cache_row(db, cache_id)
+            if cache_row.status == "cancelled":
+                return False
+            if not all_highlights:
+                _set_no_highlights_failure(cache_row)
+                await db.commit()
+                return False
+
+            cache_row.status = "complete"
+            cache_row.progress_pct = 100
+            cache_row.llm_response = all_highlights
+            cache_row.reasoning_trace = _combine_batch_reasoning_traces(
+                batch_reasoning_traces
+            )
+            await db.commit()
+            return True
+    except Exception:
+        logger.exception("Failed to finalize cache status: cache_id=%s", cache_id)
+        return False
+
+
+async def _run_quick_analysis(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+    llm_svc: LLMService,
+    shortlist: list,
+) -> bool:
+    if await _stop_if_cancelled(cache_id, "quick_before_llm"):
+        return False
+
+    highlights = await _run_llm_analysis(
+        llm_svc,
+        shortlist,
+        categories,
+        provider,
+        api_key,
+        model,
+        cache_id,
+        "quick",
+    )
+    if highlights is None:
+        return False
+    if await _stop_if_cancelled(cache_id, "quick_after_llm"):
+        return False
+
+    return await _parse_and_store_results(
+        cache_id,
+        pdf_id,
+        user_id,
+        categories,
+        highlights,
+        llm_svc.last_reasoning_trace,
+    )
+
+
+async def _run_thorough_analysis(
+    cache_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    categories: list[str],
+    provider: str,
+    api_key: str,
+    model: Optional[str],
+    llm_svc: LLMService,
+    shortlist: list,
+) -> bool:
+    batches = [
+        shortlist[i : i + _BATCH_SIZE_THOROUGH]
+        for i in range(0, len(shortlist), _BATCH_SIZE_THOROUGH)
+    ]
+    total = len(batches)
+    all_highlights = []
+    batch_reasoning_traces: list[tuple[int, int, str]] = []
+
+    for idx, batch in enumerate(batches, 1):
+        if await _stop_if_cancelled(cache_id, f"thorough_before_batch_{idx}"):
+            return False
+
+        batch_highlights = await _run_llm_analysis(
+            llm_svc,
+            batch,
+            categories,
+            provider,
+            api_key,
+            model,
+            cache_id,
+            f"thorough, batch {idx}/{total}",
+        )
+        if batch_highlights is None:
+            return False
+        if await _stop_if_cancelled(cache_id, f"thorough_after_batch_{idx}_llm"):
+            return False
+
+        if llm_svc.last_reasoning_trace:
+            batch_reasoning_traces.append((idx, total, llm_svc.last_reasoning_trace))
+
+        all_highlights.extend(batch_highlights)
+        persisted = await _persist_thorough_batch(
+            cache_id,
+            pdf_id,
+            user_id,
+            categories,
+            batch_highlights,
+            idx,
+            total,
+        )
+        if not persisted:
+            return False
+
+    if await _stop_if_cancelled(cache_id, "thorough_before_finalize"):
+        return False
+
+    return await _finalize_thorough_results(
+        cache_id,
+        all_highlights,
+        batch_reasoning_traces,
+    )
 
 
 async def _run_analysis_background(
@@ -224,305 +1058,237 @@ async def _run_analysis_background(
     tier: str,
     llm_client,
 ) -> None:
-    """Background task: ensure indexed → shortlist → LLM extract → annotations.
-
-    Uses short-lived DB sessions to avoid stale connections from long LLM
-    calls (Neon serverless closes idle connections behind load balancers).
-    """
+    """Background task: ensure indexed -> shortlist -> LLM extract -> annotations."""
+    run_started = perf_counter()
+    logger.info(
+        "Background analysis started: cache_id=%s pdf_id=%s user_id=%s "
+        "tier=%s provider=%s model=%s categories=%s pages=%d",
+        cache_id,
+        pdf_id,
+        user_id,
+        tier,
+        provider,
+        model or "default",
+        categories,
+        len(pages),
+        extra={
+            "cache_id": str(cache_id),
+            "pdf_id": str(pdf_id),
+            "user_id": str(user_id),
+            "tier": tier,
+            "provider": provider,
+            "model": model or "default",
+            "categories": categories,
+            "page_count": len(pages),
+        },
+    )
+    if not await _mark_cache_running(cache_id):
+        status = "cancelled" if await _is_cache_cancelled(cache_id) else "stopped"
+        _log_background_stop(
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            run_started,
+            status,
+            "not_started",
+        )
+        return
     llm_svc = LLMService(http_client=llm_client)
-    pdf_title = ""
-    abstract_text = ""
-    shortlist = []
 
-    # ── Phase 1: Setup (validation, indexing, abstract, shortlist) ──────
     try:
-        async with SessionLocal() as db:
-            user_result = await db.execute(select(User).where(User.id == user_id))
-            user = user_result.scalar_one_or_none()
-            if not user:
-                raise IndexingError("User not found.")
-
-            pdf_result = await db.execute(
-                select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == user_id)
-            )
-            pdf_row = pdf_result.scalar_one_or_none()
-            if not pdf_row:
-                raise IndexingError("PDF not found.")
-
-            pdf_title = pdf_row.title
-
-            # Step 1: ensure indexed
-            idx_service = IndexingService(download_service=pdf_download_service)
-            idx_status = await idx_service.get_or_create_status(
-                str(pdf_id),
-                str(user_id),
-                db,
-            )
-            await db.commit()
-            await idx_service.ensure_indexed(pdf_row, user, idx_status, db)
-            await db.commit()
-
-            abstract_text = await _extract_abstract_text(
+        if await _stop_if_cancelled(cache_id, "before_prepare_setup"):
+            _log_background_stop(
+                cache_id,
                 pdf_id,
                 user_id,
-                db,
+                tier,
+                run_started,
+                "cancelled",
+                "before_prepare_setup",
             )
+            return
 
-            # Step 2: shortlist candidate chunks
-            # (done before LLM call so we don't hold session across it)
-            shortlist_raw = await highlight_shortlist_service.shortlist_chunks(
-                pdf_id=str(pdf_id),
-                user_id=str(user_id),
-                categories=categories,
-                pages=pages,
-                tier=tier,
-                db=db,
-                custom_queries=None,
-            )
-
-            if not shortlist_raw:
-                raise IndexingError(
-                    "No indexed text found for the selected pages. "
-                    "Make sure the PDF is indexed and the pages contain text."
-                )
-
-            shortlist = shortlist_raw
-
-    except IndexingError:
-        logger.exception(
-            "Setup phase failed (IndexingError): cache_id=%s",
+        setup = await _run_logged_step(
+            "prepare_setup",
             cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            lambda: _prepare_analysis_setup(
+                cache_id,
+                pdf_id,
+                user_id,
+                categories,
+                pages,
+                tier,
+            ),
         )
-        await _mark_cache_failed(cache_id, "Setup failed")
-        return
-    except Exception:
-        logger.exception(
-            "Setup phase failed: cache_id=%s",
-            cache_id,
-        )
-        await _mark_cache_failed(cache_id, "Setup failed")
-        return
-
-    # ── Phase 2: LLM query generation (no DB session held) ──────────────
-    custom_queries: dict[str, str] | None = None
-    try:
-        if pdf_title and len(abstract_text) >= 50:
-            custom_queries = await llm_svc.generate_paper_queries(
-                title=pdf_title,
-                abstract=abstract_text,
-                categories=categories,
-                provider=provider,
-                api_key=api_key,
-                model=model,
+        if not setup:
+            _log_background_stop(
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "failed",
+                "setup_failed",
             )
-            if custom_queries:
-                logger.info(
-                    "Generated paper-specific queries for %d categories",
-                    len(custom_queries),
-                )
-    except Exception:
-        logger.exception(
-            "Failed to generate paper-specific queries, falling back to canned queries"
-        )
+            return
+        if await _stop_if_cancelled(cache_id, "after_prepare_setup"):
+            _log_background_stop(
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "cancelled",
+                "after_prepare_setup",
+            )
+            return
 
-    # ── Phase 3: Re-shortlist with custom queries if available ──────────
-    if custom_queries:
-        try:
-            async with SessionLocal() as db:
-                augmented = await highlight_shortlist_service.shortlist_chunks(
-                    pdf_id=str(pdf_id),
-                    user_id=str(user_id),
-                    categories=categories,
-                    pages=pages,
-                    tier=tier,
-                    db=db,
-                    custom_queries=custom_queries,
-                )
-                if augmented:
-                    shortlist = augmented
-        except Exception:
-            logger.exception("Re-shortlist with custom queries failed, using original")
-
-    # ── Phase 4: LLM extraction + persistence ───────────────────────────
-    if tier == "quick":
-        # LLM call — no DB session held during the call
-        try:
-            highlights = await llm_svc.extract_highlights_from_passages(
-                shortlist,
+        custom_queries = await _run_logged_step(
+            "generate_custom_queries",
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            lambda: _generate_custom_queries(
+                llm_svc,
+                setup,
                 categories,
                 provider,
                 api_key,
-                model=model,
-                db=None,
-            )
-        except Exception:
-            logger.exception("LLM extraction failed (quick): cache_id=%s", cache_id)
-            await _mark_cache_failed(cache_id, "LLM extraction failed")
-            return
-
-        highlights = _validate_highlights_against_chunks(highlights, shortlist)
-
-        # Persist — short-lived session
-        try:
-            async with SessionLocal() as db:
-                cache_row = await _get_cache_row(db, cache_id)
-                if not highlights:
-                    cache_row.status = "failed"
-                    cache_row.progress_pct = 100
-                    cache_row.llm_response = {
-                        "error": "No highlight-worthy passages found. "
-                        "Try a wider page range or different categories.",
-                    }
-                    await db.commit()
-                    return
-
-                annotation_set = AnnotationSet(
-                    pdf_id=pdf_id,
-                    user_id=user_id,
-                    name=_build_set_name(categories),
-                    color="#a855f7",
-                    source="auto_highlight",
-                )
-                db.add(annotation_set)
-                await db.flush()
-
-                for h in highlights:
-                    db.add(
-                        Annotation(
-                            set_id=annotation_set.id,
-                            page_number=max(1, h["page"]),
-                            type="highlight",
-                            rects=[],
-                            selected_text=h["text"],
-                            note_content=h["reason"],
-                            color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
-                            ann_metadata={"category": h["category"]},
-                        )
-                    )
-
-                cache_row.status = "complete"
-                cache_row.progress_pct = 100
-                cache_row.llm_response = highlights
-                cache_row.annotation_set_id = annotation_set.id
-                await db.commit()
-        except Exception:
-            logger.exception(
-                "Failed to persist highlights (quick): cache_id=%s",
+                model,
+            ),
+        )
+        if await _stop_if_cancelled(cache_id, "after_generate_custom_queries"):
+            _log_background_stop(
                 cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "cancelled",
+                "after_generate_custom_queries",
             )
-            await _mark_cache_failed(cache_id, "Persistence failed")
             return
-
-    else:
-        # Thorough: sequential batches with progressive saves.
-        # Each batch: LLM call (no DB) → fresh session for persistence.
-        batches = [
-            shortlist[i : i + _BATCH_SIZE_THOROUGH]
-            for i in range(0, len(shortlist), _BATCH_SIZE_THOROUGH)
-        ]
-        total = len(batches)
-        all_highlights = []
-
-        for idx, batch in enumerate(batches, 1):
-            # LLM call — no DB session held
-            try:
-                batch_highlights = await llm_svc.extract_highlights_from_passages(
-                    batch,
+        shortlist = await _run_logged_step(
+            "shortlist_with_custom_queries",
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            lambda: _augment_shortlist_with_custom_queries(
+                pdf_id,
+                user_id,
+                categories,
+                pages,
+                tier,
+                setup.shortlist,
+                custom_queries,
+            ),
+        )
+        if await _stop_if_cancelled(cache_id, "after_shortlist"):
+            _log_background_stop(
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "cancelled",
+                "after_shortlist",
+            )
+            return
+        if tier == "quick":
+            completed = await _run_logged_step(
+                "quick_analysis",
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                lambda: _run_quick_analysis(
+                    cache_id,
+                    pdf_id,
+                    user_id,
                     categories,
                     provider,
                     api_key,
-                    model=model,
-                    db=None,
-                )
-            except Exception:
-                logger.exception(
-                    "LLM extraction failed (thorough, batch %d/%d): cache_id=%s",
-                    idx,
-                    total,
-                    cache_id,
-                )
-                await _mark_cache_failed(cache_id, "LLM extraction failed")
-                return
-
-            batch_highlights = _validate_highlights_against_chunks(
-                batch_highlights,
-                batch,
+                    model,
+                    llm_svc,
+                    shortlist,
+                ),
             )
-            all_highlights.extend(batch_highlights)
-
-            # Persist batch — fresh session
-            try:
-                async with SessionLocal() as db:
-                    cache_row = await _get_cache_row(db, cache_id)
-
-                    set_id = cache_row.annotation_set_id
-                    if set_id is None and batch_highlights:
-                        annotation_set = AnnotationSet(
-                            pdf_id=pdf_id,
-                            user_id=user_id,
-                            name=_build_set_name(categories),
-                            color="#a855f7",
-                            source="auto_highlight",
-                        )
-                        db.add(annotation_set)
-                        await db.flush()
-                        set_id = annotation_set.id
-                        cache_row.annotation_set_id = set_id
-
-                    if set_id:
-                        for h in batch_highlights:
-                            db.add(
-                                Annotation(
-                                    set_id=set_id,
-                                    page_number=max(1, h["page"]),
-                                    type="highlight",
-                                    rects=[],
-                                    selected_text=h["text"],
-                                    note_content=h["reason"],
-                                    color=CATEGORY_COLORS.get(h["category"], "#a855f7"),
-                                    ann_metadata={"category": h["category"]},
-                                )
-                            )
-
-                    cache_row.progress_pct = int(idx / total * 100)
-                    await db.commit()
-            except Exception:
-                logger.exception(
-                    "Failed to persist batch %d/%d: cache_id=%s",
-                    idx,
-                    total,
-                    cache_id,
-                )
-                await _mark_cache_failed(cache_id, "Persistence failed")
-                return
-
-        # Final status update
-        try:
-            async with SessionLocal() as db:
-                cache_row = await _get_cache_row(db, cache_id)
-                if not all_highlights:
-                    cache_row.status = "failed"
-                    cache_row.progress_pct = 100
-                    cache_row.llm_response = {
-                        "error": "No highlight-worthy passages found. "
-                        "Try a wider page range or different categories.",
-                    }
-                else:
-                    cache_row.status = "complete"
-                    cache_row.progress_pct = 100
-                    cache_row.llm_response = all_highlights
-                await db.commit()
-        except Exception:
-            logger.exception(
-                "Failed to finalize cache status: cache_id=%s",
+        else:
+            completed = await _run_logged_step(
+                "thorough_analysis",
                 cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                lambda: _run_thorough_analysis(
+                    cache_id,
+                    pdf_id,
+                    user_id,
+                    categories,
+                    provider,
+                    api_key,
+                    model,
+                    llm_svc,
+                    shortlist,
+                ),
             )
+    except Exception:
+        logger.exception(
+            "Background analysis crashed: cache_id=%s pdf_id=%s user_id=%s tier=%s",
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            extra={
+                "cache_id": str(cache_id),
+                "pdf_id": str(pdf_id),
+                "user_id": str(user_id),
+                "tier": tier,
+            },
+        )
+        await _mark_cache_failed(cache_id, "Unexpected analysis failure")
+        return
 
-    logger.info(
-        "Background analysis complete: cache_id=%s, tier=%s",
-        cache_id,
-        tier,
-    )
+    duration_ms = int((perf_counter() - run_started) * 1000)
+    if completed:
+        logger.info(
+            "Background analysis complete: cache_id=%s tier=%s duration_ms=%d",
+            cache_id,
+            tier,
+            duration_ms,
+            extra={
+                "cache_id": str(cache_id),
+                "pdf_id": str(pdf_id),
+                "user_id": str(user_id),
+                "tier": tier,
+                "duration_ms": duration_ms,
+                "auto_highlight_status": "complete",
+            },
+        )
+    else:
+        status = "cancelled" if await _is_cache_cancelled(cache_id) else "failed"
+        logger.info(
+            "Background analysis ended without completion: cache_id=%s "
+            "tier=%s status=%s duration_ms=%d",
+            cache_id,
+            tier,
+            status,
+            duration_ms,
+            extra={
+                "cache_id": str(cache_id),
+                "pdf_id": str(pdf_id),
+                "user_id": str(user_id),
+                "tier": tier,
+                "duration_ms": duration_ms,
+                "auto_highlight_status": status,
+            },
+        )
 
 
 @router.post("/analyze", response_model=AutoHighlightResponse, status_code=202)
@@ -573,11 +1339,12 @@ async def analyze_paper(
     pending_cache = existing_result.scalar_one_or_none()
 
     if pending_cache:
-        if pending_cache.status == "pending":
+        if pending_cache.status in {"pending", "running"}:
             raise HTTPException(status_code=409, detail="Analysis already in progress.")
         pending_cache.status = "pending"
         pending_cache.provider = provider
         pending_cache.llm_response = None
+        pending_cache.reasoning_trace = None
         pending_cache.annotation_set_id = None
         pending_cache.progress_pct = 0
         pending_cache.tier = data.tier
@@ -639,6 +1406,28 @@ async def get_cache_entry(
     if not cache_row:
         raise HTTPException(status_code=404, detail="Cache entry not found")
     return cache_row
+
+
+@router.post(
+    "/cache/entry/{cache_id}/cancel",
+    response_model=AutoHighlightCacheResponse,
+)
+async def cancel_cache_entry(
+    cache_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cancel a pending or running analysis."""
+    result = await db.execute(
+        select(AutoHighlightCache).where(
+            AutoHighlightCache.id == cache_id,
+            AutoHighlightCache.user_id == current_user.id,
+        )
+    )
+    cache_row = result.scalar_one_or_none()
+    if not cache_row:
+        raise HTTPException(status_code=404, detail="Cache entry not found")
+    return await _set_cache_cancelled(db, cache_row)
 
 
 @router.get("/cache/{pdf_id}", response_model=list[AutoHighlightCacheResponse])

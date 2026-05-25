@@ -10,6 +10,7 @@ import httpx
 
 from app.schemas.types import ChatMessageDict, HighlightDict
 from app.services.exceptions import LLMRateLimitError, LLMProviderError
+from app.core.config import settings
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,19 +26,19 @@ FREE_MODELS = [
         "description": "NVIDIA's large model, good general-purpose quality",
     },
     {
-        "id": "google/gemma-4-31b-it:free",
-        "label": "Gemma 4 31B",
-        "description": "Google's instruction-tuned model, strong reasoning",
+        "id": "openai/gpt-oss-120b:free",
+        "label": "GPT-OSS 120B",
+        "description": "OpenAI's open-source 120B model",
     },
     {
-        "id": "tencent/hy3-preview:free",
-        "label": "Hunyuan 3 Preview",
-        "description": "Tencent's large preview model",
+        "id": "inclusionai/ring-2.6-1t:free",
+        "label": "Ring 2.6 1T",
+        "description": "InclusionAI's large 1T parameter model",
     },
     {
-        "id": "google/gemma-4-26b-a4b-it:free",
-        "label": "Gemma 4 26B",
-        "description": "Google's compact instruction-tuned Gemma 4 variant",
+        "id": "z-ai/glm-4.5-air:free",
+        "label": "GLM 4.5 Air",
+        "description": "Zhipu AI's efficient Air variant",
     },
     {
         "id": "minimax/minimax-m2.5:free",
@@ -156,6 +157,7 @@ class LLMService:
 
     def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
         self._client = http_client
+        self.last_reasoning_trace: str | None = None
 
     def _require_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -179,10 +181,12 @@ class LLMService:
         provider_name: str,
         timeout_msg: str = "Request timed out.",
         pre_check_fn: Callable[[dict], None] | None = None,
+        on_response: Callable[[dict], None] | None = None,
+        timeout: httpx.Timeout | None = None,
     ) -> str:
         client = self._require_client()
         try:
-            resp = await client.post(url, headers=headers, json=json_body)
+            resp = await client.post(url, headers=headers, json=json_body, timeout=timeout)
         except httpx.TimeoutException:
             raise LLMProviderError(provider_name, 0, timeout_msg)
         try:
@@ -192,6 +196,8 @@ class LLMService:
         data = resp.json()
         if pre_check_fn:
             pre_check_fn(data)
+        if on_response:
+            on_response(data)
         return extract_fn(data)
 
     async def call_glm(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
@@ -262,29 +268,84 @@ class LLMService:
             provider_name="anthropic",
         )
 
-    async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str, model: str = DEFAULT_FREE_MODEL) -> str:
-        """Call OpenRouter API (OpenAI-compatible) and return text content."""
+    async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str, model: str = DEFAULT_FREE_MODEL, reasoning_effort: str | None = None) -> str:
+        """Call OpenRouter API (OpenAI-compatible) and return text content.
+
+        When reasoning_effort is set (e.g. "medium"), OpenRouter will enable
+        extended reasoning/thinking on the model and include a reasoning trace
+        in the response. The trace is stored on self.last_reasoning_trace.
+
+        If a reasoning call times out (httpx timeout or Cloudflare 524),
+        the call is automatically retried without reasoning to avoid
+        blocking the pipeline on slow model responses.
+        """
         logger.info(
-            "Calling OpenRouter %s (prompt: %d chars, key: ...%s)",
-            model, len(user_prompt), api_key[-4:],
+            "Calling OpenRouter %s (prompt: %d chars, reasoning: %s, key: ...%s)",
+            model, len(user_prompt), reasoning_effort or "off", api_key[-4:],
         )
-        result = await self._call_provider(
-            url=f"{OPENROUTER_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json_body={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.2,
-            },
-            extract_fn=lambda d: d["choices"][0]["message"]["content"],
-            provider_name="openrouter",
-            pre_check_fn=_check_openrouter_error,
-        )
-        logger.info("OpenRouter responded successfully")
-        return result
+
+        json_body: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.2,
+        }
+        if reasoning_effort:
+            json_body["reasoning"] = {"effort": reasoning_effort}
+
+        def _on_response(data: dict) -> None:
+            reasoning = data["choices"][0]["message"].get("reasoning")
+            if reasoning:
+                self.last_reasoning_trace = reasoning
+                logger.debug("OpenRouter reasoning trace (%d chars)", len(reasoning))
+            else:
+                self.last_reasoning_trace = None
+
+        # Use a longer read timeout for reasoning calls to avoid
+        # httpx-side timeouts while the model is thinking
+        call_timeout = httpx.Timeout(
+            connect=10.0,
+            read=settings.OPENROUTER_REASONING_TIMEOUT_READ,
+            write=10.0,
+            pool=10.0,
+        ) if reasoning_effort else None
+
+        try:
+            result = await self._call_provider(
+                url=f"{OPENROUTER_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json_body=json_body,
+                extract_fn=lambda d: d["choices"][0]["message"]["content"],
+                provider_name="openrouter",
+                pre_check_fn=_check_openrouter_error,
+                on_response=_on_response,
+                timeout=call_timeout,
+            )
+            logger.info("OpenRouter responded successfully")
+            return result
+        except LLMProviderError as e:
+            if not reasoning_effort:
+                raise
+            if e.status_code not in (0, 400, 422, 524):
+                raise
+            logger.warning(
+                "OpenRouter reasoning call failed (status=%d), retrying without reasoning: %s",
+                e.status_code, e,
+            )
+            self.last_reasoning_trace = None
+            del json_body["reasoning"]
+            result = await self._call_provider(
+                url=f"{OPENROUTER_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json_body=json_body,
+                extract_fn=lambda d: d["choices"][0]["message"]["content"],
+                provider_name="openrouter",
+                pre_check_fn=_check_openrouter_error,
+            )
+            logger.info("OpenRouter responded successfully (fallback without reasoning)")
+            return result
 
     # --- Streaming methods for chat ---
 
@@ -293,11 +354,15 @@ class LLMService:
         url: str,
         headers: dict[str, str],
         payload: dict[str, Any],
+        provider_name: str = "openai",
     ) -> AsyncIterator[str]:
         """Stream tokens from an OpenAI-compatible SSE endpoint."""
         client = self._require_client()
         async with client.stream("POST", url, headers=headers, json=payload) as resp:
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                self._handle_http_error(exc, provider_name)
             async for line in resp.aiter_lines():
                 if line.startswith("data: ") and line != "data: [DONE]":
                     try:
@@ -321,6 +386,7 @@ class LLMService:
                 "temperature": 0.3,
                 "stream": True,
             },
+            provider_name="openai",
         ):
             yield token
 
@@ -344,7 +410,10 @@ class LLMService:
                 "stream": True,
             },
         ) as resp:
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                self._handle_http_error(exc, "anthropic")
             async for line in resp.aiter_lines():
                 if line.startswith("data: "):
                     try:
@@ -378,7 +447,10 @@ class LLMService:
                 "generationConfig": {"temperature": 0.3},
             },
         ) as resp:
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                self._handle_http_error(exc, "gemini")
             async for line in resp.aiter_lines():
                 if line.startswith("data: "):
                     try:
@@ -407,6 +479,7 @@ class LLMService:
                 "temperature": 0.3,
                 "stream": True,
             },
+            provider_name="glm",
         ):
             yield token
 
@@ -423,6 +496,7 @@ class LLMService:
                 "temperature": 0.3,
                 "stream": True,
             },
+            provider_name="openrouter",
         ):
             yield token
 
@@ -505,7 +579,8 @@ CRITICAL:
         elif provider == "anthropic":
             raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
         elif provider == "openrouter":
-            raw = await self.call_openrouter(system_prompt, user_prompt, api_key, model=model or DEFAULT_FREE_MODEL)
+            reasoning_effort = settings.OPENROUTER_REASONING_EFFORT if settings.OPENROUTER_REASONING_ENABLED else None
+            raw = await self.call_openrouter(system_prompt, user_prompt, api_key, model=model or DEFAULT_FREE_MODEL, reasoning_effort=reasoning_effort)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -560,9 +635,11 @@ CRITICAL:
             elif provider == "anthropic":
                 raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
             elif provider == "openrouter":
+                reasoning_effort = settings.OPENROUTER_REASONING_EFFORT if settings.OPENROUTER_REASONING_ENABLED else None
                 raw = await self.call_openrouter(
                     system_prompt, user_prompt, api_key,
                     model=model or DEFAULT_FREE_MODEL,
+                    reasoning_effort=reasoning_effort,
                 )
             else:
                 logger.warning("Unknown provider for query generation: %s", provider)

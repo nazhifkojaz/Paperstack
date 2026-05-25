@@ -91,7 +91,7 @@ class ExplainService:
             await db.commit()
             raise
 
-        query_vector = await self._embedding_service.embed_query(selected_text, db=db)
+        query_vector = await self._embedding_service.embed_query(selected_text)
 
         # Vector search for context (top 4 — tighter than chat's 6)
         top_chunks = await vector_search_service.search_pdf(
@@ -116,7 +116,12 @@ class ExplainService:
 
         call_method = getattr(self._llm_service, f"call_{provider}")
         kwargs: dict[str, Any] = {"system_prompt": system_prompt, "user_prompt": user_message, "api_key": api_key}
-        if model and provider == "openrouter":
+        if provider == "openrouter":
+            if model:
+                kwargs["model"] = model
+            if settings.OPENROUTER_REASONING_ENABLED:
+                kwargs["reasoning_effort"] = settings.OPENROUTER_REASONING_EFFORT
+        elif model and provider != "openrouter":
             kwargs["model"] = model
         explanation = await call_method(**kwargs)
 

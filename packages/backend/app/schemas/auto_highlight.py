@@ -40,6 +40,7 @@ class AutoHighlightCacheResponse(BaseModel):
     tier: str = "quick"
     created_at: datetime
     annotation_set_id: Optional[UUID] = None
+    error_message: Optional[str] = None
 
 
 class QuotaResponse(BaseModel):

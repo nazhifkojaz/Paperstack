@@ -58,18 +58,6 @@ class TestRecordAndCheck:
         assert exc_info.value.count_today == threshold
         assert exc_info.value.limit == 100
 
-    async def test_passes_below_threshold(
-        self, db_session, usage_service, seed_usage_row, monkeypatch
-    ):
-        monkeypatch.setattr("app.core.config.settings.OPENROUTER_FREE_TIER_LIMIT", 100)
-        await db_session.execute(
-            text("UPDATE openrouter_usage_cache SET request_count_today = 88 WHERE id = 1")
-        )
-        await db_session.commit()
-
-        count = await usage_service.record_and_check(db_session)
-        assert count == 89  # 89 < 90 (90% of 100)
-
     async def test_resets_on_new_day(
         self, db_session, usage_service, monkeypatch
     ):

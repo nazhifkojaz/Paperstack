@@ -127,7 +127,8 @@ async def create_annotation(
         rects=ann_in.rects,
         selected_text=ann_in.selected_text,
         note_content=ann_in.note_content,
-        color=ann_in.color
+        color=ann_in.color,
+        ann_metadata=ann_in.ann_metadata
     )
     db.add(db_ann)
     await db.commit()

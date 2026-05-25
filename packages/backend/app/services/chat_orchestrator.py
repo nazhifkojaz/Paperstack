@@ -80,7 +80,7 @@ class ChatOrchestrator:
         db: AsyncSession,
     ) -> PreparedContext:
         """Embed query, run vector search, build context, fetch citations."""
-        query_vector = await self._embedding_service.embed_query(query, db=db)
+        query_vector = await self._embedding_service.embed_query(query)
 
         if pdf_id is not None:
             return await self._prepare_pdf_context(

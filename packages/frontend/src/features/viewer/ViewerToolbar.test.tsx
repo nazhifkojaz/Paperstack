@@ -1,14 +1,13 @@
 /**
- * Tests for ViewerToolbar component.
+ * Tests for ViewerToolbar component (using new pdfViewerStore).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@/test/test-utils'
 import { ViewerToolbar } from './ViewerToolbar'
-import { usePdfViewerStore } from '@/stores/pdfViewerStore'
+import { useNewPdfViewerStore } from '@/features/pdf-viewer/pdfViewerStore'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
-// Mock annotation store
 vi.mock('@/stores/annotationStore', () => ({
   useAnnotationStore: () => ({
     isAnnotationSidebarOpen: true,
@@ -16,7 +15,6 @@ vi.mock('@/stores/annotationStore', () => ({
   }),
 }))
 
-// Mock auth store
 vi.mock('@/stores/authStore', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
@@ -31,9 +29,9 @@ vi.mock('@/stores/authStore', () => ({
 
 describe('ViewerToolbar', () => {
   beforeEach(() => {
-    usePdfViewerStore.getState().reset()
-    usePdfViewerStore.getState().setTotalPages(10)
-    usePdfViewerStore.getState().setCurrentPage(5)
+    useNewPdfViewerStore.getState().reset()
+    useNewPdfViewerStore.getState().setTotalPages(10)
+    useNewPdfViewerStore.getState().setVisiblePage(5)
   })
 
   const renderWithRouter = (component: React.ReactNode) => {
@@ -48,7 +46,7 @@ describe('ViewerToolbar', () => {
 
   describe('page navigation', () => {
     it('disables prev button on first page', () => {
-      usePdfViewerStore.getState().setCurrentPage(1)
+      useNewPdfViewerStore.getState().setVisiblePage(1)
 
       renderWithRouter(<ViewerToolbar />)
 
@@ -59,7 +57,7 @@ describe('ViewerToolbar', () => {
     })
 
     it('disables next button on last page', () => {
-      usePdfViewerStore.getState().setCurrentPage(10)
+      useNewPdfViewerStore.getState().setVisiblePage(10)
 
       renderWithRouter(<ViewerToolbar />)
 
@@ -69,7 +67,7 @@ describe('ViewerToolbar', () => {
       expect(nextBtn?.closest('button')).toBeDisabled()
     })
 
-    it('increments page on next button click', () => {
+    it('sets targetPage on next button click', () => {
       renderWithRouter(<ViewerToolbar />)
 
       const buttons = screen.getAllByRole('button')
@@ -77,10 +75,11 @@ describe('ViewerToolbar', () => {
 
       fireEvent.click(nextBtn!)
 
-      expect(usePdfViewerStore.getState().currentPage).toBe(6)
+      // jumpToPage sets targetPage, not visiblePage
+      expect(useNewPdfViewerStore.getState().targetPage).toBe(6)
     })
 
-    it('decrements page on prev button click', () => {
+    it('sets targetPage on prev button click', () => {
       renderWithRouter(<ViewerToolbar />)
 
       const buttons = screen.getAllByRole('button')
@@ -88,16 +87,16 @@ describe('ViewerToolbar', () => {
 
       fireEvent.click(prevBtn!)
 
-      expect(usePdfViewerStore.getState().currentPage).toBe(4)
+      expect(useNewPdfViewerStore.getState().targetPage).toBe(4)
     })
 
-    it('accepts direct page input', () => {
+    it('sets targetPage on direct page input', () => {
       renderWithRouter(<ViewerToolbar />)
 
       const input = screen.getByRole('spinbutton')
       fireEvent.change(input, { target: { value: '7' } })
 
-      expect(usePdfViewerStore.getState().currentPage).toBe(7)
+      expect(useNewPdfViewerStore.getState().targetPage).toBe(7)
     })
 
     it('rejects invalid page input', () => {
@@ -107,13 +106,13 @@ describe('ViewerToolbar', () => {
       fireEvent.change(input, { target: { value: '999' } })
 
       // Should not update due to max validation
-      expect(usePdfViewerStore.getState().currentPage).toBeLessThanOrEqual(10)
+      expect(useNewPdfViewerStore.getState().targetPage).toBeNull()
     })
   })
 
   describe('zoom controls', () => {
     it('zooms in on click', () => {
-      usePdfViewerStore.getState().setZoom(1.0)
+      useNewPdfViewerStore.getState().setZoom(1.0)
 
       renderWithRouter(<ViewerToolbar />)
 
@@ -122,11 +121,11 @@ describe('ViewerToolbar', () => {
 
       fireEvent.click(zoomInBtn!)
 
-      expect(usePdfViewerStore.getState().zoom).toBe(1.25)
+      expect(useNewPdfViewerStore.getState().zoom).toBe(1.25)
     })
 
     it('zooms out on click', () => {
-      usePdfViewerStore.getState().setZoom(1.5)
+      useNewPdfViewerStore.getState().setZoom(1.5)
 
       renderWithRouter(<ViewerToolbar />)
 
@@ -135,11 +134,11 @@ describe('ViewerToolbar', () => {
 
       fireEvent.click(zoomOutBtn!)
 
-      expect(usePdfViewerStore.getState().zoom).toBe(1.25)
+      expect(useNewPdfViewerStore.getState().zoom).toBe(1.25)
     })
 
     it('respects minimum zoom limit', () => {
-      usePdfViewerStore.getState().setZoom(0.25)
+      useNewPdfViewerStore.getState().setZoom(0.25)
 
       renderWithRouter(<ViewerToolbar />)
 
@@ -148,11 +147,11 @@ describe('ViewerToolbar', () => {
 
       fireEvent.click(zoomOutBtn!)
 
-      expect(usePdfViewerStore.getState().zoom).toBe(0.25)
+      expect(useNewPdfViewerStore.getState().zoom).toBe(0.25)
     })
 
     it('respects maximum zoom limit', () => {
-      usePdfViewerStore.getState().setZoom(5.0)
+      useNewPdfViewerStore.getState().setZoom(5.0)
 
       renderWithRouter(<ViewerToolbar />)
 
@@ -161,11 +160,11 @@ describe('ViewerToolbar', () => {
 
       fireEvent.click(zoomInBtn!)
 
-      expect(usePdfViewerStore.getState().zoom).toBe(5.0)
+      expect(useNewPdfViewerStore.getState().zoom).toBe(5.0)
     })
 
     it('displays current zoom percentage', () => {
-      usePdfViewerStore.getState().setZoom(1.5)
+      useNewPdfViewerStore.getState().setZoom(1.5)
 
       renderWithRouter(<ViewerToolbar />)
 

@@ -75,3 +75,5 @@ prompt_experiment_results.json
 
 # Claude Code local config and memory
 .claude/
+# Added by code-review-graph
+.code-review-graph/

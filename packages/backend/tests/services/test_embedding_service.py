@@ -1,4 +1,7 @@
 """Tests for EmbeddingService — OpenRouter /v1/embeddings wrapper."""
+import json
+
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -7,7 +10,7 @@ from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import EmbeddingError
 
 
-def _make_embedding_response(n: int, dim: int = 2048) -> dict:
+def _make_embedding_response(n: int, dim: int = 1024) -> dict:
     """Build a fake OpenAI-compatible embedding response."""
     return {
         "data": [
@@ -36,7 +39,7 @@ class TestEmbedTexts:
         )
         result = await svc.embed_texts(["hello"])
         assert len(result) == 1
-        assert len(result[0]) == 2048
+        assert len(result[0]) == 1024
 
     @respx.mock
     async def test_batch_request_structure(self, svc):
@@ -48,10 +51,11 @@ class TestEmbedTexts:
         assert route.called
         request = route.calls.last.request
         assert request.headers["authorization"] == "Bearer sk-or-test-key"
-        import json
         body = json.loads(request.content.decode())
-        assert body["model"] == "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+        assert body["model"] == "qwen/qwen3-embedding-8b"
         assert body["input"] == ["a", "b", "c"]
+        assert body["dimensions"] == 1024
+        assert body["provider"] == {"order": ["nebius", "deepinfra"], "allow_fallbacks": True}
 
     @respx.mock
     async def test_empty_input(self, svc):
@@ -74,11 +78,9 @@ class TestEmbedTexts:
     @respx.mock
     async def test_timeout_raises(self, svc):
         respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-            side_effect=Exception("timeout")
+            side_effect=httpx.TimeoutException("timeout")
         )
-        # The service catches httpx.TimeoutException specifically, but any exception
-        # during the request will propagate as an error.
-        with pytest.raises((EmbeddingError, Exception)):
+        with pytest.raises(EmbeddingError, match="timed out"):
             await svc.embed_texts(["hello"])
 
     @respx.mock
@@ -103,4 +105,4 @@ class TestEmbedQuery:
             return_value=Response(200, json=_make_embedding_response(1))
         )
         result = await svc.embed_query("what is attention?")
-        assert len(result) == 2048
+        assert len(result) == 1024

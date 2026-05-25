@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # OpenRouter free-tier daily request limit (for soft-gating at 90%).
     OPENROUTER_FREE_TIER_LIMIT: int = 1000
 
+    # OpenRouter reasoning (thinking) mode
+    OPENROUTER_REASONING_ENABLED: bool = True
+    OPENROUTER_REASONING_EFFORT: str = "medium"  # "low" | "medium" | "high"
+    OPENROUTER_REASONING_TIMEOUT_READ: float = 180.0  # Longer timeout for reasoning calls
+
     # Chat rate limits
     RATE_LIMIT_CHAT_MESSAGE: str = "20/minute"
     RATE_LIMIT_CHAT_CONVERSATIONS: str = "30/minute"

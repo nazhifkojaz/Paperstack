@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { useAnalyzePaper } from '@/api/autoHighlight';
-import { usePdfViewerStore } from '@/stores/pdfViewerStore';
+import { useNewPdfViewerStore } from '@/features/pdf-viewer/pdfViewerStore';
 import { toast } from 'sonner';
 import { ApiError } from '@/api/client';
 
@@ -61,7 +61,7 @@ export const CategorySelectionDialog = ({ open, onOpenChange, pdfId, onAnalysisS
     const [freeformInput, setFreeformInput] = useState('');
     const [tier, setTier] = useState<'quick' | 'thorough'>('quick');
 
-    const totalPages = usePdfViewerStore(state => state.totalPages);
+    const totalPages = useNewPdfViewerStore(state => state.totalPages);
     const analyzeMutation = useAnalyzePaper();
 
     const effectiveEnd = Math.min(pageEnd, totalPages || pageEnd);

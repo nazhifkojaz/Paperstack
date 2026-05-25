@@ -5,17 +5,22 @@
  * @example
  * <ChatMessageList
  *     messages={displayMessages}
- *     onChunkClick={(chunk) => setCurrentPage(chunk.page_number)}
+ *     onChunkClick={(chunk) => jumpToPage(chunk.page_number)}
  *     onChunkClickUrl={(chunk) => window.open(`/viewer/${chunk.pdf_id}`, '_blank')}
  * />
  */
 
 import { useMemo, useState } from 'react';
-import { Loader2, User, Bot, Copy, Check } from 'lucide-react';
+import { Loader2, User, Bot, Copy, Check, RefreshCw, X, AlertCircle } from 'lucide-react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import { Badge } from '@/components/ui/badge';
+import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { type ContextChunk } from '@/api/chat';
+import { useCitation } from '@/api/citations';
+import { CitationPreview } from './CitationPreview';
+import { InlineCitationLink } from './InlineCitationLink';
 import { createPageRefPlugin } from '@/lib/remarkPageRefs';
+import { createInlineCitationPlugin } from '@/lib/remarkInlineCitations';
 
 export interface ChatMessageProps {
     id: string;
@@ -23,6 +28,7 @@ export interface ChatMessageProps {
     content: string;
     context_chunks: ContextChunk[] | null;
     isStreaming?: boolean;
+    error?: string | null;
     created_at?: string;
 }
 
@@ -34,6 +40,8 @@ interface ChatMessageListProps {
     onChunkClick?: (chunk: ContextChunk) => void;
     onChunkClickUrl?: (chunk: ContextChunk) => void;
     onPageClick?: (page: number) => void;
+    onRetryFailed?: (messageId: string) => void;
+    onDismissFailed?: (messageId: string) => void;
 }
 
 /**
@@ -47,6 +55,8 @@ export function ChatMessageList({
     onChunkClick,
     onChunkClickUrl,
     onPageClick,
+    onRetryFailed,
+    onDismissFailed,
 }: ChatMessageListProps) {
     if (messages.length === 0 && !isSending) {
         return (
@@ -66,6 +76,8 @@ export function ChatMessageList({
                     onChunkClick={onChunkClick}
                     onChunkClickUrl={onChunkClickUrl}
                     onPageClick={onPageClick}
+                    onRetryFailed={onRetryFailed}
+                    onDismissFailed={onDismissFailed}
                 />
             ))}
         </div>
@@ -78,6 +90,8 @@ interface MessageBubbleProps {
     onChunkClick?: (chunk: ContextChunk) => void;
     onChunkClickUrl?: (chunk: ContextChunk) => void;
     onPageClick?: (page: number) => void;
+    onRetryFailed?: (messageId: string) => void;
+    onDismissFailed?: (messageId: string) => void;
 }
 
 function formatTime(iso: string): string {
@@ -85,7 +99,7 @@ function formatTime(iso: string): string {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, onPageClick }: MessageBubbleProps) {
+function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, onPageClick, onRetryFailed, onDismissFailed }: MessageBubbleProps) {
     const isUser = message.role === 'user';
     const [copied, setCopied] = useState(false);
 
@@ -100,17 +114,16 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
     };
 
     const remarkPlugins = useMemo(
-        () => onPageClick ? [createPageRefPlugin()] : [],
+        () => onPageClick ? [createPageRefPlugin(), createInlineCitationPlugin()] : [createInlineCitationPlugin()],
         [onPageClick]
     );
 
     const markdownComponents = useMemo(() => {
-        if (!onPageClick) return undefined;
         return {
             a: ({ href, children, ...props }: React.ComponentPropsWithoutRef<'a'>) => {
                 if (href?.startsWith('page://')) {
                     const page = parseInt(href.slice(7), 10);
-                    if (!isNaN(page)) {
+                    if (!isNaN(page) && onPageClick) {
                         return (
                             <button
                                 className="inline text-primary underline underline-offset-2
@@ -123,13 +136,25 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
                         );
                     }
                 }
+                if (href?.startsWith('citation://') && message.context_chunks && message.context_chunks.length > 0) {
+                    return (
+                        <InlineCitationLink
+                            href={href}
+                            contextChunks={message.context_chunks}
+                            onChunkClick={onChunkClick}
+                            onChunkClickUrl={onChunkClickUrl}
+                        >
+                            {children}
+                        </InlineCitationLink>
+                    );
+                }
                 return <a href={href} {...props}>{children}</a>;
             },
         };
-    }, [onPageClick]);
+    }, [onPageClick, message.context_chunks, onChunkClick, onChunkClickUrl]);
 
     const urlTransform = useMemo(
-        () => (url: string) => url.startsWith('page://') ? url : defaultUrlTransform(url),
+        () => (url: string) => url.startsWith('page://') || url.startsWith('citation://') ? url : defaultUrlTransform(url),
         []
     );
 
@@ -158,33 +183,61 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
                             : 'bg-muted text-foreground'
                     }`}
                 >
-                    {!message.content && message.isStreaming
+                    {message.error
                         ? (
-                            <div className="flex items-center gap-2 text-muted-foreground min-w-[80px]">
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                <span className="text-xs">Thinking…</span>
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-start gap-2">
+                                    <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-destructive" />
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-medium text-xs text-destructive">Failed to generate response</p>
+                                        <p className="text-xs text-destructive/80 mt-1 break-words">{message.error}</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-1 justify-end">
+                                    <button
+                                        onClick={() => onRetryFailed?.(message.id)}
+                                        className="flex items-center gap-1 text-xs font-medium text-destructive hover:text-destructive/80 transition-colors cursor-pointer"
+                                    >
+                                        <RefreshCw className="h-3 w-3" />
+                                        Retry
+                                    </button>
+                                    <button
+                                        onClick={() => onDismissFailed?.(message.id)}
+                                        className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                                    >
+                                        <X className="h-3 w-3" />
+                                        Dismiss
+                                    </button>
+                                </div>
                             </div>
                         )
-                        : isUser
-                            ? <span className="whitespace-pre-wrap">{message.content}</span>
-                            : (
-                                <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0">
-                                    <Markdown
-                                        remarkPlugins={remarkPlugins}
-                                        components={markdownComponents}
-                                        urlTransform={urlTransform}
-                                    >
-                                        {message.content}
-                                    </Markdown>
+                        : !message.content && message.isStreaming
+                            ? (
+                                <div className="flex items-center gap-2 text-muted-foreground min-w-[80px]">
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    <span className="text-xs">Thinking…</span>
                                 </div>
                             )
+                            : isUser
+                                ? <span className="whitespace-pre-wrap">{message.content}</span>
+                                : (
+                                    <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0">
+                                        <Markdown
+                                            remarkPlugins={remarkPlugins}
+                                            components={markdownComponents}
+                                            urlTransform={urlTransform}
+                                        >
+                                            {message.content}
+                                        </Markdown>
+                                    </div>
+                                )
                     }
                     {message.isStreaming && message.content && (
                         <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />
                     )}
 
                     {/* Copy button for assistant messages */}
-                    {!isUser && message.content && !message.isStreaming && (
+                    {!isUser && message.content && !message.isStreaming && !message.error && (
                         <button
                             onClick={handleCopy}
                             className="absolute -top-2 -right-2 p-1 rounded-md bg-background border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
@@ -205,43 +258,76 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
                 {/* Context chunk badges */}
                 {!isUser && message.context_chunks && message.context_chunks.length > 0 && (
                     <div className="flex flex-wrap gap-1 max-w-full">
-                        {message.context_chunks.map((chunk) => {
-                            // Determine label and click behavior based on available data
-                            const hasPdfInfo = !!chunk.pdf_id && !!chunk.pdf_title;
-                            const startPage = chunk.page_number;
-                            const endPage = chunk.end_page_number;
-                            const pageLabel = endPage && endPage > startPage
-                                ? `p.${startPage}-${endPage}`
-                                : `p.${startPage}`;
-                            const label = hasPdfInfo
-                                ? `${chunk.pdf_title!.length > 18 ? chunk.pdf_title!.slice(0, 18) + '…' : chunk.pdf_title} · ${pageLabel}`
-                                : pageLabel;
-
-                            const handleClick = () => {
-                                if (onChunkClickUrl && hasPdfInfo) {
-                                    onChunkClickUrl(chunk);
-                                } else if (onChunkClick) {
-                                    onChunkClick(chunk);
-                                }
-                            };
-
-                            const isClickable = onChunkClick || (onChunkClickUrl && hasPdfInfo);
-
-                            return (
-                                <Badge
-                                    key={chunk.chunk_id}
-                                    variant="outline"
-                                    className={`text-xs ${isClickable ? 'cursor-pointer hover:bg-primary/10 transition-colors' : ''}`}
-                                    onClick={isClickable ? handleClick : undefined}
-                                    title={chunk.snippet}
-                                >
-                                    {label}
-                                </Badge>
-                            );
-                        })}
+                        {message.context_chunks.map((chunk) => (
+                            <ContextChunkBadge
+                                key={chunk.chunk_id}
+                                chunk={chunk}
+                                onChunkClick={onChunkClick}
+                                onChunkClickUrl={onChunkClickUrl}
+                            />
+                        ))}
                     </div>
                 )}
             </div>
         </div>
+    );
+}
+
+function ContextChunkBadge({
+    chunk,
+    onChunkClick,
+    onChunkClickUrl,
+}: {
+    chunk: ContextChunk;
+    onChunkClick?: (chunk: ContextChunk) => void;
+    onChunkClickUrl?: (chunk: ContextChunk) => void;
+}) {
+    const { data: citation, isLoading } = useCitation(chunk.pdf_id || '');
+
+    const hasPdfInfo = !!chunk.pdf_id && !!chunk.pdf_title;
+    const startPage = chunk.page_number;
+    const endPage = chunk.end_page_number;
+    const pageLabel = endPage && endPage > startPage
+        ? `p.${startPage}-${endPage}`
+        : `p.${startPage}`;
+    const label = hasPdfInfo
+        ? `${chunk.pdf_title!.length > 18 ? chunk.pdf_title!.slice(0, 18) + '…' : chunk.pdf_title} · ${pageLabel}`
+        : pageLabel;
+
+    const handleClick = () => {
+        if (onChunkClickUrl && hasPdfInfo) {
+            onChunkClickUrl(chunk);
+        } else if (onChunkClick) {
+            onChunkClick(chunk);
+        }
+    };
+
+    const isClickable = onChunkClick || (onChunkClickUrl && hasPdfInfo);
+
+    return (
+        <HoverCard openDelay={200} closeDelay={150}>
+            <HoverCardTrigger asChild>
+                <Badge
+                    variant="outline"
+                    className={`text-xs ${isClickable ? 'cursor-pointer hover:bg-primary/10 transition-colors' : ''}`}
+                    onClick={isClickable ? handleClick : undefined}
+                >
+                    {label}
+                </Badge>
+            </HoverCardTrigger>
+            <HoverCardContent side="top" align="center" className="p-0">
+                {isLoading ? (
+                    <div className="w-80 h-24 flex items-center justify-center">
+                        <span className="text-xs text-muted-foreground animate-pulse">Loading...</span>
+                    </div>
+                ) : (
+                    <CitationPreview
+                        citation={citation ?? null}
+                        chunk={chunk}
+                        onNavigate={isClickable ? handleClick : undefined}
+                    />
+                )}
+            </HoverCardContent>
+        </HoverCard>
     );
 }

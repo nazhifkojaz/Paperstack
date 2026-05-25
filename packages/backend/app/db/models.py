@@ -332,7 +332,7 @@ class AutoHighlightCache(Base):
     pages: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
-    )  # 'pending' | 'complete' | 'failed'
+    )  # 'pending' | 'running' | 'complete' | 'failed' | 'cancelled'
     progress_pct: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
@@ -341,12 +341,21 @@ class AutoHighlightCache(Base):
     )  # 'quick' | 'thorough'
     provider: Mapped[Optional[str]] = mapped_column(String(20))
     llm_response: Mapped[Optional[Any]] = mapped_column(JSONB)
+    reasoning_trace: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     annotation_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("annotation_sets.id", ondelete="CASCADE")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )
+
+    @property
+    def error_message(self) -> Optional[str]:
+        if isinstance(self.llm_response, dict):
+            error = self.llm_response.get("error")
+            if isinstance(error, str):
+                return error
+        return None
 
 
 class UserUsageQuota(Base):
@@ -412,7 +421,7 @@ class PdfChunk(Base):
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     end_page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(2048))
+    embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(1024))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     section_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     search_vector = Column(TSVECTOR, Computed("to_tsvector('english', content)"), nullable=True)

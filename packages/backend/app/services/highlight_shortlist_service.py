@@ -57,7 +57,7 @@ class HighlightShortlistService:
             custom = (custom_queries or {}).get(cat)
             if custom:
                 query = f"{query} | {custom}"
-            vec = await self._embeddings.embed_query(query, db=db)
+            vec = await self._embeddings.embed_query(query)
             results: list[SearchResult] = await vector_search_service.search_pdf(
                 query_vector=vec,
                 pdf_id=pdf_id,
