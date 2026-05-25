@@ -17,15 +17,16 @@ interface AutoHighlightResponse {
     provider_fallback?: boolean;
 }
 
-interface AutoHighlightCacheEntry {
+export interface AutoHighlightCacheEntry {
     id: string;
     categories: string[];
     pages: number[];
-    status: 'pending' | 'complete' | 'failed';
+    status: 'pending' | 'running' | 'complete' | 'failed' | 'cancelled';
     progress_pct: number;
     tier: string;
     created_at: string;
     annotation_set_id: string | null;
+    error_message: string | null;
 }
 
 interface QuotaInfo {
@@ -71,10 +72,27 @@ export const useAnalysisStatus = (cacheId: string | null) => {
         refetchInterval: (query) => {
             const data = query.state.data as AutoHighlightCacheEntry | undefined;
             // Keep polling if we haven't gotten a terminal status yet
-            if (!data || data.status === 'pending') return 2000;
+            if (!data || data.status === 'pending' || data.status === 'running') {
+                return 2000;
+            }
             return false;
         },
         retry: 3,
+    });
+};
+
+export const cancelAnalysis = (cacheId: string): Promise<AutoHighlightCacheEntry> =>
+    apiFetch(`/auto-highlight/cache/entry/${cacheId}/cancel`, {
+        method: 'POST',
+    });
+
+export const useCancelAnalysis = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: cancelAnalysis,
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['analysis-status', data.id] });
+        },
     });
 };
 

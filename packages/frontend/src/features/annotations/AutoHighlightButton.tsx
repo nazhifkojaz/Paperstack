@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { useAutoHighlightQuota, useAnalysisStatus } from '@/api/autoHighlight';
+import {
+    cancelAnalysis,
+    useAutoHighlightQuota,
+    useAnalysisStatus,
+    useCancelAnalysis,
+} from '@/api/autoHighlight';
 import { CategorySelectionDialog } from './CategorySelectionDialog';
 import { ApiKeyDialog } from './ApiKeyDialog';
 import { toast } from 'sonner';
@@ -70,13 +75,46 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
             queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
         } else if (statusData.status === 'failed') {
             notifiedRef.current = activeCacheId;
-            toast.error('Analysis failed. Please try again.');
+            toast.error(statusData.error_message ?? 'Analysis failed. Please try again.');
+        } else if (statusData.status === 'cancelled') {
+            notifiedRef.current = activeCacheId;
+            toast('Analysis cancelled.');
         }
     }, [statusData, activeCacheId, pdfId, queryClient]);
 
     const handleAnalysisStarted = (cacheId: string) => {
         setActiveCacheId(cacheId);
+        activeCacheIdRef.current = cacheId;
+        activeStatusRef.current = 'pending';
         lastProgressRef.current = 0;
+    };
+
+    const handleCancelAnalysis = () => {
+        if (!activeCacheId || cancelMutation.isPending) return;
+
+        cancelMutation.mutate(activeCacheId, {
+            onSuccess: (data) => {
+                notifiedRef.current = activeCacheId;
+                activeCacheIdRef.current = null;
+                activeStatusRef.current = data.status;
+                setActiveCacheId(null);
+                queryClient.invalidateQueries({ queryKey: ['auto-highlight-cache', pdfId] });
+                toast('Analysis cancelled.');
+            },
+            onError: () => {
+                toast.error('Failed to cancel analysis.');
+            },
+        });
+    };
+
+    const handleButtonClick = () => {
+        if (isAnalyzing) {
+            handleCancelAnalysis();
+        } else if (canAnalyze) {
+            setShowCategoryDialog(true);
+        } else {
+            setShowApiKeyDialog(true);
+        }
     };
 
     return (
@@ -84,13 +122,15 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
             <div className="relative">
                 <Button
                     className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white"
-                    onClick={() => canAnalyze ? setShowCategoryDialog(true) : setShowApiKeyDialog(true)}
-                    disabled={isAnalyzing}
+                    onClick={handleButtonClick}
+                    disabled={cancelMutation.isPending}
                 >
                     {isAnalyzing ? (
                         <>
                             <span className="mr-1.5 animate-spin">✦</span>
-                            Analyzing... {progressPct > 0 ? `${progressPct}%` : ''}
+                            {cancelMutation.isPending
+                                ? 'Cancelling...'
+                                : `Cancel Analysis${progressPct > 0 ? ` ${progressPct}%` : ''}`}
                         </>
                     ) : (
                         <>

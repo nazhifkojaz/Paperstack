@@ -421,6 +421,134 @@ class TestAutoHighlightCache:
         assert data["id"] == str(cache.id)
         assert data["status"] == "complete"
         assert data["categories"] == ["findings"]
+        assert data["error_message"] is None
+
+    async def test_get_cache_entry_includes_failure_message(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ):
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Test", filename="test.pdf"
+        )
+        await db_session.commit()
+
+        from app.db.models import AutoHighlightCache
+
+        cache = AutoHighlightCache(
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            categories=["findings"],
+            pages=[1, 2],
+            status="failed",
+            tier="quick",
+            progress_pct=100,
+            llm_response={"error": "LLM provider is temporarily unavailable."},
+        )
+        db_session.add(cache)
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/auto-highlight/cache/entry/{cache.id}",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "failed"
+        assert data["error_message"] == "LLM provider is temporarily unavailable."
+
+    async def test_cancel_cache_entry_marks_running_analysis_cancelled(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ):
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Test", filename="test.pdf"
+        )
+        await db_session.commit()
+
+        from app.db.models import AutoHighlightCache
+
+        cache = AutoHighlightCache(
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            categories=["findings"],
+            pages=[1, 2],
+            status="running",
+            tier="quick",
+            progress_pct=30,
+        )
+        db_session.add(cache)
+        await db_session.commit()
+
+        response = await client.post(
+            f"/v1/auto-highlight/cache/entry/{cache.id}/cancel",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "cancelled"
+        assert data["progress_pct"] == 100
+        assert data["error_message"] == "Analysis cancelled."
+
+        await db_session.refresh(cache)
+        assert cache.status == "cancelled"
+        assert cache.llm_response == {"error": "Analysis cancelled."}
+
+    async def test_cancel_cache_entry_complete_analysis_is_idempotent(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ):
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Test", filename="test.pdf"
+        )
+        await db_session.commit()
+
+        from app.db.models import AutoHighlightCache
+
+        cache = AutoHighlightCache(
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            categories=["findings"],
+            pages=[1, 2],
+            status="complete",
+            tier="quick",
+            progress_pct=100,
+        )
+        db_session.add(cache)
+        await db_session.commit()
+
+        response = await client.post(
+            f"/v1/auto-highlight/cache/entry/{cache.id}/cancel",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "complete"
+
+    async def test_cancel_cache_entry_other_user_returns_404(
+        self, client: AsyncClient, auth_headers, db_session, test_user_2
+    ):
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user_2.id, title="Other", filename="other.pdf"
+        )
+        await db_session.commit()
+
+        from app.db.models import AutoHighlightCache
+
+        cache = AutoHighlightCache(
+            pdf_id=pdf.id,
+            user_id=test_user_2.id,
+            categories=["findings"],
+            pages=[1, 2],
+            status="running",
+        )
+        db_session.add(cache)
+        await db_session.commit()
+
+        response = await client.post(
+            f"/v1/auto-highlight/cache/entry/{cache.id}/cancel",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404
 
     async def test_get_cache_entry_other_user_returns_404(
         self, client: AsyncClient, auth_headers, db_session, test_user, test_user_2

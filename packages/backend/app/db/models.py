@@ -332,7 +332,7 @@ class AutoHighlightCache(Base):
     pages: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
-    )  # 'pending' | 'complete' | 'failed'
+    )  # 'pending' | 'running' | 'complete' | 'failed' | 'cancelled'
     progress_pct: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )

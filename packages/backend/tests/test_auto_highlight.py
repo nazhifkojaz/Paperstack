@@ -116,14 +116,18 @@ class TestAutoHighlightOpenRouterRateLimit:
         )
         await db_session.commit()
 
-        with patch(
-            "app.api.routes.auto_highlight.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.api.routes.auto_highlight.LLMService",
-        ) as mock_llm_cls, patch(
-            "app.api.routes.auto_highlight.IndexingService",
-        ) as mock_idx_cls:
+        with (
+            patch(
+                "app.api.routes.auto_highlight.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.api.routes.auto_highlight.LLMService",
+            ) as mock_llm_cls,
+            patch(
+                "app.api.routes.auto_highlight.IndexingService",
+            ) as mock_idx_cls,
+        ):
             mock_resolve.return_value = MagicMock(
                 provider="openrouter",
                 api_key="openrouter-key",

@@ -288,6 +288,116 @@ async def _get_cache_row(
     return result.scalar_one()
 
 
+async def _mark_cache_running(cache_id: uuid.UUID) -> bool:
+    """Update the cache row status to 'running' in a short-lived session."""
+    try:
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+            )
+            cache_row = result.scalar_one_or_none()
+            if not cache_row:
+                return False
+            if cache_row.status == "cancelled":
+                return False
+            if cache_row.status in {"pending", "running"}:
+                cache_row.status = "running"
+                cache_row.progress_pct = max(cache_row.progress_pct or 0, 1)
+                await db.commit()
+                return True
+            return False
+    except Exception:
+        logger.exception(
+            "Failed to mark cache as running for cache_id=%s",
+            cache_id,
+        )
+        return False
+
+
+async def _set_cache_cancelled(
+    db: AsyncSession,
+    cache_row: AutoHighlightCache,
+) -> AutoHighlightCache:
+    if cache_row.status in {"pending", "running"}:
+        if cache_row.annotation_set_id:
+            await db.execute(
+                delete(AnnotationSet).where(
+                    AnnotationSet.id == cache_row.annotation_set_id
+                )
+            )
+        cache_row.status = "cancelled"
+        cache_row.progress_pct = 100
+        cache_row.llm_response = {"error": "Analysis cancelled."}
+        cache_row.annotation_set_id = None
+        await db.commit()
+        await db.refresh(cache_row)
+        logger.info(
+            "Auto-highlight cancelled: cache_id=%s",
+            cache_row.id,
+            extra={
+                "cache_id": str(cache_row.id),
+                "auto_highlight_status": "cancelled",
+            },
+        )
+    return cache_row
+
+
+async def _mark_cache_cancelled(cache_id: uuid.UUID) -> AutoHighlightCache | None:
+    """Mark a running or pending analysis as cancelled."""
+    try:
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(AutoHighlightCache).where(AutoHighlightCache.id == cache_id)
+            )
+            cache_row = result.scalar_one_or_none()
+            if not cache_row:
+                return None
+
+            return await _set_cache_cancelled(db, cache_row)
+    except Exception:
+        logger.exception(
+            "Failed to mark cache as cancelled for cache_id=%s",
+            cache_id,
+        )
+        return None
+
+
+async def _is_cache_cancelled(cache_id: uuid.UUID) -> bool:
+    """Return true when cancellation was requested or the cache row disappeared."""
+    try:
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(AutoHighlightCache.status).where(
+                    AutoHighlightCache.id == cache_id
+                )
+            )
+            status = result.scalar_one_or_none()
+            return status is None or status == "cancelled"
+    except Exception:
+        logger.exception(
+            "Failed to check cancellation status for cache_id=%s",
+            cache_id,
+        )
+        return False
+
+
+async def _stop_if_cancelled(cache_id: uuid.UUID, step: str) -> bool:
+    if not await _is_cache_cancelled(cache_id):
+        return False
+
+    logger.info(
+        "Auto-highlight cancellation observed: cache_id=%s step=%s",
+        cache_id,
+        step,
+        extra={
+            "cache_id": str(cache_id),
+            "auto_highlight_status": "cancelled",
+            "auto_highlight_step": step,
+        },
+    )
+    return True
+
+
 async def _mark_cache_failed(cache_id: uuid.UUID, error_msg: str) -> None:
     """Update the cache row status to 'failed' in a short-lived session."""
     try:
@@ -297,10 +407,22 @@ async def _mark_cache_failed(cache_id: uuid.UUID, error_msg: str) -> None:
             )
             cache_row = result.scalar_one_or_none()
             if cache_row:
+                if cache_row.status == "cancelled":
+                    return
                 cache_row.status = "failed"
                 cache_row.progress_pct = 100
                 cache_row.llm_response = {"error": error_msg}
                 await db.commit()
+                logger.info(
+                    "Auto-highlight failed: cache_id=%s error=%s",
+                    cache_id,
+                    error_msg,
+                    extra={
+                        "cache_id": str(cache_id),
+                        "auto_highlight_status": "failed",
+                        "error_message": error_msg,
+                    },
+                )
     except Exception:
         logger.exception(
             "Failed to mark cache as failed for cache_id=%s",
@@ -717,6 +839,8 @@ async def _parse_and_store_results(
     try:
         async with SessionLocal() as db:
             cache_row = await _get_cache_row(db, cache_id)
+            if cache_row.status == "cancelled":
+                return False
             if not highlights:
                 _set_no_highlights_failure(cache_row)
                 await db.commit()
@@ -759,6 +883,8 @@ async def _persist_thorough_batch(
     try:
         async with SessionLocal() as db:
             cache_row = await _get_cache_row(db, cache_id)
+            if cache_row.status == "cancelled":
+                return False
 
             set_id = cache_row.annotation_set_id
             if set_id is None and batch_highlights:
@@ -797,6 +923,8 @@ async def _finalize_thorough_results(
     try:
         async with SessionLocal() as db:
             cache_row = await _get_cache_row(db, cache_id)
+            if cache_row.status == "cancelled":
+                return False
             if not all_highlights:
                 _set_no_highlights_failure(cache_row)
                 await db.commit()
@@ -826,6 +954,9 @@ async def _run_quick_analysis(
     llm_svc: LLMService,
     shortlist: list,
 ) -> bool:
+    if await _stop_if_cancelled(cache_id, "quick_before_llm"):
+        return False
+
     highlights = await _run_llm_analysis(
         llm_svc,
         shortlist,
@@ -837,6 +968,8 @@ async def _run_quick_analysis(
         "quick",
     )
     if highlights is None:
+        return False
+    if await _stop_if_cancelled(cache_id, "quick_after_llm"):
         return False
 
     return await _parse_and_store_results(
@@ -869,6 +1002,9 @@ async def _run_thorough_analysis(
     batch_reasoning_traces: list[tuple[int, int, str]] = []
 
     for idx, batch in enumerate(batches, 1):
+        if await _stop_if_cancelled(cache_id, f"thorough_before_batch_{idx}"):
+            return False
+
         batch_highlights = await _run_llm_analysis(
             llm_svc,
             batch,
@@ -880,6 +1016,8 @@ async def _run_thorough_analysis(
             f"thorough, batch {idx}/{total}",
         )
         if batch_highlights is None:
+            return False
+        if await _stop_if_cancelled(cache_id, f"thorough_after_batch_{idx}_llm"):
             return False
 
         if llm_svc.last_reasoning_trace:
@@ -897,6 +1035,9 @@ async def _run_thorough_analysis(
         )
         if not persisted:
             return False
+
+    if await _stop_if_cancelled(cache_id, "thorough_before_finalize"):
+        return False
 
     return await _finalize_thorough_results(
         cache_id,
@@ -918,65 +1059,235 @@ async def _run_analysis_background(
     llm_client,
 ) -> None:
     """Background task: ensure indexed -> shortlist -> LLM extract -> annotations."""
-    llm_svc = LLMService(http_client=llm_client)
-    setup = await _prepare_analysis_setup(
+    run_started = perf_counter()
+    logger.info(
+        "Background analysis started: cache_id=%s pdf_id=%s user_id=%s "
+        "tier=%s provider=%s model=%s categories=%s pages=%d",
         cache_id,
         pdf_id,
         user_id,
-        categories,
-        pages,
         tier,
+        provider,
+        model or "default",
+        categories,
+        len(pages),
+        extra={
+            "cache_id": str(cache_id),
+            "pdf_id": str(pdf_id),
+            "user_id": str(user_id),
+            "tier": tier,
+            "provider": provider,
+            "model": model or "default",
+            "categories": categories,
+            "page_count": len(pages),
+        },
     )
-    if not setup:
+    if not await _mark_cache_running(cache_id):
+        status = "cancelled" if await _is_cache_cancelled(cache_id) else "stopped"
+        _log_background_stop(
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            run_started,
+            status,
+            "not_started",
+        )
+        return
+    llm_svc = LLMService(http_client=llm_client)
+
+    try:
+        if await _stop_if_cancelled(cache_id, "before_prepare_setup"):
+            _log_background_stop(
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "cancelled",
+                "before_prepare_setup",
+            )
+            return
+
+        setup = await _run_logged_step(
+            "prepare_setup",
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            lambda: _prepare_analysis_setup(
+                cache_id,
+                pdf_id,
+                user_id,
+                categories,
+                pages,
+                tier,
+            ),
+        )
+        if not setup:
+            _log_background_stop(
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "failed",
+                "setup_failed",
+            )
+            return
+        if await _stop_if_cancelled(cache_id, "after_prepare_setup"):
+            _log_background_stop(
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "cancelled",
+                "after_prepare_setup",
+            )
+            return
+
+        custom_queries = await _run_logged_step(
+            "generate_custom_queries",
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            lambda: _generate_custom_queries(
+                llm_svc,
+                setup,
+                categories,
+                provider,
+                api_key,
+                model,
+            ),
+        )
+        if await _stop_if_cancelled(cache_id, "after_generate_custom_queries"):
+            _log_background_stop(
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "cancelled",
+                "after_generate_custom_queries",
+            )
+            return
+        shortlist = await _run_logged_step(
+            "shortlist_with_custom_queries",
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            lambda: _augment_shortlist_with_custom_queries(
+                pdf_id,
+                user_id,
+                categories,
+                pages,
+                tier,
+                setup.shortlist,
+                custom_queries,
+            ),
+        )
+        if await _stop_if_cancelled(cache_id, "after_shortlist"):
+            _log_background_stop(
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                run_started,
+                "cancelled",
+                "after_shortlist",
+            )
+            return
+        if tier == "quick":
+            completed = await _run_logged_step(
+                "quick_analysis",
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                lambda: _run_quick_analysis(
+                    cache_id,
+                    pdf_id,
+                    user_id,
+                    categories,
+                    provider,
+                    api_key,
+                    model,
+                    llm_svc,
+                    shortlist,
+                ),
+            )
+        else:
+            completed = await _run_logged_step(
+                "thorough_analysis",
+                cache_id,
+                pdf_id,
+                user_id,
+                tier,
+                lambda: _run_thorough_analysis(
+                    cache_id,
+                    pdf_id,
+                    user_id,
+                    categories,
+                    provider,
+                    api_key,
+                    model,
+                    llm_svc,
+                    shortlist,
+                ),
+            )
+    except Exception:
+        logger.exception(
+            "Background analysis crashed: cache_id=%s pdf_id=%s user_id=%s tier=%s",
+            cache_id,
+            pdf_id,
+            user_id,
+            tier,
+            extra={
+                "cache_id": str(cache_id),
+                "pdf_id": str(pdf_id),
+                "user_id": str(user_id),
+                "tier": tier,
+            },
+        )
+        await _mark_cache_failed(cache_id, "Unexpected analysis failure")
         return
 
-    custom_queries = await _generate_custom_queries(
-        llm_svc,
-        setup,
-        categories,
-        provider,
-        api_key,
-        model,
-    )
-    shortlist = await _augment_shortlist_with_custom_queries(
-        pdf_id,
-        user_id,
-        categories,
-        pages,
-        tier,
-        setup.shortlist,
-        custom_queries,
-    )
-    completed = await (
-        _run_quick_analysis(
-            cache_id,
-            pdf_id,
-            user_id,
-            categories,
-            provider,
-            api_key,
-            model,
-            llm_svc,
-            shortlist,
-        )
-        if tier == "quick"
-        else _run_thorough_analysis(
-            cache_id,
-            pdf_id,
-            user_id,
-            categories,
-            provider,
-            api_key,
-            model,
-            llm_svc,
-            shortlist,
-        )
-    )
+    duration_ms = int((perf_counter() - run_started) * 1000)
     if completed:
         logger.info(
-            "Background analysis complete: cache_id=%s, tier=%s",
+            "Background analysis complete: cache_id=%s tier=%s duration_ms=%d",
             cache_id,
             tier,
+            duration_ms,
+            extra={
+                "cache_id": str(cache_id),
+                "pdf_id": str(pdf_id),
+                "user_id": str(user_id),
+                "tier": tier,
+                "duration_ms": duration_ms,
+                "auto_highlight_status": "complete",
+            },
+        )
+    else:
+        status = "cancelled" if await _is_cache_cancelled(cache_id) else "failed"
+        logger.info(
+            "Background analysis ended without completion: cache_id=%s "
+            "tier=%s status=%s duration_ms=%d",
+            cache_id,
+            tier,
+            status,
+            duration_ms,
+            extra={
+                "cache_id": str(cache_id),
+                "pdf_id": str(pdf_id),
+                "user_id": str(user_id),
+                "tier": tier,
+                "duration_ms": duration_ms,
+                "auto_highlight_status": status,
+            },
         )
 
 
@@ -1095,6 +1406,28 @@ async def get_cache_entry(
     if not cache_row:
         raise HTTPException(status_code=404, detail="Cache entry not found")
     return cache_row
+
+
+@router.post(
+    "/cache/entry/{cache_id}/cancel",
+    response_model=AutoHighlightCacheResponse,
+)
+async def cancel_cache_entry(
+    cache_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cancel a pending or running analysis."""
+    result = await db.execute(
+        select(AutoHighlightCache).where(
+            AutoHighlightCache.id == cache_id,
+            AutoHighlightCache.user_id == current_user.id,
+        )
+    )
+    cache_row = result.scalar_one_or_none()
+    if not cache_row:
+        raise HTTPException(status_code=404, detail="Cache entry not found")
+    return await _set_cache_cancelled(db, cache_row)
 
 
 @router.get("/cache/{pdf_id}", response_model=list[AutoHighlightCacheResponse])
