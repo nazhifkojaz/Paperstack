@@ -12,6 +12,27 @@ interface Annotation {
     page_number: number;
 }
 
+function applyExplainResultToAnnotation(
+    annotationId: string,
+    noteContent: string | null,
+    metadata: Record<string, unknown> | null | undefined,
+) {
+    return (old: Annotation[] | undefined): Annotation[] | undefined => {
+        if (!old) return old;
+        let changed = false;
+        const next = old.map(a => {
+            if (a.id !== annotationId) return a;
+            changed = true;
+            return {
+                ...a,
+                note_content: noteContent,
+                metadata: metadata ?? a.metadata,
+            };
+        });
+        return changed ? next : old;
+    };
+}
+
 interface UseAnnotationExplainOptions {
     onSuccess?: (explanation: string, noteContent: string | null, annotationId: string) => void;
     onError?: (error: string) => void;
@@ -59,21 +80,14 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
                         queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
                     }
 
-                    // Optimistically update cache so annotation detail views see the new AI explanation immediately.
-                    queryClient.setQueryData(
-                        ['annotations', annotation.set_id],
-                        (old: Annotation[] | undefined) => {
-                            if (!old) return old;
-                            return old.map(a =>
-                                a.id === annotation.id
-                                    ? {
-                                        ...a,
-                                        note_content: result.note_content,
-                                        metadata: result.metadata ?? a.metadata,
-                                    }
-                                    : a
-                            );
-                        }
+                    const applyResult = applyExplainResultToAnnotation(
+                        annotation.id,
+                        result.note_content,
+                        result.metadata,
+                    );
+                    queryClient.setQueriesData<Annotation[]>(
+                        { queryKey: ['annotations'] },
+                        applyResult,
                     );
 
                     // Call onSuccess before resetting state (so annotation ID is available)
