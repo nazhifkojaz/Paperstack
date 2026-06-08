@@ -66,4 +66,3 @@ class TestHandleUniqueViolation:
                 raise ValueError("something went wrong")
 
         mock_db.rollback.assert_called_once()
-
