@@ -7,11 +7,13 @@ interface Annotation {
     id: string;
     set_id: string;
     selected_text?: string | null;
+    note_content?: string | null;
+    metadata?: Record<string, unknown> | null;
     page_number: number;
 }
 
 interface UseAnnotationExplainOptions {
-    onSuccess?: (explanation: string, noteContent: string, annotationId: string) => void;
+    onSuccess?: (explanation: string, noteContent: string | null, annotationId: string) => void;
     onError?: (error: string) => void;
 }
 
@@ -57,14 +59,18 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
                         queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
                     }
 
-                    // Optimistically update cache so NotePopover sees the new note_content immediately
+                    // Optimistically update cache so annotation detail views see the new AI explanation immediately.
                     queryClient.setQueryData(
                         ['annotations', annotation.set_id],
                         (old: Annotation[] | undefined) => {
                             if (!old) return old;
                             return old.map(a =>
                                 a.id === annotation.id
-                                    ? { ...a, note_content: result.note_content }
+                                    ? {
+                                        ...a,
+                                        note_content: result.note_content,
+                                        metadata: result.metadata ?? a.metadata,
+                                    }
                                     : a
                             );
                         }

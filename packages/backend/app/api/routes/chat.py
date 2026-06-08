@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import uuid
 
 import httpx
@@ -53,6 +54,19 @@ from app.schemas.chat import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+LEGACY_AI_NOTE_BLOCK_RE = re.compile(
+    r"(?:^|\n{2,})\[AI Explanation\s*[—-]\s*([^\]]+)\]\s*"
+    r"([\s\S]*?)(?=\n{2,}\[AI Explanation\s*[—-]|\s*$)"
+)
+
+
+def _strip_legacy_ai_note_blocks(note_content: str | None) -> str | None:
+    if not note_content:
+        return None
+    user_note = LEGACY_AI_NOTE_BLOCK_RE.sub("", note_content).strip()
+    return user_note or None
 
 
 
@@ -354,7 +368,7 @@ async def explain_annotation(
     llm_client: httpx.AsyncClient = Depends(get_llm_http_client),
     embedding_client: httpx.AsyncClient = Depends(get_embedding_http_client),
 ):
-    """Explain a highlighted passage using RAG and save the explanation as an annotation note."""
+    """Explain a highlighted passage using RAG and save it separately from user notes."""
     # Verify annotation ownership (join through annotation_sets for user_id check)
     ann_result = await db.execute(
         select(Annotation, AnnotationSet)
@@ -412,12 +426,15 @@ async def explain_annotation(
     except (EmbeddingError, IndexingError) as exc:
         raise HTTPException(status_code=502, detail=f"Explanation failed: {exc}")
 
-    final_note = (
-        f"{existing_note_content}\n\n{result.note_content}"
-        if existing_note_content
-        else result.note_content
-    )
-    annotation.note_content = final_note
+    user_note = _strip_legacy_ai_note_blocks(existing_note_content)
+    metadata = dict(annotation.ann_metadata or {})
+    metadata["ai_explanation"] = {
+        "content": result.explanation,
+        "generated_at": result.generated_at,
+        "context_chunks": result.context_chunks,
+    }
+    annotation.note_content = user_note
+    annotation.ann_metadata = metadata
 
     # OpenRouter (free) has no per-user quota. BYOK = unlimited.
     remaining = -1  # signals unlimited
@@ -426,6 +443,7 @@ async def explain_annotation(
 
     return ExplainResponse(
         explanation=result.explanation,
-        note_content=final_note,
+        note_content=user_note,
+        metadata=metadata,
         explain_uses_remaining=remaining,
     )

@@ -19,7 +19,14 @@ import type { HighlightSelectorMetadata, PdfViewportInfo } from './pdfViewerType
 
 const _globalPatchedIds = new Set<string>();
 const _globalAttemptCounts = new Map<string, number>();
+const _retryListeners = new Set<(annotationId: string) => void>();
 const MAX_ATTEMPTS = 3;
+
+export function requestAnnotationRelocation(annotationId: string) {
+  _globalPatchedIds.delete(annotationId);
+  _globalAttemptCounts.delete(annotationId);
+  for (const listener of _retryListeners) listener(annotationId);
+}
 
 interface ResolvedAnnotation extends Annotation {
   _resolved?: boolean;
@@ -51,7 +58,24 @@ export function useTextIndexMatcher(
     Map<string, { rects: Rect[]; page: number }>
   >(new Map());
   const [unmatchedIds, setUnmatchedIds] = useState<Set<string>>(new Set());
+  const [retryVersion, setRetryVersion] = useState(0);
   const { mutate: patchAnnotation } = useUpdateAnnotation();
+
+  useEffect(() => {
+    const listener = (annotationId: string) => {
+      setUnmatchedIds((prev) => {
+        if (!prev.has(annotationId)) return prev;
+        const next = new Set(prev);
+        next.delete(annotationId);
+        return next;
+      });
+      setRetryVersion((version) => version + 1);
+    };
+    _retryListeners.add(listener);
+    return () => {
+      _retryListeners.delete(listener);
+    };
+  }, []);
 
   useEffect(() => {
     if (!textLayerHandle?.current || !viewport) return;
@@ -240,6 +264,7 @@ export function useTextIndexMatcher(
     textLayerHandle,
     viewport,
     renderId,
+    retryVersion,
     patchAnnotation,
   ]);
 

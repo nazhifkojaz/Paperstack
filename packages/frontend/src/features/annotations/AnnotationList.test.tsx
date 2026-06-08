@@ -4,10 +4,29 @@ import { SetAnnotationList } from './AnnotationList'
 import { useAnnotationStore } from '@/stores/annotationStore'
 import { useNewPdfViewerStore } from '@/features/pdf-viewer/pdfViewerStore'
 import * as annotationsApi from '@/api/annotations'
+import { requestAnnotationRelocation } from '@/features/pdf-viewer/useTextIndexMatcher'
 import { createMockAnnotation } from '@/test/test-utils'
 
 vi.mock('@/api/annotations', () => ({
   useAnnotations: vi.fn(() => ({ data: [], isLoading: false })),
+  useDeleteAnnotation: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
+  useUpdateAnnotation: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
+}))
+
+vi.mock('@/api/chat', () => ({
+  useExplainAnnotation: vi.fn(() => ({ mutate: vi.fn() })),
+}))
+
+vi.mock('@/features/pdf-viewer/useTextIndexMatcher', () => ({
+  requestAnnotationRelocation: vi.fn(),
+}))
+
+vi.mock('sonner', () => ({
+  toast: {
+    info: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+  },
 }))
 
 describe('SetAnnotationList', () => {
@@ -18,6 +37,7 @@ describe('SetAnnotationList', () => {
   ]
 
   beforeEach(() => {
+    vi.clearAllMocks()
     useAnnotationStore.setState({
       selectedSetId: 'set-1',
       selectedAnnotationId: null,
@@ -27,6 +47,14 @@ describe('SetAnnotationList', () => {
     vi.mocked(annotationsApi.useAnnotations).mockReturnValue({
       data: mockAnnotations,
       isLoading: false,
+    } as any)
+    vi.mocked(annotationsApi.useDeleteAnnotation).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    } as any)
+    vi.mocked(annotationsApi.useUpdateAnnotation).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
     } as any)
   })
 
@@ -73,5 +101,52 @@ describe('SetAnnotationList', () => {
     } as any)
     render(<SetAnnotationList setId="set-1" groupBy="page" />)
     expect(screen.getByText(/no annotations/i)).toBeInTheDocument()
+  })
+
+  it('retries relocation for unlocated annotations', () => {
+    vi.mocked(annotationsApi.useAnnotations).mockReturnValue({
+      data: [
+        createMockAnnotation({
+          id: 'ann-unlocated',
+          page_number: 2,
+          selected_text: 'Missing quote',
+          rects: [],
+        }),
+      ],
+      isLoading: false,
+    } as any)
+
+    render(<SetAnnotationList setId="set-1" groupBy="page" />)
+    fireEvent.click(screen.getByRole('button', { name: /retry locating annotation/i }))
+
+    expect(requestAnnotationRelocation).toHaveBeenCalledWith('ann-unlocated')
+    expect(useAnnotationStore.getState().selectedAnnotationId).toBe('ann-unlocated')
+    expect(useNewPdfViewerStore.getState().targetPage).toBe(2)
+  })
+
+  it('deletes an annotation after confirmation', () => {
+    const mutate = vi.fn((_variables, options) => options?.onSuccess?.())
+    vi.mocked(annotationsApi.useDeleteAnnotation).mockReturnValue({
+      mutate,
+      isPending: false,
+    } as any)
+
+    render(<SetAnnotationList setId="set-1" groupBy="page" />)
+    fireEvent.click(screen.getAllByRole('button', { name: /delete annotation/i })[0])
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    expect(mutate).toHaveBeenCalledWith(
+      { id: 'ann-1', setId: 'set-1' },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    )
+  })
+
+  it('opens the annotation detail drawer', () => {
+    render(<SetAnnotationList setId="set-1" pdfId="pdf-1" groupBy="page" />)
+    fireEvent.click(screen.getAllByRole('button', { name: /open annotation details/i })[0])
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('Annotated text')).toBeInTheDocument()
+    expect(screen.getAllByText(/Important finding/).length).toBeGreaterThan(0)
   })
 })

@@ -1,9 +1,15 @@
 import React, { useState, useCallback } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { useAnnotationStore } from '@/stores/annotationStore'
-import { useAnnotations, Annotation } from '@/api/annotations'
+import { useAnnotations, useDeleteAnnotation, Annotation } from '@/api/annotations'
 import { useNewPdfViewerStore } from '@/features/pdf-viewer/pdfViewerStore'
-import { AlertTriangle, Highlighter, Square, StickyNote, ChevronDown, ChevronRight } from 'lucide-react'
+import { requestAnnotationRelocation } from '@/features/pdf-viewer/useTextIndexMatcher'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { AlertTriangle, ChevronDown, ChevronRight, Expand, Highlighter, RefreshCw, Square, StickyNote, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AnnotationDetailDrawer } from './AnnotationDetailDrawer'
 
 type AnnotationGroup = {
   key: string
@@ -84,17 +90,24 @@ function groupAnnotationsByType(annotations: Annotation[]): AnnotationGroup[] {
 
 interface SetAnnotationListProps {
   setId: string
+  pdfId?: string
   groupBy: 'page' | 'type'
 }
 
-export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, groupBy }) => {
+export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, pdfId, groupBy }) => {
   const selectedAnnotationId = useAnnotationStore(s => s.selectedAnnotationId)
   const { data: annotations = [], isLoading } = useAnnotations(setId)
+  const { mutate: deleteAnnotation, isPending: isDeletingAnnotation } = useDeleteAnnotation()
+  const queryClient = useQueryClient()
   const jumpToPage = useNewPdfViewerStore((state) => state.jumpToPage)
   const setSelectedAnnotationId = useAnnotationStore((state) => state.setSelectedAnnotationId)
   const setSelectedSetId = useAnnotationStore((state) => state.setSelectedSetId)
 
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set())
+  const [deletingAnnotation, setDeletingAnnotation] = useState<Annotation | null>(null)
+  const [detailAnnotationId, setDetailAnnotationId] = useState<string | null>(null)
+
+  const detailAnnotation = annotations.find(annotation => annotation.id === detailAnnotationId) ?? null
 
   const toggleGroup = useCallback((key: string) => {
     setCollapsedKeys(prev => {
@@ -112,6 +125,37 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
     setSelectedSetId(setId)
     jumpToPage(annotation.page_number)
     setSelectedAnnotationId(annotation.id)
+  }
+
+  const handleRetryLocate = (annotation: Annotation) => {
+    setSelectedSetId(setId)
+    setSelectedAnnotationId(annotation.id)
+    requestAnnotationRelocation(annotation.id)
+    jumpToPage(annotation.page_number)
+    queryClient.invalidateQueries({ queryKey: ['annotations', setId] })
+    toast.info('Retrying PDF location.')
+  }
+
+  const handleDeleteAnnotation = () => {
+    if (!deletingAnnotation) return
+    deleteAnnotation(
+      {
+        id: deletingAnnotation.id,
+        setId: deletingAnnotation.set_id,
+      },
+      {
+        onSuccess: () => {
+          if (selectedAnnotationId === deletingAnnotation.id) {
+            setSelectedAnnotationId(null)
+          }
+          if (detailAnnotationId === deletingAnnotation.id) {
+            setDetailAnnotationId(null)
+          }
+          setDeletingAnnotation(null)
+          toast.success('Annotation deleted.')
+        },
+      },
+    )
   }
 
   const groupedAnnotations: AnnotationGroup[] = React.useMemo(() => {
@@ -142,7 +186,8 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
   }
 
   return (
-    <div className="pb-1">
+    <>
+      <div className="pb-1">
       {groupedAnnotations.map((group) => {
         const isCollapsed = collapsedKeys.has(group.key)
 
@@ -172,12 +217,20 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
                   const isUnlocated = annotation.rects.length === 0 && !!annotation.selected_text
 
                   return (
-                    <button
+                    <div
                       key={annotation.id}
                       data-annotation-id={annotation.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => handleAnnotationClick(annotation)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          handleAnnotationClick(annotation)
+                        }
+                      }}
                       className={cn(
-                        'w-full text-left px-3 py-2 rounded-md text-sm flex items-start gap-2 transition-colors',
+                        'group w-full text-left px-3 py-2 rounded-md text-sm flex items-start gap-2 transition-colors',
                         isSelected
                           ? 'bg-primary/10 border border-primary/20'
                           : 'hover:bg-muted/50'
@@ -211,7 +264,47 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
                           style={{ backgroundColor: annotation.color }}
                         />
                       )}
-                    </button>
+                      <div className="ml-1 flex shrink-0 items-center gap-0.5">
+                        {isUnlocated && (
+                          <button
+                            type="button"
+                            aria-label="Retry locating annotation"
+                            title="Retry locating annotation"
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-amber-600 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleRetryLocate(annotation)
+                            }}
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          aria-label="Open annotation details"
+                          title="Open annotation details"
+                          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setDetailAnnotationId(annotation.id)
+                          }}
+                        >
+                          <Expand className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Delete annotation"
+                          title="Delete annotation"
+                          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setDeletingAnnotation(annotation)
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
                   )
                 })}
               </div>
@@ -219,6 +312,49 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, gro
           </div>
         )
       })}
-    </div>
+      </div>
+
+      <AnnotationDetailDrawer
+        annotation={detailAnnotation}
+        pdfId={pdfId}
+        open={!!detailAnnotation}
+        onOpenChange={(open) => {
+          if (!open) setDetailAnnotationId(null)
+        }}
+      />
+
+      <Dialog
+        open={!!deletingAnnotation}
+        onOpenChange={(open) => {
+          if (!open) setDeletingAnnotation(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete annotation</DialogTitle>
+            <DialogDescription>
+              This will permanently delete the annotation on page {deletingAnnotation?.page_number}.
+            </DialogDescription>
+          </DialogHeader>
+          {deletingAnnotation && (
+            <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+              {getAnnotationPreview(deletingAnnotation)}
+            </div>
+          )}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => setDeletingAnnotation(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteAnnotation}
+              disabled={isDeletingAnnotation}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

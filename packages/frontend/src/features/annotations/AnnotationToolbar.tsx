@@ -1,6 +1,7 @@
 import { useUpdateAnnotation, type Annotation } from '@/api/annotations';
 import { Check, StickyNote } from 'lucide-react';
 import { ANNOTATION_COLORS } from './constants';
+import { hasAnnotationSupplementalContent } from './annotationContent';
 
 interface AnnotationToolbarProps {
     annotation: Annotation;
@@ -10,6 +11,7 @@ interface AnnotationToolbarProps {
 
 export const AnnotationToolbar = ({ annotation, containerDims, onEditNote }: AnnotationToolbarProps) => {
     const { mutate: updateAnnotation } = useUpdateAnnotation();
+    const hasAnnotationContent = hasAnnotationSupplementalContent(annotation);
 
     const handleColorChange = (color: string) => {
         updateAnnotation({ id: annotation.id, data: { color } });
@@ -66,11 +68,11 @@ export const AnnotationToolbar = ({ annotation, containerDims, onEditNote }: Ann
                     <>
                         <div className="w-px h-4 bg-border mx-0.5" />
                         <button
-                            title={annotation.note_content ? 'Edit note' : 'Add note'}
+                            title={hasAnnotationContent ? 'Open note' : 'Add note'}
                             className="w-6 h-6 rounded flex items-center justify-center hover:bg-muted transition-colors"
                             onClick={onEditNote}
                         >
-                            <StickyNote className={`h-3.5 w-3.5 ${annotation.note_content ? 'text-amber-500' : 'text-muted-foreground'}`} />
+                            <StickyNote className={`h-3.5 w-3.5 ${hasAnnotationContent ? 'text-amber-500' : 'text-muted-foreground'}`} />
                         </button>
                     </>
                 )}

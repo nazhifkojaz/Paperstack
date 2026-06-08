@@ -176,6 +176,30 @@ describe('NotePopover', () => {
         expect(screen.getByText(/regular user note/i)).toBeInTheDocument()
     })
 
+    it('renders metadata-backed AI explanations on the AI tab', () => {
+        const annotation = createMockAnnotation({
+            type: 'highlight',
+            note_content: null,
+            metadata: {
+                ai_explanation: {
+                    content: 'Generated explanation body.',
+                    generated_at: '2026-04-25 13:20 UTC',
+                },
+            },
+        })
+
+        render(
+            <NotePopover
+                annotation={annotation}
+                containerDims={mockContainerDims}
+                onClose={mockOnClose}
+            />
+        )
+
+        expect(screen.getByText('AI Explanation')).toBeInTheDocument()
+        expect(screen.getByText('Generated explanation body.')).toBeInTheDocument()
+    })
+
     it('uses responsive width when container is narrower than preferred card width', () => {
         const annotation = createMockAnnotation({
             type: 'note',

@@ -2,6 +2,10 @@ import { StickyNote } from 'lucide-react';
 import { AnnotationContextMenu } from '@/features/annotations/AnnotationContextMenu';
 import { AnnotationToolbar } from '@/features/annotations/AnnotationToolbar';
 import { NotePopover } from '@/features/annotations/NotePopover';
+import {
+  getAnnotationSupplementalTitle,
+  hasAnnotationSupplementalContent,
+} from '@/features/annotations/annotationContent';
 import type { Annotation } from '@/api/annotations';
 import type { Rect } from '@/types/annotation';
 import type {
@@ -87,10 +91,15 @@ export function AnnotationLayerToolbar({
 
       {containerDims &&
         pageAnnotations
-          .filter((annotation) => annotation.type !== 'note' && annotation.note_content)
+          .filter(
+            (annotation) =>
+              annotation.type !== 'note' &&
+              hasAnnotationSupplementalContent(annotation),
+          )
           .map((annotation) => {
             const rects = resolveRects(annotation);
             if (!rects.length) return null;
+            const noteTitle = getAnnotationSupplementalTitle(annotation);
 
             const maxX = Math.max(...rects.map((rect) => rect.x + rect.w));
             const minY = Math.min(...rects.map((rect) => rect.y));
@@ -104,7 +113,7 @@ export function AnnotationLayerToolbar({
                   top: `${minY * containerDims.height}px`,
                   transform: 'translate(-50%, -50%)',
                 }}
-                title={annotation.note_content ?? ''}
+                title={noteTitle}
                 onClick={(event) => {
                   event.stopPropagation();
                   onEditNote(annotation.id);

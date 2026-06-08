@@ -45,7 +45,7 @@ EXPLAIN_SYSTEM_PROMPT = (
 class ExplainResult:
     explanation: str
     context_chunks: list[ContextChunkDict]
-    note_content: str
+    generated_at: str
 
 
 class ExplainService:
@@ -135,10 +135,8 @@ class ExplainService:
         ]
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        new_block = f"[AI Explanation — {timestamp}]\n{explanation}"
-
         return ExplainResult(
             explanation=explanation,
             context_chunks=context_chunks_payload,
-            note_content=new_block,
+            generated_at=timestamp,
         )

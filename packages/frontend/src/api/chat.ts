@@ -56,7 +56,8 @@ interface ExplainRequest {
 
 interface ExplainResponse {
     explanation: string;
-    note_content: string;
+    note_content: string | null;
+    metadata?: Record<string, unknown> | null;
     explain_uses_remaining: number;
     provider_fallback?: boolean;
 }

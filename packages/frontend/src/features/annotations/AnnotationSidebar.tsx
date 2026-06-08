@@ -284,6 +284,7 @@ export const AnnotationSidebar = () => {
                                             }`}>
                                                 <SetAnnotationList
                                                     setId={set.id}
+                                                    pdfId={pdfId}
                                                     groupBy={sidebarGroupBy}
                                                 />
                                             </div>

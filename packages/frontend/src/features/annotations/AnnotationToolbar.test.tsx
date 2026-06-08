@@ -61,7 +61,7 @@ describe('AnnotationToolbar', () => {
         expect(screen.getByTitle('Add note')).toBeInTheDocument()
     })
 
-    it('shows Edit note title when note_content exists', () => {
+    it('shows Open note title when annotation content exists', () => {
         const annotation = createMockAnnotation({ type: 'rect', note_content: 'existing note' })
 
         render(
@@ -72,7 +72,7 @@ describe('AnnotationToolbar', () => {
             />
         )
 
-        expect(screen.getByTitle('Edit note')).toBeInTheDocument()
+        expect(screen.getByTitle('Open note')).toBeInTheDocument()
     })
 
     it('does not render note button for standalone note annotations', () => {

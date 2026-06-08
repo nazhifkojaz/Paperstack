@@ -1,6 +1,6 @@
 """Pydantic schemas for chat and semantic search endpoints."""
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,5 +69,6 @@ class ExplainRequest(BaseModel):
 
 class ExplainResponse(BaseModel):
     explanation: str
-    note_content: str
+    note_content: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
     explain_uses_remaining: int

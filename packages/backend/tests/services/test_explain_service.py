@@ -100,7 +100,7 @@ class TestExplainWithProvider:
 
         assert isinstance(result, ExplainResult)
         assert result.explanation == "This is an explanation."
-        assert "[AI Explanation" in result.note_content
+        assert result.generated_at.endswith(" UTC")
         assert len(result.context_chunks) == 1
 
     async def test_explain_embedding_error(

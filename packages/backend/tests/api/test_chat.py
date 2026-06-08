@@ -12,6 +12,31 @@ from tests.fixtures import (
 TEST_EMBEDDING = [0.01] * 1024
 
 
+class TestExplainNoteHelpers:
+    """Tests for explain endpoint note/AI metadata helpers."""
+
+    def test_strip_legacy_ai_note_blocks_preserves_user_note(self) -> None:
+        from app.api.routes.chat import _strip_legacy_ai_note_blocks
+
+        note_content = (
+            "Keep this user note.\n\n"
+            "[AI Explanation - 2026-04-25 13:20 UTC]\n"
+            "Generated explanation."
+        )
+
+        assert _strip_legacy_ai_note_blocks(note_content) == "Keep this user note."
+
+    def test_strip_legacy_ai_note_blocks_returns_none_for_ai_only_note(self) -> None:
+        from app.api.routes.chat import _strip_legacy_ai_note_blocks
+
+        note_content = (
+            "[AI Explanation - 2026-04-25 13:20 UTC]\n"
+            "Generated explanation."
+        )
+
+        assert _strip_legacy_ai_note_blocks(note_content) is None
+
+
 def _init_http_clients():
     """Initialize HTTP clients on app state for tests that need streaming."""
     from app.main import app
