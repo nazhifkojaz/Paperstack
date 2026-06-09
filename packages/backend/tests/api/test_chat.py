@@ -5,6 +5,8 @@ from fastapi import HTTPException
 from httpx import AsyncClient
 from unittest.mock import AsyncMock, patch, MagicMock
 from tests.fixtures import (
+    create_test_annotation,
+    create_test_annotation_set,
     create_test_pdf,
     create_test_collection,
 )
@@ -29,12 +31,200 @@ class TestExplainNoteHelpers:
     def test_strip_legacy_ai_note_blocks_returns_none_for_ai_only_note(self) -> None:
         from app.api.routes.chat import _strip_legacy_ai_note_blocks
 
-        note_content = (
-            "[AI Explanation - 2026-04-25 13:20 UTC]\n"
-            "Generated explanation."
-        )
+        note_content = "[AI Explanation - 2026-04-25 13:20 UTC]\nGenerated explanation."
 
         assert _strip_legacy_ai_note_blocks(note_content) is None
+
+
+class TestExplainAnnotation:
+    """Tests for POST /v1/chat/explain."""
+
+    async def test_explain_rejects_annotation_from_different_pdf(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        _init_http_clients()
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="Requested PDF",
+            filename="requested.pdf",
+            github_sha="requested-sha",
+        )
+        other_pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="Other PDF",
+            filename="other.pdf",
+            github_sha="other-sha",
+        )
+        other_set = await create_test_annotation_set(
+            db_session,
+            pdf_id=other_pdf.id,
+            user_id=test_user.id,
+        )
+        annotation = await create_test_annotation(
+            db_session,
+            set_id=other_set.id,
+            selected_text="Text from another PDF.",
+        )
+        await db_session.commit()
+
+        with patch(
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
+        ) as mock_resolve:
+            response = await client.post(
+                "/v1/chat/explain",
+                json={
+                    "pdf_id": str(pdf.id),
+                    "annotation_id": str(annotation.id),
+                    "selected_text": annotation.selected_text,
+                    "page_number": annotation.page_number,
+                },
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Annotation not found."
+        mock_resolve.assert_not_called()
+
+
+class TestParaphraseAnnotation:
+    """Tests for POST /v1/chat/paraphrase."""
+
+    async def test_paraphrase_saves_metadata_and_preserves_user_note(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        _init_http_clients()
+        from sqlalchemy import select
+        from app.db.models import Annotation
+
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        ann_set = await create_test_annotation_set(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+        )
+        annotation = await create_test_annotation(
+            db_session,
+            set_id=ann_set.id,
+            selected_text="The model improves retrieval accuracy.",
+            note_content=(
+                "Keep my note.\n\n"
+                "[AI Explanation - 2026-04-25 13:20 UTC]\n"
+                "Legacy explanation."
+            ),
+        )
+        await db_session.commit()
+
+        paraphrase_result = MagicMock(
+            paraphrase="The model makes retrieval more accurate.",
+            generated_at="2026-06-08 15:00 UTC",
+            level="same",
+        )
+        paraphrase_service = MagicMock()
+        paraphrase_service.paraphrase_with_provider = AsyncMock(
+            return_value=paraphrase_result
+        )
+
+        with (
+            patch(
+                "app.api.routes.chat.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.api.routes.chat.ExplainService",
+                return_value=paraphrase_service,
+            ),
+        ):
+            mock_resolve.return_value = MagicMock(
+                provider="gemini",
+                api_key="fake-key",
+                model="gemini-test",
+            )
+
+            response = await client.post(
+                "/v1/chat/paraphrase",
+                json={
+                    "pdf_id": str(pdf.id),
+                    "annotation_id": str(annotation.id),
+                    "selected_text": annotation.selected_text,
+                    "page_number": annotation.page_number,
+                    "level": "same",
+                },
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["paraphrase"] == "The model makes retrieval more accurate."
+        assert data["note_content"] == "Keep my note."
+        assert data["metadata"]["ai_paraphrase"] == {
+            "content": "The model makes retrieval more accurate.",
+            "generated_at": "2026-06-08 15:00 UTC",
+            "level": "same",
+        }
+
+        result = await db_session.execute(
+            select(Annotation).where(Annotation.id == annotation.id)
+        )
+        stored_annotation = result.scalar_one()
+        assert stored_annotation.note_content == "Keep my note."
+        assert stored_annotation.ann_metadata["ai_paraphrase"]["level"] == "same"
+        paraphrase_service.paraphrase_with_provider.assert_awaited_once()
+        assert (
+            paraphrase_service.paraphrase_with_provider.call_args.kwargs["model"]
+            == "gemini-test"
+        )
+
+    async def test_paraphrase_rejects_annotation_from_different_pdf(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        _init_http_clients()
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="Requested PDF",
+            filename="requested.pdf",
+            github_sha="requested-sha",
+        )
+        other_pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="Other PDF",
+            filename="other.pdf",
+            github_sha="other-sha",
+        )
+        other_set = await create_test_annotation_set(
+            db_session,
+            pdf_id=other_pdf.id,
+            user_id=test_user.id,
+        )
+        annotation = await create_test_annotation(
+            db_session,
+            set_id=other_set.id,
+            selected_text="Text from another PDF.",
+        )
+        await db_session.commit()
+
+        with patch(
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
+        ) as mock_resolve:
+            response = await client.post(
+                "/v1/chat/paraphrase",
+                json={
+                    "pdf_id": str(pdf.id),
+                    "annotation_id": str(annotation.id),
+                    "selected_text": annotation.selected_text,
+                    "page_number": annotation.page_number,
+                },
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Annotation not found."
+        mock_resolve.assert_not_called()
 
 
 def _init_http_clients():
@@ -112,13 +302,25 @@ def _stream_patches(mocks, *, with_chat=True, with_llm=True):
     """Return a list of patch context managers for common stream dependencies."""
     patches = [
         patch("app.api.routes.chat.EmbeddingService", return_value=mocks["embedding"]),
-        patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]),
-        patch("app.services.chat_orchestrator.get_indexing_service", return_value=mocks["indexing"]),
+        patch(
+            "app.services.indexing_service.IndexingService",
+            return_value=mocks["indexing"],
+        ),
+        patch(
+            "app.services.chat_orchestrator.get_indexing_service",
+            return_value=mocks["indexing"],
+        ),
     ]
     if with_llm:
-        patches.append(patch("app.api.routes.chat.LLMService", return_value=mocks["llm"]))
+        patches.append(
+            patch("app.api.routes.chat.LLMService", return_value=mocks["llm"])
+        )
     if with_chat and mocks.get("chat"):
-        patches.append(patch("app.services.chat_orchestrator.ChatService", return_value=mocks["chat"]))
+        patches.append(
+            patch(
+                "app.services.chat_orchestrator.ChatService", return_value=mocks["chat"]
+            )
+        )
     return patches
 
 
@@ -473,8 +675,13 @@ class TestStreamMessage:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.side_effect = HTTPException(status_code=402, detail="No API keys available")
-            with patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]):
+            mock_resolve.side_effect = HTTPException(
+                status_code=402, detail="No API keys available"
+            )
+            with patch(
+                "app.services.indexing_service.IndexingService",
+                return_value=mocks["indexing"],
+            ):
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
@@ -526,12 +733,17 @@ class TestStreamMessage:
         mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
-                provider="gemini", api_key="fake-key", is_in_house=True, quota_remaining=10,
+                provider="gemini",
+                api_key="fake-key",
+                is_in_house=True,
+                quota_remaining=10,
             )
             from contextlib import ExitStack
+
             with ExitStack() as stack:
                 for pm in _stream_patches(mocks):
                     stack.enter_context(pm)
@@ -593,15 +805,22 @@ class TestStreamMessage:
         chunk.pdf_title = None
 
         mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
-        mocks["chat"].build_context.return_value = "[Page 2]\nThis source passage supports the answer."
+        mocks[
+            "chat"
+        ].build_context.return_value = (
+            "[Page 2]\nThis source passage supports the answer."
+        )
 
-        with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve, patch(
-            "app.services.chat_orchestrator.vector_search_service.search_pdf",
-            new_callable=AsyncMock,
-        ) as mock_search_pdf:
+        with (
+            patch(
+                "app.api.routes.chat.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_pdf",
+                new_callable=AsyncMock,
+            ) as mock_search_pdf,
+        ):
             mock_resolve.return_value = MagicMock(
                 provider="gemini",
                 api_key="fake-key",
@@ -678,12 +897,17 @@ class TestStreamMessage:
         mocks = _make_stream_mocks(stream_reply=mock_stream)
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
-                provider="openrouter", api_key="openrouter-key", is_in_house=True, quota_remaining=10,
+                provider="openrouter",
+                api_key="openrouter-key",
+                is_in_house=True,
+                quota_remaining=10,
             )
             from contextlib import ExitStack
+
             with ExitStack() as stack:
                 for pm in _stream_patches(mocks):
                     stack.enter_context(pm)
@@ -717,12 +941,17 @@ class TestStreamMessage:
         mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
-                provider="openai", api_key="user-own-key", is_in_house=False, quota_remaining=None,
+                provider="openai",
+                api_key="user-own-key",
+                is_in_house=False,
+                quota_remaining=None,
             )
             from contextlib import ExitStack
+
             with ExitStack() as stack:
                 for pm in _stream_patches(mocks):
                     stack.enter_context(pm)
@@ -763,13 +992,25 @@ class TestStreamMessageOpenRouterQuotaGating:
         )
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
-                provider="openrouter", api_key="openrouter-key", is_in_house=True, quota_remaining=10,
+                provider="openrouter",
+                api_key="openrouter-key",
+                is_in_house=True,
+                quota_remaining=10,
             )
-            with patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]), \
-                 patch("app.api.routes.chat.EmbeddingService", return_value=mocks["embedding"]):
+            with (
+                patch(
+                    "app.services.indexing_service.IndexingService",
+                    return_value=mocks["indexing"],
+                ),
+                patch(
+                    "app.api.routes.chat.EmbeddingService",
+                    return_value=mocks["embedding"],
+                ),
+            ):
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
@@ -789,14 +1030,23 @@ class TestStreamMessageOpenRouterQuotaGating:
         mocks = _make_stream_mocks()
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.side_effect = HTTPException(
                 status_code=503,
                 detail="OpenRouter free-tier usage limit reached (900/1000).",
             )
-            with patch("app.services.indexing_service.IndexingService", return_value=mocks["indexing"]), \
-                 patch("app.api.routes.chat.EmbeddingService", return_value=mocks["embedding"]):
+            with (
+                patch(
+                    "app.services.indexing_service.IndexingService",
+                    return_value=mocks["indexing"],
+                ),
+                patch(
+                    "app.api.routes.chat.EmbeddingService",
+                    return_value=mocks["embedding"],
+                ),
+            ):
                 response = await client.post(
                     f"/v1/chat/conversations/{conv_id}/stream",
                     json={"content": "What is this paper about?"},
@@ -818,12 +1068,17 @@ class TestStreamMessageOpenRouterQuotaGating:
         mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
 
         with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota", new_callable=AsyncMock,
+            "app.api.routes.chat.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = MagicMock(
-                provider="openai", api_key="user-own-key", is_in_house=False, quota_remaining=None,
+                provider="openai",
+                api_key="user-own-key",
+                is_in_house=False,
+                quota_remaining=None,
             )
             from contextlib import ExitStack
+
             with ExitStack() as stack:
                 for pm in _stream_patches(mocks):
                     stack.enter_context(pm)

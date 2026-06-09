@@ -47,6 +47,8 @@ from app.schemas.chat import (
     ExplainResponse,
     MessageCreate,
     MessageResponse,
+    ParaphraseRequest,
+    ParaphraseResponse,
     SemanticSearchRequest,
     SemanticSearchResult,
 )
@@ -69,6 +71,39 @@ def _strip_legacy_ai_note_blocks(note_content: str | None) -> str | None:
     return user_note or None
 
 
+async def _get_owned_pdf(
+    db: AsyncSession,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Pdf:
+    result = await db.execute(
+        select(Pdf).where(Pdf.id == pdf_id, Pdf.user_id == user_id)
+    )
+    pdf_row = result.scalar_one_or_none()
+    if not pdf_row:
+        raise HTTPException(status_code=404, detail="PDF not found.")
+    return pdf_row
+
+
+async def _get_owned_annotation_for_pdf(
+    db: AsyncSession,
+    annotation_id: uuid.UUID,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Annotation:
+    result = await db.execute(
+        select(Annotation)
+        .join(AnnotationSet, Annotation.set_id == AnnotationSet.id)
+        .where(
+            Annotation.id == annotation_id,
+            AnnotationSet.pdf_id == pdf_id,
+            AnnotationSet.user_id == user_id,
+        )
+    )
+    annotation = result.scalar_one_or_none()
+    if not annotation:
+        raise HTTPException(status_code=404, detail="Annotation not found.")
+    return annotation
 
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
@@ -200,8 +235,6 @@ async def delete_conversation(
     await db.commit()
 
 
-
-
 @router.post("/conversations/{conversation_id}/stream")
 @limiter.limit(settings.RATE_LIMIT_CHAT_MESSAGE)
 async def stream_message(
@@ -307,8 +340,6 @@ async def stream_message(
     )
 
 
-
-
 @router.post("/semantic-search", response_model=list[SemanticSearchResult])
 @limiter.limit(settings.RATE_LIMIT_SEMANTIC_SEARCH)
 async def semantic_search(
@@ -356,8 +387,6 @@ async def semantic_search(
     ]
 
 
-
-
 @router.post("/explain", response_model=ExplainResponse)
 @limiter.limit(settings.RATE_LIMIT_CHAT_EXPLAIN)
 async def explain_annotation(
@@ -369,30 +398,16 @@ async def explain_annotation(
     embedding_client: httpx.AsyncClient = Depends(get_embedding_http_client),
 ):
     """Explain a highlighted passage using RAG and save it separately from user notes."""
-    # Verify annotation ownership (join through annotation_sets for user_id check)
-    ann_result = await db.execute(
-        select(Annotation, AnnotationSet)
-        .join(AnnotationSet, Annotation.set_id == AnnotationSet.id)
-        .where(
-            Annotation.id == data.annotation_id,
-            AnnotationSet.user_id == current_user.id,
-        )
+    pdf_row = await _get_owned_pdf(db, data.pdf_id, current_user.id)
+    annotation = await _get_owned_annotation_for_pdf(
+        db,
+        data.annotation_id,
+        data.pdf_id,
+        current_user.id,
     )
-    row = ann_result.first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Annotation not found.")
-    annotation, _ = row
     existing_note_content = (
         annotation.note_content
     )  # capture before any intermediate commit
-
-    pdf_result = await db.execute(
-        select(Pdf).where(Pdf.id == data.pdf_id, Pdf.user_id == current_user.id)
-    )
-    pdf_row = pdf_result.scalar_one_or_none()
-    if not pdf_row:
-        raise HTTPException(status_code=404, detail="PDF not found.")
-
 
     resolution = await resolve_api_key_with_quota(current_user, db, "explain")
     provider = resolution.provider
@@ -418,7 +433,10 @@ async def explain_annotation(
             model=resolution.model,
         )
     except LLMRateLimitError:
-        raise HTTPException(status_code=429, detail="Free tier rate limited. Please try again later or use your own API key.")
+        raise HTTPException(
+            status_code=429,
+            detail="Free tier rate limited. Please try again later or use your own API key.",
+        )
     except IndexInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except OpenRouterQuotaError as exc:
@@ -443,6 +461,71 @@ async def explain_annotation(
 
     return ExplainResponse(
         explanation=result.explanation,
+        note_content=user_note,
+        metadata=metadata,
+        explain_uses_remaining=remaining,
+    )
+
+
+@router.post("/paraphrase", response_model=ParaphraseResponse)
+@limiter.limit(settings.RATE_LIMIT_CHAT_EXPLAIN)
+async def paraphrase_annotation(
+    request: Request,
+    data: ParaphraseRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    llm_client: httpx.AsyncClient = Depends(get_llm_http_client),
+):
+    """Paraphrase a highlighted passage and save it separately from user notes."""
+    annotation = await _get_owned_annotation_for_pdf(
+        db,
+        data.annotation_id,
+        data.pdf_id,
+        current_user.id,
+    )
+    existing_note_content = annotation.note_content
+
+    resolution = await resolve_api_key_with_quota(current_user, db, "explain")
+    provider = resolution.provider
+    api_key = resolution.api_key
+
+    llm_svc = LLMService(http_client=llm_client)
+    local_explain_service = ExplainService(llm_service=llm_svc)
+
+    try:
+        result = await local_explain_service.paraphrase_with_provider(
+            selected_text=data.selected_text,
+            page_number=data.page_number,
+            provider=provider,
+            api_key=api_key,
+            level=data.level,
+            model=resolution.model,
+        )
+    except LLMRateLimitError:
+        raise HTTPException(
+            status_code=429,
+            detail="Free tier rate limited. Please try again later or use your own API key.",
+        )
+    except OpenRouterQuotaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    user_note = _strip_legacy_ai_note_blocks(existing_note_content)
+    metadata = dict(annotation.ann_metadata or {})
+    metadata["ai_paraphrase"] = {
+        "content": result.paraphrase,
+        "generated_at": result.generated_at,
+        "level": result.level,
+    }
+    annotation.note_content = user_note
+    annotation.ann_metadata = metadata
+
+    # OpenRouter (free) has no per-user quota. BYOK = unlimited.
+    remaining = -1  # signals unlimited
+
+    await db.commit()
+
+    return ParaphraseResponse(
+        paraphrase=result.paraphrase,
         note_content=user_note,
         metadata=metadata,
         explain_uses_remaining=remaining,
