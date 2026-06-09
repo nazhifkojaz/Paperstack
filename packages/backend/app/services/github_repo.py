@@ -10,6 +10,7 @@ from app.core import security
 GITHUB_API_URL = "https://api.github.com"
 REPO_NAME = "paperstack-library"
 
+
 async def get_github_client(access_token: str) -> httpx.AsyncClient:
     decrypted_token = security.decrypt_token(access_token)
     return httpx.AsyncClient(
@@ -19,7 +20,9 @@ async def get_github_client(access_token: str) -> httpx.AsyncClient:
             "X-GitHub-Api-Version": "2022-11-28",
         },
         base_url=GITHUB_API_URL,
+        timeout=httpx.Timeout(60.0, connect=10.0),
     )
+
 
 async def ensure_user_repo(access_token: str, github_login: str) -> bool:
     """Checks if paperstack-library repo exists, creates it if not."""
@@ -28,57 +31,79 @@ async def ensure_user_repo(access_token: str, github_login: str) -> bool:
         resp = await client.get(f"/repos/{github_login}/{REPO_NAME}")
         if resp.status_code == 200:
             return True
-        
+
         if resp.status_code != 404:
-            raise HTTPException(status_code=500, detail="Failed to check GitHub repository status")
-            
+            raise HTTPException(
+                status_code=500, detail="Failed to check GitHub repository status"
+            )
+
         # Create repo
-        create_resp = await client.post("/user/repos", json={
-            "name": REPO_NAME,
-            "description": "Private PDF library managed by Paperstack",
-            "private": True,
-            "auto_init": True
-        })
-        
+        create_resp = await client.post(
+            "/user/repos",
+            json={
+                "name": REPO_NAME,
+                "description": "Private PDF library managed by Paperstack",
+                "private": True,
+                "auto_init": True,
+            },
+        )
+
         if create_resp.status_code != 201:
-            raise HTTPException(status_code=500, detail=f"Failed to create GitHub repository: {create_resp.text}")
-            
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create GitHub repository: {create_resp.text}",
+            )
+
         return True
 
+
 async def upload_pdf_to_github(
-    access_token: str, 
-    github_login: str, 
-    filepath: str, 
-    file_bytes: bytes, 
-    commit_message: str = "Add PDF"
+    access_token: str,
+    github_login: str,
+    filepath: str,
+    file_bytes: bytes,
+    commit_message: str = "Add PDF",
 ) -> Dict[str, Any]:
     """Uploads a PDF file to the users paperstack-library repo."""
     encoded_content = base64.b64encode(file_bytes).decode("utf-8")
-    
+
     async with await get_github_client(access_token) as client:
-        resp = await client.put(f"/repos/{github_login}/{REPO_NAME}/contents/{filepath}", json={
-            "message": commit_message,
-            "content": encoded_content
-        })
-        
+        resp = await client.put(
+            f"/repos/{github_login}/{REPO_NAME}/contents/{filepath}",
+            json={"message": commit_message, "content": encoded_content},
+        )
+
         if resp.status_code not in (200, 201):
-            raise HTTPException(status_code=500, detail=f"Failed to upload to GitHub: {resp.text}")
-            
+            raise HTTPException(
+                status_code=500, detail=f"Failed to upload to GitHub: {resp.text}"
+            )
+
         return resp.json()
 
-async def download_pdf_from_github(access_token: str, github_login: str, filepath: str) -> bytes:
+
+async def download_pdf_from_github(
+    access_token: str, github_login: str, filepath: str
+) -> bytes:
     """Downloads a PDF file from the users paperstack-library repo."""
     async with await get_github_client(access_token) as client:
         # We need to request the raw format
         client.headers.update({"Accept": "application/vnd.github.v3.raw"})
-        resp = await client.get(f"/repos/{github_login}/{REPO_NAME}/contents/{filepath}")
-        
+        resp = await client.get(
+            f"/repos/{github_login}/{REPO_NAME}/contents/{filepath}"
+        )
+
         if resp.status_code != 200:
-            raise HTTPException(status_code=resp.status_code, detail=f"Failed to download from GitHub: {resp.text}")
-            
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"Failed to download from GitHub: {resp.text}",
+            )
+
         return resp.content
 
-async def download_pdf_to_tempfile(access_token: str, github_login: str, filepath: str) -> Path:
+
+async def download_pdf_to_tempfile(
+    access_token: str, github_login: str, filepath: str
+) -> Path:
     """Downloads a PDF file from GitHub to a temporary file.
 
     Returns the path to the temp file. Caller is responsible for deleting it.
@@ -86,11 +111,13 @@ async def download_pdf_to_tempfile(access_token: str, github_login: str, filepat
     async with await get_github_client(access_token) as client:
         client.headers.update({"Accept": "application/vnd.github.v3.raw"})
 
-        async with client.stream("GET", f"/repos/{github_login}/{REPO_NAME}/contents/{filepath}") as response:
+        async with client.stream(
+            "GET", f"/repos/{github_login}/{REPO_NAME}/contents/{filepath}"
+        ) as response:
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=response.status_code,
-                    detail=f"Failed to download from GitHub: status {response.status_code}"
+                    detail=f"Failed to download from GitHub: status {response.status_code}",
                 )
 
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -110,21 +137,20 @@ async def delete_pdf_from_github(
     github_login: str,
     filepath: str,
     sha: str,
-    commit_message: str = "Delete PDF"
+    commit_message: str = "Delete PDF",
 ) -> bool:
     """Deletes a PDF file from the users paperstack-library repo."""
     async with await get_github_client(access_token) as client:
         resp = await client.request(
             "DELETE",
             f"/repos/{github_login}/{REPO_NAME}/contents/{filepath}",
-            content=json.dumps({
-                "message": commit_message,
-                "sha": sha
-            }),
-            headers={"Content-Type": "application/json"}
+            content=json.dumps({"message": commit_message, "sha": sha}),
+            headers={"Content-Type": "application/json"},
         )
 
         if resp.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Failed to delete from GitHub: {resp.text}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete from GitHub: {resp.text}"
+            )
 
         return True

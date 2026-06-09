@@ -20,6 +20,7 @@ DRIVE_API = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 PAPERSTACK_FOLDER_NAME = "Paperstack"
 CHUNK_SIZE = 8192  # 8 KB streaming chunks
+_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 
 
 def _redirect_uri() -> str:
@@ -31,7 +32,7 @@ async def get_google_tokens(code: str) -> Optional[Dict[str, Any]]:
 
     Returns a dict with 'access_token', 'refresh_token', 'expires_in', or None on failure.
     """
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.post(
             GOOGLE_TOKEN_URL,
             data={
@@ -53,7 +54,7 @@ async def get_google_user(access_token: str) -> Optional[Dict[str, Any]]:
 
     Returns a dict with 'sub', 'email', 'name', 'picture', or None on failure.
     """
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.get(
             GOOGLE_USERINFO_URL,
             headers={"Authorization": f"Bearer {access_token}"},
@@ -77,7 +78,7 @@ async def refresh_google_token(encrypted_refresh_token: str) -> Tuple[str, datet
         httpx.HTTPError: If the refresh request fails.
     """
     refresh_token = decrypt_token(encrypted_refresh_token)
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.post(
             GOOGLE_TOKEN_URL,
             data={
@@ -101,7 +102,7 @@ async def ensure_drive_folder(access_token: str) -> str:
     Uses drive.file scope — only sees files created by this app.
     Returns the folder ID.
     """
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         headers = {"Authorization": f"Bearer {access_token}"}
 
         # Search for existing Paperstack folder
@@ -120,10 +121,12 @@ async def ensure_drive_folder(access_token: str) -> str:
         create_resp = await client.post(
             f"{DRIVE_API}/files",
             headers={**headers, "Content-Type": "application/json"},
-            content=json.dumps({
-                "name": PAPERSTACK_FOLDER_NAME,
-                "mimeType": "application/vnd.google-apps.folder",
-            }),
+            content=json.dumps(
+                {
+                    "name": PAPERSTACK_FOLDER_NAME,
+                    "mimeType": "application/vnd.google-apps.folder",
+                }
+            ),
         )
         create_resp.raise_for_status()
         return create_resp.json()["id"]
@@ -140,21 +143,25 @@ async def upload_to_drive(
     Uses multipart upload for files of any size.
     Returns the Drive file ID.
     """
-    metadata = json.dumps({
-        "name": filename,
-        "parents": [folder_id],
-    }).encode()
+    metadata = json.dumps(
+        {
+            "name": filename,
+            "parents": [folder_id],
+        }
+    ).encode()
 
     boundary = "paperstack_boundary_abc123"
     body = (
-        f"--{boundary}\r\n"
-        f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
-    ).encode() + metadata + (
-        f"\r\n--{boundary}\r\n"
-        f"Content-Type: application/pdf\r\n\r\n"
-    ).encode() + file_bytes + f"\r\n--{boundary}--".encode()
+        (
+            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+        ).encode()
+        + metadata
+        + (f"\r\n--{boundary}\r\nContent-Type: application/pdf\r\n\r\n").encode()
+        + file_bytes
+        + f"\r\n--{boundary}--".encode()
+    )
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             f"{DRIVE_UPLOAD_API}/files",
             params={"uploadType": "multipart", "fields": "id"},
@@ -170,7 +177,7 @@ async def upload_to_drive(
 
 async def download_from_drive(access_token: str, file_id: str) -> bytes:
     """Download a file from Google Drive as bytes."""
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.get(
             f"{DRIVE_API}/files/{file_id}",
             params={"alt": "media"},
@@ -185,7 +192,7 @@ async def download_from_drive_to_tempfile(access_token: str, file_id: str) -> Pa
 
     Returns the path to the temp file. Caller is responsible for deletion.
     """
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         async with client.stream(
             "GET",
             f"{DRIVE_API}/files/{file_id}",
@@ -208,7 +215,7 @@ async def download_from_drive_to_tempfile(access_token: str, file_id: str) -> Pa
 
 async def delete_from_drive(access_token: str, file_id: str) -> None:
     """Permanently delete a file from Google Drive."""
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.delete(
             f"{DRIVE_API}/files/{file_id}",
             headers={"Authorization": f"Bearer {access_token}"},
