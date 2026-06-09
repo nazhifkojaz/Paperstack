@@ -24,6 +24,7 @@ export const PdfAnnotationLayer = ({
 }: PdfAnnotationLayerProps) => {
   const {
     annotationExplain,
+    annotationParaphrase,
     closeContextMenu,
     containerDims,
     containerElement,
@@ -37,6 +38,7 @@ export const PdfAnnotationLayer = ({
     },
     editingNoteId,
     handleExplainThis,
+    handleParaphraseThis,
     isDrawingRect,
     openContextMenu,
     pageAnnotations,
@@ -119,6 +121,7 @@ export const PdfAnnotationLayer = ({
 
       <AnnotationLayerToolbar
         annotationExplain={annotationExplain}
+        annotationParaphrase={annotationParaphrase}
         containerDims={containerDims}
         containerElement={containerElement}
         contextMenu={contextMenu}
@@ -129,6 +132,7 @@ export const PdfAnnotationLayer = ({
         onCloseContextMenu={closeContextMenu}
         onEditNote={setEditingNoteId}
         onExplainThis={handleExplainThis}
+        onParaphraseThis={handleParaphraseThis}
         onSelectAnnotation={setSelectedAnnotationId}
       />
     </div>

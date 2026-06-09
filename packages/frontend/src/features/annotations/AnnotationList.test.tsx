@@ -15,6 +15,7 @@ vi.mock('@/api/annotations', () => ({
 
 vi.mock('@/api/chat', () => ({
   useExplainAnnotation: vi.fn(() => ({ mutate: vi.fn() })),
+  useParaphraseAnnotation: vi.fn(() => ({ mutate: vi.fn() })),
 }))
 
 vi.mock('@/features/pdf-viewer/useTextIndexMatcher', () => ({
@@ -35,6 +36,14 @@ describe('SetAnnotationList', () => {
     createMockAnnotation({ id: 'ann-2', page_number: 1, type: 'rect', color: '#EF4444' }),
     createMockAnnotation({ id: 'ann-3', page_number: 3, type: 'highlight', selected_text: 'Another result', color: '#3B82F6' }),
   ]
+
+  const selectTab = (name: RegExp) => {
+    const tab = screen.getByRole('tab', { name })
+    fireEvent.pointerDown(tab, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+    fireEvent.mouseDown(tab, { button: 0, ctrlKey: false })
+    fireEvent.mouseUp(tab)
+    fireEvent.click(tab)
+  }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -148,5 +157,34 @@ describe('SetAnnotationList', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText('Annotated text')).toBeInTheDocument()
     expect(screen.getAllByText(/Important finding/).length).toBeGreaterThan(0)
+
+    selectTab(/paraphrase/i)
+    expect(screen.getByRole('button', { name: /paraphrase this/i })).toBeEnabled()
+  })
+
+  it('shows disabled drawer AI actions for highlights without selected text', () => {
+    vi.mocked(annotationsApi.useAnnotations).mockReturnValue({
+      data: [
+        createMockAnnotation({
+          id: 'ann-empty-highlight',
+          page_number: 1,
+          type: 'highlight',
+          selected_text: '',
+        }),
+      ],
+      isLoading: false,
+    } as any)
+
+    render(<SetAnnotationList setId="set-1" pdfId="pdf-1" groupBy="page" />)
+    fireEvent.click(screen.getByRole('button', { name: /open annotation details/i }))
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('No selected text for this annotation.')).toBeInTheDocument()
+
+    selectTab(/explanation/i)
+    expect(screen.getByRole('button', { name: /explain this/i })).toBeDisabled()
+
+    selectTab(/paraphrase/i)
+    expect(screen.getByRole('button', { name: /paraphrase this/i })).toBeDisabled()
   })
 })

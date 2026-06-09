@@ -1,15 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
-import { FileText, Loader2, Pencil, Save, Sparkles } from 'lucide-react';
+import { FileText, Loader2, Pencil, Save } from 'lucide-react';
 import type { Annotation } from '@/api/annotations';
+import type { ParaphraseLevel } from '@/api/chat';
 import { useUpdateAnnotation } from '@/api/annotations';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { AnnotationAiActionControls } from './AnnotationAiActionControls';
+import {
+  getDefaultAnnotationContentTab,
+  type AnnotationContentTab,
+} from './annotationTabs';
 import {
   buildNoteUpdateData,
   getAnnotationAiExplanation,
+  getAnnotationAiParaphrase,
   getAnnotationUserNote,
 } from './annotationContent';
 import {
@@ -17,6 +24,8 @@ import {
   AnnotationAiExplanationView,
 } from './AnnotationAiExplanation';
 import { useAnnotationExplain } from './useAnnotationExplain';
+import { useAnnotationParaphrase } from './useAnnotationParaphrase';
+import { getParaphraseLevelLabel } from './paraphraseLevels';
 
 interface AnnotationDetailDrawerProps {
   annotation: Annotation | null;
@@ -39,26 +48,59 @@ export function AnnotationDetailDrawer({
     () => (annotation ? getAnnotationAiExplanation(annotation) : null),
     [annotation],
   );
-  const [activeTab, setActiveTab] = useState<'note' | 'ai'>('note');
+  const aiParaphrase = useMemo(
+    () => (annotation ? getAnnotationAiParaphrase(annotation) : null),
+    [annotation],
+  );
+  const [activeTab, setActiveTab] = useState<AnnotationContentTab>('note');
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [draftNote, setDraftNote] = useState(userNote);
+  const [paraphraseLevel, setParaphraseLevel] = useState<ParaphraseLevel>('same');
+  const previousAnnotationIdRef = useRef<string | null>(null);
   const { mutate: updateAnnotation, isPending: isSavingNote } = useUpdateAnnotation();
   const annotationExplain = useAnnotationExplain({
     onSuccess: () => {
-      setActiveTab('ai');
+      setActiveTab('explanation');
+    },
+  });
+  const annotationParaphrase = useAnnotationParaphrase({
+    onSuccess: () => {
+      setActiveTab('paraphrase');
     },
   });
 
-  const canExplain = !!annotation?.selected_text && annotation.type === 'highlight' && !!pdfId;
+  const isHighlightAnnotation = annotation?.type === 'highlight';
+  const hasSelectedText = !!annotation?.selected_text;
+  const canShowAiActions = isHighlightAnnotation && !!pdfId;
+  const canUseAiActions = canShowAiActions && hasSelectedText;
+  const aiUnavailableTitle = canUseAiActions
+    ? undefined
+    : 'No selected text for this annotation';
   const isExplainingThis =
     annotationExplain.isExplaining && annotationExplain.explainingId === annotation?.id;
+  const isParaphrasingThis =
+    annotationParaphrase.isParaphrasing &&
+    annotationParaphrase.paraphrasingId === annotation?.id;
 
-  /* eslint-disable react-hooks/set-state-in-effect -- Sync drawer editor when switching annotations */
+  /* eslint-disable react-hooks/set-state-in-effect -- Sync drawer defaults when switching annotations */
   useEffect(() => {
+    if (!annotation) {
+      previousAnnotationIdRef.current = null;
+      return;
+    }
+    if (previousAnnotationIdRef.current === annotation.id) return;
+
+    previousAnnotationIdRef.current = annotation.id;
     setDraftNote(userNote);
     setIsEditingNote(false);
-    setActiveTab(!userNote && aiExplanation ? 'ai' : 'note');
-  }, [annotation?.id, aiExplanation, userNote]);
+    setActiveTab(
+      getDefaultAnnotationContentTab(userNote, !!aiExplanation, !!aiParaphrase),
+    );
+  }, [annotation, aiExplanation, aiParaphrase, userNote]);
+
+  useEffect(() => {
+    if (!isEditingNote) setDraftNote(userNote);
+  }, [isEditingNote, userNote]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!annotation) return null;
@@ -78,9 +120,15 @@ export function AnnotationDetailDrawer({
   };
 
   const handleExplain = () => {
-    if (!pdfId || !canExplain) return;
-    setActiveTab('ai');
+    if (!pdfId || !canUseAiActions) return;
+    setActiveTab('explanation');
     annotationExplain.explain(annotation, pdfId);
+  };
+
+  const handleParaphrase = () => {
+    if (!pdfId || !canUseAiActions) return;
+    setActiveTab('paraphrase');
+    annotationParaphrase.paraphrase(annotation, pdfId, paraphraseLevel);
   };
 
   return (
@@ -89,7 +137,7 @@ export function AnnotationDetailDrawer({
         <DialogHeader className="border-b px-5 py-4">
           <DialogTitle className="text-base">Annotation</DialogTitle>
           <DialogDescription className="sr-only">
-            Annotation details, note editor, and AI explanation.
+            Annotation details, note editor, AI explanation, and AI paraphrase.
           </DialogDescription>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <FileText className="h-3.5 w-3.5" />
@@ -111,32 +159,36 @@ export function AnnotationDetailDrawer({
           <Tabs
             value={activeTab}
             onValueChange={(value) => {
-              const next = value as 'note' | 'ai';
+              const next = value as AnnotationContentTab;
               setActiveTab(next);
-              if (next === 'ai') setIsEditingNote(false);
+              if (next !== 'note') setIsEditingNote(false);
             }}
             className="flex min-h-0 flex-1 flex-col px-5 py-4"
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <TabsList className="grid w-56 grid-cols-2">
+            <div className="mb-4 space-y-3">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="note">Note</TabsTrigger>
-                <TabsTrigger value="ai">AI</TabsTrigger>
+                <TabsTrigger value="explanation">Explanation</TabsTrigger>
+                <TabsTrigger value="paraphrase">Paraphrase</TabsTrigger>
               </TabsList>
-              {canExplain && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleExplain}
-                  disabled={isExplainingThis}
-                >
-                  {isExplainingThis ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-4 w-4" />
-                  )}
-                  {aiExplanation ? 'Regenerate' : 'Explain this'}
-                </Button>
-              )}
+              <AnnotationAiActionControls
+                activeTab={activeTab}
+                aiUnavailableTitle={aiUnavailableTitle}
+                buttonClassName="w-full sm:w-auto"
+                buttonVariant="outline"
+                canUseAiActions={canUseAiActions}
+                explanationClassName="flex justify-end"
+                hasAiExplanation={!!aiExplanation}
+                hasAiParaphrase={!!aiParaphrase}
+                isExplaining={isExplainingThis}
+                isParaphrasing={isParaphrasingThis}
+                onExplain={canShowAiActions ? handleExplain : undefined}
+                onParaphrase={canShowAiActions ? handleParaphrase : undefined}
+                onParaphraseLevelChange={setParaphraseLevel}
+                paraphraseClassName="grid gap-2 sm:flex sm:justify-end"
+                paraphraseLevel={paraphraseLevel}
+                selectTriggerClassName="h-11 w-full sm:w-36"
+              />
             </div>
 
             <TabsContent value="note" className="mt-0 min-h-0 flex-1 overflow-y-auto">
@@ -185,7 +237,7 @@ export function AnnotationDetailDrawer({
               )}
             </TabsContent>
 
-            <TabsContent value="ai" className="mt-0 min-h-0 flex-1 overflow-y-auto">
+            <TabsContent value="explanation" className="mt-0 min-h-0 flex-1 overflow-y-auto">
               {isExplainingThis ? (
                 <AnnotationAiExplanationLoading
                   message={annotationExplain.statusMessage || 'Generating explanation…'}
@@ -198,6 +250,23 @@ export function AnnotationDetailDrawer({
               ) : (
                 <div className="rounded-md border bg-background p-4 text-sm text-muted-foreground">
                   No AI explanation yet.
+                </div>
+              )}
+            </TabsContent>
+            <TabsContent value="paraphrase" className="mt-0 min-h-0 flex-1 overflow-y-auto">
+              {isParaphrasingThis ? (
+                <AnnotationAiExplanationLoading
+                  message={annotationParaphrase.statusMessage || 'Generating paraphrase…'}
+                />
+              ) : aiParaphrase ? (
+                <AnnotationAiExplanationView
+                  explanation={aiParaphrase}
+                  badgeLabel="AI Paraphrase"
+                  detailLabel={getParaphraseLevelLabel(aiParaphrase.level)}
+                />
+              ) : (
+                <div className="rounded-md border bg-background p-4 text-sm text-muted-foreground">
+                  No AI paraphrase yet.
                 </div>
               )}
             </TabsContent>

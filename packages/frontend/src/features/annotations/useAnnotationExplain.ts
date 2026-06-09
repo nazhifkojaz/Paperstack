@@ -2,36 +2,8 @@ import { useState, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useExplainAnnotation } from '@/api/chat';
-
-interface Annotation {
-    id: string;
-    set_id: string;
-    selected_text?: string | null;
-    note_content?: string | null;
-    metadata?: Record<string, unknown> | null;
-    page_number: number;
-}
-
-function applyExplainResultToAnnotation(
-    annotationId: string,
-    noteContent: string | null,
-    metadata: Record<string, unknown> | null | undefined,
-) {
-    return (old: Annotation[] | undefined): Annotation[] | undefined => {
-        if (!old) return old;
-        let changed = false;
-        const next = old.map(a => {
-            if (a.id !== annotationId) return a;
-            changed = true;
-            return {
-                ...a,
-                note_content: noteContent,
-                metadata: metadata ?? a.metadata,
-            };
-        });
-        return changed ? next : old;
-    };
-}
+import type { Annotation } from '@/api/annotations';
+import { applyAiResultToAnnotation } from './annotationAiCache';
 
 interface UseAnnotationExplainOptions {
     onSuccess?: (explanation: string, noteContent: string | null, annotationId: string) => void;
@@ -80,7 +52,7 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
                         queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
                     }
 
-                    const applyResult = applyExplainResultToAnnotation(
+                    const applyResult = applyAiResultToAnnotation(
                         annotation.id,
                         result.note_content,
                         result.metadata,

@@ -10,6 +10,12 @@ export interface AnnotationAiExplanation {
   }>;
 }
 
+export interface AnnotationAiParaphrase {
+  content: string;
+  generated_at?: string;
+  level?: string;
+}
+
 const LEGACY_AI_BLOCK_PATTERN =
   '(?:^|\\n{2,})\\[AI Explanation\\s*[—-]\\s*([^\\]]+)\\]\\s*([\\s\\S]*?)(?=\\n{2,}\\[AI Explanation\\s*[—-]|\\s*$)';
 
@@ -23,7 +29,7 @@ function getMetadata(annotation: Annotation): Record<string, unknown> {
     : {};
 }
 
-function isAiExplanation(value: unknown): value is AnnotationAiExplanation {
+function isAiGeneratedContent(value: unknown): value is { content: string } {
   return (
     !!value &&
     typeof value === 'object' &&
@@ -36,10 +42,17 @@ export function getAnnotationAiExplanation(
   annotation: Annotation,
 ): AnnotationAiExplanation | null {
   const metadataAi = getMetadata(annotation).ai_explanation;
-  if (isAiExplanation(metadataAi)) return metadataAi;
+  if (isAiGeneratedContent(metadataAi)) return metadataAi as AnnotationAiExplanation;
 
   const legacyBlocks = parseLegacyAiExplanations(annotation.note_content ?? '');
   return legacyBlocks.length > 0 ? legacyBlocks[legacyBlocks.length - 1] : null;
+}
+
+export function getAnnotationAiParaphrase(
+  annotation: Annotation,
+): AnnotationAiParaphrase | null {
+  const metadataAi = getMetadata(annotation).ai_paraphrase;
+  return isAiGeneratedContent(metadataAi) ? metadataAi as AnnotationAiParaphrase : null;
 }
 
 export function getAnnotationUserNote(annotation: Annotation): string {
@@ -47,11 +60,20 @@ export function getAnnotationUserNote(annotation: Annotation): string {
 }
 
 export function hasAnnotationSupplementalContent(annotation: Annotation): boolean {
-  return !!getAnnotationUserNote(annotation) || !!getAnnotationAiExplanation(annotation);
+  return (
+    !!getAnnotationUserNote(annotation) ||
+    !!getAnnotationAiExplanation(annotation) ||
+    !!getAnnotationAiParaphrase(annotation)
+  );
 }
 
 export function getAnnotationSupplementalTitle(annotation: Annotation): string {
-  return getAnnotationUserNote(annotation) || getAnnotationAiExplanation(annotation)?.content || '';
+  return (
+    getAnnotationUserNote(annotation) ||
+    getAnnotationAiExplanation(annotation)?.content ||
+    getAnnotationAiParaphrase(annotation)?.content ||
+    ''
+  );
 }
 
 export function buildNoteUpdateData(

@@ -54,8 +54,22 @@ interface ExplainRequest {
     page_number: number;
 }
 
+export type ParaphraseLevel = 'same' | 'simpler' | 'plain';
+
+interface ParaphraseRequest extends ExplainRequest {
+    level?: ParaphraseLevel;
+}
+
 interface ExplainResponse {
     explanation: string;
+    note_content: string | null;
+    metadata?: Record<string, unknown> | null;
+    explain_uses_remaining: number;
+    provider_fallback?: boolean;
+}
+
+interface ParaphraseResponse {
+    paraphrase: string;
     note_content: string | null;
     metadata?: Record<string, unknown> | null;
     explain_uses_remaining: number;
@@ -129,6 +143,20 @@ export const useExplainAnnotation = () => {
     return useMutation({
         mutationFn: (data: ExplainRequest): Promise<ExplainResponse> =>
             apiFetch('/chat/explain', {
+                method: 'POST',
+                body: JSON.stringify(data),
+            }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['annotations'] });
+        },
+    });
+};
+
+export const useParaphraseAnnotation = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: (data: ParaphraseRequest): Promise<ParaphraseResponse> =>
+            apiFetch('/chat/paraphrase', {
                 method: 'POST',
                 body: JSON.stringify(data),
             }),

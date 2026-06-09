@@ -6,6 +6,8 @@ import type { AnnotationAiExplanation } from './annotationContent';
 
 interface AnnotationAiExplanationViewProps {
   explanation: AnnotationAiExplanation;
+  badgeLabel?: string;
+  detailLabel?: string | null;
   showContext?: boolean;
   className?: string;
 }
@@ -17,6 +19,8 @@ interface AnnotationAiExplanationLoadingProps {
 
 export function AnnotationAiExplanationView({
   explanation,
+  badgeLabel = 'AI Explanation',
+  detailLabel,
   showContext = false,
   className,
 }: AnnotationAiExplanationViewProps) {
@@ -34,12 +38,13 @@ export function AnnotationAiExplanationView({
             variant="outline"
             className="text-xs font-medium text-violet-700 border-violet-200 bg-violet-50 hover:bg-violet-100"
           >
-            AI Explanation
+            {badgeLabel}
           </Badge>
-          {explanation.generated_at && (
-            <span className="ml-auto shrink-0 text-xs text-violet-400">
-              {explanation.generated_at}
-            </span>
+          {(detailLabel || explanation.generated_at) && (
+            <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-violet-400">
+              {detailLabel && <span>{detailLabel}</span>}
+              {explanation.generated_at && <span>{explanation.generated_at}</span>}
+            </div>
           )}
         </div>
         <div className="prose prose-sm max-w-none text-foreground prose-p:my-2 prose-ul:my-2 prose-li:my-0.5">

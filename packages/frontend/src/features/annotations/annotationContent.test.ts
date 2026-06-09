@@ -3,6 +3,7 @@ import { createMockAnnotation } from '@/test/test-utils';
 import {
   buildNoteUpdateData,
   getAnnotationAiExplanation,
+  getAnnotationAiParaphrase,
   getAnnotationUserNote,
   hasAnnotationSupplementalContent,
 } from './annotationContent';
@@ -36,6 +37,24 @@ describe('annotationContent', () => {
     expect(getAnnotationAiExplanation(annotation)?.content).toBe('Metadata explanation.');
   });
 
+  it('reads metadata-backed AI paraphrases', () => {
+    const annotation = createMockAnnotation({
+      metadata: {
+        ai_paraphrase: {
+          generated_at: '2026-05-01 10:00 UTC',
+          content: 'Metadata paraphrase.',
+          level: 'same',
+        },
+      },
+    });
+
+    expect(getAnnotationAiParaphrase(annotation)).toEqual({
+      generated_at: '2026-05-01 10:00 UTC',
+      content: 'Metadata paraphrase.',
+      level: 'same',
+    });
+  });
+
   it('preserves legacy AI explanation metadata when saving user notes', () => {
     const annotation = createMockAnnotation({
       note_content:
@@ -58,6 +77,9 @@ describe('annotationContent', () => {
     expect(hasAnnotationSupplementalContent(createMockAnnotation({ note_content: 'note' }))).toBe(true);
     expect(hasAnnotationSupplementalContent(createMockAnnotation({
       metadata: { ai_explanation: { content: 'AI' } },
+    }))).toBe(true);
+    expect(hasAnnotationSupplementalContent(createMockAnnotation({
+      metadata: { ai_paraphrase: { content: 'AI paraphrase' } },
     }))).toBe(true);
   });
 });

@@ -9,8 +9,10 @@ import type { RefObject } from 'react';
 import { useAnnotationStore } from '@/stores/annotationStore';
 import { useAnnotationsContext } from '@/features/annotations/AnnotationsContext';
 import { useAnnotationExplain } from '@/features/annotations/useAnnotationExplain';
+import { useAnnotationParaphrase } from '@/features/annotations/useAnnotationParaphrase';
 import { useAnnotationDrag } from '@/features/annotations/useAnnotationDrag';
 import type { Annotation } from '@/api/annotations';
+import type { ParaphraseLevel } from '@/api/chat';
 import type { Rect } from '@/types/annotation';
 import type { PdfTextLayerHandle } from './PdfTextLayer';
 import {
@@ -119,6 +121,11 @@ export function useAnnotationLayerState({
       setEditingNoteId(annotationId);
     },
   });
+  const annotationParaphrase = useAnnotationParaphrase({
+    onSuccess: (_paraphrase, _noteContent, annotationId) => {
+      setEditingNoteId(annotationId);
+    },
+  });
 
   const matcherAnnotations = useMemo(() => {
     const own = annotationsByPage.get(pageNumber) ?? [];
@@ -199,8 +206,21 @@ export function useAnnotationLayerState({
     annotationExplain.explain(ann, pdfId);
   };
 
+  const handleParaphraseThis = (
+    annotationId: string,
+    level: ParaphraseLevel = 'same',
+  ) => {
+    const ann = pageAnnotations.find((a) => a.id === annotationId);
+    if (!ann) return;
+
+    setSelectedAnnotationId(annotationId);
+    setEditingNoteId(annotationId);
+    annotationParaphrase.paraphrase(ann, pdfId, level);
+  };
+
   return {
     annotationExplain,
+    annotationParaphrase,
     closeContextMenu,
     containerDims,
     containerElement,
@@ -209,6 +229,7 @@ export function useAnnotationLayerState({
     drag,
     editingNoteId,
     handleExplainThis,
+    handleParaphraseThis,
     isDrawingRect,
     openContextMenu,
     pageAnnotations,

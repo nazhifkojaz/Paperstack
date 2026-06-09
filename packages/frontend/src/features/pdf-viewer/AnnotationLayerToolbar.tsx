@@ -7,6 +7,7 @@ import {
   hasAnnotationSupplementalContent,
 } from '@/features/annotations/annotationContent';
 import type { Annotation } from '@/api/annotations';
+import type { ParaphraseLevel } from '@/api/chat';
 import type { Rect } from '@/types/annotation';
 import type {
   AnnotationLayerContainerDims,
@@ -21,8 +22,17 @@ interface AnnotationExplainControls {
   statusMessage: string;
 }
 
+interface AnnotationParaphraseControls {
+  clearParaphrase: () => void;
+  explainUsesRemaining: number | null;
+  isParaphrasing: boolean;
+  paraphrasingId: string | null;
+  statusMessage: string;
+}
+
 interface AnnotationLayerToolbarProps {
   annotationExplain: AnnotationExplainControls;
+  annotationParaphrase: AnnotationParaphraseControls;
   containerDims: AnnotationLayerContainerDims | null;
   containerElement: HTMLDivElement | null;
   contextMenu: AnnotationLayerContextMenu | null;
@@ -33,11 +43,13 @@ interface AnnotationLayerToolbarProps {
   onCloseContextMenu: () => void;
   onEditNote: (annotationId: string | null) => void;
   onExplainThis: (annotationId: string) => void;
+  onParaphraseThis: (annotationId: string, level?: ParaphraseLevel) => void;
   onSelectAnnotation: (annotationId: string | null) => void;
 }
 
 export function AnnotationLayerToolbar({
   annotationExplain,
+  annotationParaphrase,
   containerDims,
   containerElement,
   contextMenu,
@@ -48,6 +60,7 @@ export function AnnotationLayerToolbar({
   onCloseContextMenu,
   onEditNote,
   onExplainThis,
+  onParaphraseThis,
   onSelectAnnotation,
 }: AnnotationLayerToolbarProps) {
   const getAnnotationWithRects = (annotationId: string | null) => {
@@ -80,12 +93,20 @@ export function AnnotationLayerToolbar({
           onClose={() => {
             onEditNote(null);
             annotationExplain.clearExplain();
+            annotationParaphrase.clearParaphrase();
           }}
           isExplaining={
             annotationExplain.isExplaining &&
             annotationExplain.explainingId === editingAnnotation.annotation.id
           }
           explainStatusMessage={annotationExplain.statusMessage}
+          onExplainThis={onExplainThis}
+          isParaphrasing={
+            annotationParaphrase.isParaphrasing &&
+            annotationParaphrase.paraphrasingId === editingAnnotation.annotation.id
+          }
+          paraphraseStatusMessage={annotationParaphrase.statusMessage}
+          onParaphraseThis={onParaphraseThis}
         />
       )}
 
@@ -143,7 +164,11 @@ export function AnnotationLayerToolbar({
           onClose={onCloseContextMenu}
           onEditNote={onEditNote}
           onExplainThis={onExplainThis}
-          explainUsesRemaining={annotationExplain.explainUsesRemaining}
+          onParaphraseThis={onParaphraseThis}
+          aiUsesRemaining={
+            annotationParaphrase.explainUsesRemaining ??
+            annotationExplain.explainUsesRemaining
+          }
         />
       )}
     </>
