@@ -52,11 +52,7 @@ class TestResolveApiKeyOpenRouter:
         with patch("app.services.api_key_service.settings") as mock_settings:
             mock_settings.OPENROUTER_API_KEY = "openrouter-key"
 
-            result = await svc._resolve_api_key(
-                mock_user, mock_db,
-                quota_field="chat_uses_remaining",
-                provider_priority=["openai", "anthropic", "gemini", "glm"],
-            )
+            result = await svc.resolve_for_chat(mock_user, mock_db)
 
         assert result.provider == "openai"
         assert result.is_in_house is False
@@ -64,16 +60,8 @@ class TestResolveApiKeyOpenRouter:
     @pytest.mark.asyncio
     async def test_no_openrouter_key_raises_not_found(self, svc, mock_user, mock_db):
         """When OPENROUTER_API_KEY is not set, should raise ApiKeyNotFoundError."""
-        mock_quota = MagicMock()
-        mock_quota.chat_uses_remaining = 10
-
-        with patch.object(svc, "_get_or_create_quota", new=AsyncMock(return_value=mock_quota)), \
-             patch("app.services.api_key_service.settings") as mock_settings:
+        with patch("app.services.api_key_service.settings") as mock_settings:
             mock_settings.OPENROUTER_API_KEY = None
 
             with pytest.raises(ApiKeyNotFoundError):
-                await svc._resolve_api_key(
-                    mock_user, mock_db,
-                    quota_field="chat_uses_remaining",
-                    provider_priority=["openrouter"],
-                )
+                await svc.resolve_for_chat(mock_user, mock_db)

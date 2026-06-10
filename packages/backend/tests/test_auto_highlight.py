@@ -128,11 +128,9 @@ class TestAutoHighlightOpenRouterRateLimit:
                 "app.api.routes.auto_highlight.IndexingService",
             ) as mock_idx_cls,
         ):
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _make_resolve_result(
                 provider="openrouter",
                 api_key="openrouter-key",
-                is_in_house=True,
-                quota_remaining=5,
             )
 
             mock_llm = MagicMock()
@@ -192,11 +190,11 @@ class TestAutoHighlightOpenRouterRateLimit:
                 "app.api.routes.auto_highlight.IndexingService",
             ) as mock_idx_cls,
         ):
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _make_resolve_result(
                 provider="anthropic",
                 api_key="user-own-key",
                 is_in_house=False,
-                quota_remaining=None,
+                remaining=-1,
             )
 
             mock_llm = MagicMock()

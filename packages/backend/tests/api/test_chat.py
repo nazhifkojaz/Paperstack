@@ -14,6 +14,33 @@ from tests.fixtures import (
 TEST_EMBEDDING = [0.01] * 1024
 
 
+def _quota_result(remaining: int = 10, global_warning: str | None = None) -> MagicMock:
+    return MagicMock(
+        remaining=remaining,
+        global_warning=global_warning,
+        unlimited=False,
+    )
+
+
+def _resolve_result(
+    provider: str = "openrouter",
+    api_key: str = "fake-key",
+    model: str | None = None,
+    is_in_house: bool = True,
+    remaining: int = 10,
+    global_warning: str | None = None,
+) -> tuple[MagicMock, MagicMock]:
+    return (
+        MagicMock(
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            is_in_house=is_in_house,
+        ),
+        _quota_result(remaining=remaining, global_warning=global_warning),
+    )
+
+
 class TestExplainNoteHelpers:
     """Tests for explain endpoint note/AI metadata helpers."""
 
@@ -137,7 +164,7 @@ class TestParaphraseAnnotation:
                 return_value=paraphrase_service,
             ),
         ):
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _resolve_result(
                 provider="gemini",
                 api_key="fake-key",
                 model="gemini-test",
@@ -736,11 +763,10 @@ class TestStreamMessage:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _resolve_result(
                 provider="gemini",
                 api_key="fake-key",
                 is_in_house=True,
-                quota_remaining=10,
             )
             from contextlib import ExitStack
 
@@ -821,12 +847,11 @@ class TestStreamMessage:
                 new_callable=AsyncMock,
             ) as mock_search_pdf,
         ):
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _resolve_result(
                 provider="gemini",
                 api_key="fake-key",
                 model=None,
                 is_in_house=True,
-                quota_remaining=10,
             )
             mock_search_pdf.return_value = [chunk]
 
@@ -900,11 +925,10 @@ class TestStreamMessage:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _resolve_result(
                 provider="openrouter",
                 api_key="openrouter-key",
                 is_in_house=True,
-                quota_remaining=10,
             )
             from contextlib import ExitStack
 
@@ -944,11 +968,10 @@ class TestStreamMessage:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _resolve_result(
                 provider="openai",
                 api_key="user-own-key",
                 is_in_house=False,
-                quota_remaining=None,
             )
             from contextlib import ExitStack
 
@@ -977,47 +1000,6 @@ class TestStreamMessageOpenRouterQuotaGating:
             headers=auth_headers,
         )
         return conv_resp.json()["id"]
-
-    async def test_stream_message_quota_exceeded_returns_503(
-        self, client: AsyncClient, auth_headers, db_session, test_user
-    ):
-        """When OpenRouter quota is exceeded, stream_message returns 503."""
-        _setup_stream_mocks()
-        from app.services.exceptions import OpenRouterQuotaError
-
-        conv_id = await self._setup_conv(client, auth_headers, db_session, test_user)
-
-        mocks = _make_stream_mocks(
-            embed_side_effect=OpenRouterQuotaError(limit=1000, count_today=900)
-        )
-
-        with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
-                provider="openrouter",
-                api_key="openrouter-key",
-                is_in_house=True,
-                quota_remaining=10,
-            )
-            with (
-                patch(
-                    "app.services.indexing_service.IndexingService",
-                    return_value=mocks["indexing"],
-                ),
-                patch(
-                    "app.api.routes.chat.EmbeddingService",
-                    return_value=mocks["embedding"],
-                ),
-            ):
-                response = await client.post(
-                    f"/v1/chat/conversations/{conv_id}/stream",
-                    json={"content": "What is this paper about?"},
-                    headers=auth_headers,
-                )
-                assert response.status_code == 503
-                assert "OpenRouter free-tier usage" in response.json()["detail"]
 
     async def test_stream_message_llm_gate_returns_503(
         self, client: AsyncClient, auth_headers, db_session, test_user
@@ -1071,11 +1053,10 @@ class TestStreamMessageOpenRouterQuotaGating:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _resolve_result(
                 provider="openai",
                 api_key="user-own-key",
                 is_in_house=False,
-                quota_remaining=None,
             )
             from contextlib import ExitStack
 

@@ -46,6 +46,20 @@ def _make_analyze_resolution(provider="openrouter", api_key="test-key"):
     return resolution
 
 
+def _make_quota_result(remaining=5, unlimited=False):
+    quota_result = MagicMock()
+    quota_result.remaining = remaining
+    quota_result.global_warning = None
+    quota_result.unlimited = unlimited
+    return quota_result
+
+
+def _make_resolve_result(provider="openrouter", api_key="test-key", is_in_house=True, remaining=5, unlimited=False):
+    resolution = _make_analyze_resolution(provider, api_key)
+    resolution.is_in_house = is_in_house
+    return resolution, _make_quota_result(remaining=remaining, unlimited=unlimited)
+
+
 def _make_create_task_stub(real_create_task):
     background_tasks = []
 
@@ -69,7 +83,10 @@ class TestAutoHighlightQuota:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["free_uses_remaining"] == 5
+        assert data["auto_highlight_quick_remaining"] == 5
+        assert data["auto_highlight_thorough_remaining"] == 3
+        assert data["chat_remaining"] == 50
+        assert data["explain_paraphrase_remaining"] == 30
         assert data["has_own_key"] is False
 
     async def test_quota_requires_auth(self, client: AsyncClient):
@@ -162,7 +179,7 @@ class TestAutoHighlightAnalyze:
                 "app.api.routes.auto_highlight.asyncio.create_task"
             ) as mock_create_task,
         ):
-            mock_resolve.return_value = _make_analyze_resolution()
+            mock_resolve.return_value = _make_resolve_result()
             mock_create_task.side_effect = create_task_stub
 
             response = await client.post(
@@ -221,8 +238,6 @@ class TestAutoHighlightAnalyze:
             "app.api.routes.auto_highlight.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = _make_analyze_resolution()
-
             response = await client.post(
                 "/v1/auto-highlight/analyze",
                 json={
@@ -235,6 +250,7 @@ class TestAutoHighlightAnalyze:
             )
 
         assert response.status_code == 409
+        mock_resolve.assert_not_called()
 
     async def test_analyze_running_cache_returns_409(
         self, client: AsyncClient, auth_headers, db_session, test_user
@@ -262,8 +278,6 @@ class TestAutoHighlightAnalyze:
             "app.api.routes.auto_highlight.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = _make_analyze_resolution()
-
             response = await client.post(
                 "/v1/auto-highlight/analyze",
                 json={
@@ -276,6 +290,7 @@ class TestAutoHighlightAnalyze:
             )
 
         assert response.status_code == 409
+        mock_resolve.assert_not_called()
 
     async def test_analyze_failed_cache_is_reset(
         self, client: AsyncClient, auth_headers, db_session, test_user
@@ -310,7 +325,7 @@ class TestAutoHighlightAnalyze:
                 "app.api.routes.auto_highlight.asyncio.create_task"
             ) as mock_create_task,
         ):
-            mock_resolve.return_value = _make_analyze_resolution()
+            mock_resolve.return_value = _make_resolve_result()
             mock_create_task.side_effect = create_task_stub
 
             response = await client.post(
