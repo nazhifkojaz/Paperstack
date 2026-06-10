@@ -14,11 +14,6 @@ vi.mock('@/api/annotations', () => ({
   useAnnotationSets: vi.fn(() => ({ data: [] })),
 }))
 
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom')
-  return { ...actual, useParams: () => ({ pdfId: 'pdf-1' }) }
-})
-
 describe('SelectionPopup', () => {
   const mockSelectionRect = { x: 100, y: 50, width: 200, height: 20 }
   const mockNormalizedRects = [{ x: 0.1, y: 0.05, w: 0.2, h: 0.02 }]
@@ -29,10 +24,6 @@ describe('SelectionPopup', () => {
       selectedSetId: 'set-1',
       isDrawingRect: false,
     })
-
-    vi.mocked(annotationsApi.useAnnotationSets).mockReturnValue({
-      data: [{ id: 'set-1', pdf_id: 'pdf-1', name: 'Default', color: '#FFFF00' }],
-    } as any)
   })
 
   it('renders Highlight button only (no standalone Note button)', () => {
@@ -50,7 +41,7 @@ describe('SelectionPopup', () => {
     expect(screen.queryByText('Note')).not.toBeInTheDocument()
   })
 
-  it('calls createAnnotation with set color on Highlight click', () => {
+  it('calls createAnnotation with default yellow color on Highlight click', () => {
     const createMock = vi.fn()
     vi.mocked(annotationsApi.useCreateAnnotation).mockReturnValue({
       mutate: createMock,

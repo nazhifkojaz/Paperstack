@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams } from 'react-router-dom';
-import { useCreateAnnotation, useAnnotationSets } from '@/api/annotations';
+import { useCreateAnnotation } from '@/api/annotations';
 import { useAnnotationStore } from '@/stores/annotationStore';
 import { Button } from '@/components/ui/button';
 import { Highlighter } from 'lucide-react';
+import { DEFAULT_HIGHLIGHT_COLOR } from './constants';
 
 interface SelectionPopupProps {
     selectionRect: { x: number; y: number; width: number; height: number };
@@ -23,16 +23,10 @@ export const SelectionPopup = ({
     onDismiss,
     metadata,
 }: SelectionPopupProps) => {
-    const { pdfId = '' } = useParams<{ pdfId: string }>();
     const selectedSetId = useAnnotationStore(s => s.selectedSetId);
-    const { data: sets } = useAnnotationSets(pdfId);
     const { mutate: createAnnotation } = useCreateAnnotation();
 
     const popupRef = useRef<HTMLDivElement>(null);
-
-    // Find the active set color
-    const activeSet = sets?.find((s) => s.id === selectedSetId);
-    const setColor = activeSet?.color ?? '#FFFF00';
 
     // Close on click outside (but NOT immediately after text selection)
     useEffect(() => {
@@ -77,7 +71,7 @@ export const SelectionPopup = ({
                 type: 'highlight',
                 rects: normalizedRects,
                 selected_text: selectedText,
-                color: setColor,
+                color: DEFAULT_HIGHLIGHT_COLOR,
                 metadata: metadata ?? undefined,
             },
             {
@@ -119,7 +113,7 @@ export const SelectionPopup = ({
                 className="h-8 px-2 gap-1.5"
                 onClick={handleHighlight}
             >
-                <Highlighter className="h-3.5 w-3.5" style={{ color: setColor }} />
+                <Highlighter className="h-3.5 w-3.5" style={{ color: DEFAULT_HIGHLIGHT_COLOR }} />
                 Highlight
             </Button>
         </div>,

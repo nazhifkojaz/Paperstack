@@ -13,6 +13,22 @@ vi.mock('@/api/annotations', () => ({
   useUpdateAnnotation: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }))
 
+vi.mock('@/api/colorLabels', () => ({
+  useColorLabels: vi.fn(() => ({
+    data: {
+      '#22c55e': 'Findings',
+      '#3b82f6': 'Methods',
+      '#a855f7': 'Definitions',
+      '#f97316': 'Limitations',
+      '#6b7280': 'Background',
+      '#FFFF00': 'Highlights',
+      '#EF4444': 'Important',
+      '#00FFFF': 'Follow-up',
+    },
+  })),
+  useUpdateColorLabels: vi.fn(() => ({ mutate: vi.fn() })),
+}))
+
 vi.mock('@/api/chat', () => ({
   useExplainAnnotation: vi.fn(() => ({ mutate: vi.fn() })),
   useParaphraseAnnotation: vi.fn(() => ({ mutate: vi.fn() })),
@@ -34,7 +50,7 @@ describe('SetAnnotationList', () => {
   const mockAnnotations = [
     createMockAnnotation({ id: 'ann-1', page_number: 1, type: 'highlight', selected_text: 'Important finding about methods', color: '#FFFF00' }),
     createMockAnnotation({ id: 'ann-2', page_number: 1, type: 'rect', color: '#EF4444' }),
-    createMockAnnotation({ id: 'ann-3', page_number: 3, type: 'highlight', selected_text: 'Another result', color: '#3B82F6' }),
+    createMockAnnotation({ id: 'ann-3', page_number: 3, type: 'highlight', selected_text: 'Another result', color: '#3b82f6' }),
   ]
 
   const selectTab = (name: RegExp) => {
@@ -73,10 +89,10 @@ describe('SetAnnotationList', () => {
     expect(screen.getByText(/Page 3/)).toBeInTheDocument()
   })
 
-  it('groups annotations by type when toggled', () => {
-    render(<SetAnnotationList setId="set-1" groupBy="type" />)
+  it('groups annotations by color when toggled', () => {
+    render(<SetAnnotationList setId="set-1" groupBy="color" />)
     expect(screen.getByText(/Highlights/)).toBeInTheDocument()
-    expect(screen.getByText(/Rectangles/)).toBeInTheDocument()
+    expect(screen.getByText(/Methods/)).toBeInTheDocument()
   })
 
   it('shows preview text for highlights', () => {

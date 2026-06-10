@@ -1,6 +1,7 @@
 import type { MouseEvent } from 'react';
 import type { Annotation } from '@/api/annotations';
 import type { Rect } from '@/types/annotation';
+import { DEFAULT_HIGHLIGHT_COLOR } from '@/features/annotations/constants';
 
 interface AnnotationRectProps {
   annotation: Annotation;
@@ -24,7 +25,7 @@ export function AnnotationRect({
   onSelect,
   onStartMove,
 }: AnnotationRectProps) {
-  const strokeColor = isSelected ? '#3b82f6' : annotation.color || '#FFFF00';
+  const strokeColor = isSelected ? '#3b82f6' : annotation.color || DEFAULT_HIGHLIGHT_COLOR;
   const strokeWidth = isSelected ? 3 : 2;
 
   return (
@@ -52,7 +53,7 @@ export function AnnotationRect({
             height={`${rect.h * 100}%`}
             rx={2}
             ry={2}
-            fill={annotation.color || '#FFFF00'}
+            fill={annotation.color || DEFAULT_HIGHLIGHT_COLOR}
             fillOpacity={0.4}
             style={{ mixBlendMode: 'multiply' }}
           />
@@ -78,7 +79,7 @@ export function AnnotationRect({
           cx={`${(rects[0].x + rects[0].w / 2) * 100}%`}
           cy={`${(rects[0].y + rects[0].h / 2) * 100}%`}
           r={10}
-          fill={annotation.color || '#FF0000'}
+          fill={annotation.color || DEFAULT_HIGHLIGHT_COLOR}
           stroke={strokeColor}
           strokeWidth={strokeWidth}
           vectorEffect="non-scaling-stroke"

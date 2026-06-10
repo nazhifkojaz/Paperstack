@@ -123,14 +123,14 @@ describe('AnnotationToolbar', () => {
 
         // Click a different color swatch (blue)
         const blueSwatch = screen.getAllByRole('button').find(
-            btn => btn.getAttribute('data-color') === '#3B82F6'
+            btn => btn.getAttribute('data-color') === '#3b82f6'
         )
         expect(blueSwatch).toBeTruthy()
         fireEvent.click(blueSwatch!)
 
         expect(updateMock).toHaveBeenCalledWith({
             id: 'ann-1',
-            data: { color: '#3B82F6' },
+            data: { color: '#3b82f6' },
         })
     })
 })

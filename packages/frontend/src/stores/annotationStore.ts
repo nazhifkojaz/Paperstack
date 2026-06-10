@@ -13,7 +13,7 @@ interface AnnotationStore {
     selectedAnnotationId: string | null;
     isAnnotationSidebarOpen: boolean;
     isAnnotationSidebarCollapsed: boolean;
-    sidebarGroupBy: 'page' | 'type';
+    sidebarGroupBy: 'page' | 'color';
     contextMenu: ContextMenuState | null;
 
     // Actions
@@ -25,7 +25,7 @@ interface AnnotationStore {
     toggleAnnotationSidebar: () => void;
     setAnnotationSidebarOpen: (open: boolean) => void;
     setAnnotationSidebarCollapsed: (collapsed: boolean) => void;
-    setSidebarGroupBy: (groupBy: 'page' | 'type') => void;
+    setSidebarGroupBy: (groupBy: 'page' | 'color') => void;
     setContextMenu: (menu: ContextMenuState | null) => void;
 }
 
