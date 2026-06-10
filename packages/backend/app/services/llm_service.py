@@ -4,16 +4,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
 
 from app.schemas.types import ChatMessageDict, HighlightDict
 from app.services.exceptions import LLMRateLimitError, LLMProviderError
 from app.core.config import settings
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -499,15 +496,12 @@ class LLMService:
         provider: str,
         api_key: str,
         model: Optional[str] = None,
-        db: AsyncSession | None = None,
     ) -> list[HighlightDict]:
         """Given pre-filtered passages, pick verbatim highlight-worthy quotes.
 
         Each passage must have: content, page_number, categories (list[str]).
-        Always a single non-streaming call. For OpenRouter, records usage.
+        Always a single non-streaming call.
         """
-        from app.services.openrouter_usage_service import openrouter_usage_service
-
         if not passages:
             return []
 
@@ -558,9 +552,6 @@ CRITICAL:
 
 --- PASSAGES ---
 {passages_block}"""
-
-        if provider == "openrouter" and db is not None:
-            await openrouter_usage_service.record_and_check(db)
 
         if provider == "glm":
             raw = await self.call_glm(system_prompt, user_prompt, api_key)
