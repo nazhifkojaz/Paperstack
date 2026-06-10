@@ -368,14 +368,20 @@ class UserUsageQuota(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    free_uses_remaining: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("5")
-    )
     chat_uses_remaining: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("20")
+        Integer, nullable=False, server_default=text("50")
     )
     explain_uses_remaining: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("20")
+        Integer, nullable=False, server_default=text("30")
+    )
+    auto_highlight_quick_remaining: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("5")
+    )
+    auto_highlight_thorough_remaining: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("3")
+    )
+    reset_at: Mapped[date] = mapped_column(
+        Date, nullable=False, server_default=text("(now() AT TIME ZONE 'UTC')::date")
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
