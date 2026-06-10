@@ -10,9 +10,57 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuthStore } from '@/stores/authStore';
 import { LogOut } from 'lucide-react';
+import { useAutoHighlightQuota } from '@/api/autoHighlight';
+import { useState, useEffect } from 'react';
+
+function useTimeUntilMidnightUTC() {
+    const [remaining, setRemaining] = useState(() => msUntilMidnightUTC());
+
+    useEffect(() => {
+        const id = setInterval(() => setRemaining(msUntilMidnightUTC()), 60_000);
+        return () => clearInterval(id);
+    }, []);
+
+    return remaining;
+}
+
+function msUntilMidnightUTC() {
+    const now = new Date();
+    const midnight = new Date(now);
+    midnight.setUTCHours(24, 0, 0, 0);
+    return midnight.getTime() - now.getTime();
+}
+
+function formatDuration(ms: number): string {
+    const totalMin = Math.floor(ms / 60_000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function ResetCountdown() {
+    const ms = useTimeUntilMidnightUTC();
+    return (
+        <p className="text-[10px] text-muted-foreground mt-0.5">
+            Refreshes in {formatDuration(ms)}
+        </p>
+    );
+}
+
+function QuotaRow({ label, remaining, total }: { label: string; remaining: number; total: number }) {
+    return (
+        <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">{label}</span>
+            <span className={remaining === 0 ? 'text-destructive font-medium' : ''}>
+                {remaining}/{total}
+            </span>
+        </div>
+    );
+}
 
 export function UserNav() {
     const { user, logout } = useAuthStore();
+    const { data: quota } = useAutoHighlightQuota();
 
     if (!user) return null;
 
@@ -43,6 +91,20 @@ export function UserNav() {
                         )}
                     </div>
                 </DropdownMenuLabel>
+                {quota && !quota.has_own_key && (
+                    <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="font-normal">
+                            <div className="flex flex-col gap-1">
+                                <QuotaRow label="Chat" remaining={quota.chat_remaining} total={50} />
+                                <QuotaRow label="Explain / Paraphrase" remaining={quota.explain_paraphrase_remaining} total={30} />
+                                <QuotaRow label="Quick highlight" remaining={quota.auto_highlight_quick_remaining} total={5} />
+                                <QuotaRow label="Thorough highlight" remaining={quota.auto_highlight_thorough_remaining} total={3} />
+                                <ResetCountdown />
+                            </div>
+                        </DropdownMenuLabel>
+                    </>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={logout}>
                     <LogOut className="mr-2 h-4 w-4" />
