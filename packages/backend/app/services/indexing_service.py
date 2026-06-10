@@ -26,7 +26,6 @@ from app.services.exceptions import (
     EmbeddingError,
     IndexInProgressError,
     IndexingError,
-    OpenRouterQuotaError,
     TextExtractionError,
 )
 from app.services.pdf_download_service import PdfDownloadService, PdfSource
@@ -206,7 +205,7 @@ class IndexingService:
                 indexed_at=now,
             )
 
-        except (EmbeddingError, OpenRouterQuotaError, TextExtractionError, ChunkingError) as exc:
+        except (EmbeddingError, TextExtractionError, ChunkingError) as exc:
             index_status.status = "failed"
             index_status.error_message = str(exc)
             index_status.updated_at = datetime.now(timezone.utc)

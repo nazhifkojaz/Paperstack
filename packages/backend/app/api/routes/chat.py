@@ -35,7 +35,6 @@ from app.services.exceptions import (
     IndexInProgressError,
     IndexingError,
     LLMRateLimitError,
-    OpenRouterQuotaError,
 )
 from app.services.explain_service import ExplainService
 from app.services.llm_service import LLMService
@@ -236,7 +235,6 @@ async def delete_conversation(
 
 
 @router.post("/conversations/{conversation_id}/stream")
-@limiter.limit(settings.RATE_LIMIT_CHAT_MESSAGE)
 async def stream_message(
     request: Request,
     conversation_id: uuid.UUID,
@@ -257,7 +255,7 @@ async def stream_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    resolution = await resolve_api_key_with_quota(current_user, db, "chat")
+    resolution, quota_result = await resolve_api_key_with_quota(current_user, db, "chat")
 
     embedding_svc = EmbeddingService(http_client=embedding_client)
     llm_svc = LLMService(http_client=llm_client)
@@ -275,13 +273,11 @@ async def stream_message(
             user=current_user,
             db=db,
         )
-    except OpenRouterQuotaError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
     except IndexInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    except (EmbeddingError, OpenRouterQuotaError, IndexingError) as exc:
+    except (EmbeddingError, IndexingError) as exc:
         raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
     except ValueError as exc:
         msg = str(exc)
@@ -318,6 +314,8 @@ async def stream_message(
 
     # Stream response
     async def event_stream():
+        if quota_result.global_warning:
+            yield f"data: {json.dumps({'notice': quota_result.global_warning})}\n\n"
         async for event in orchestrator.stream_and_save(
             system_prompt=prepared_msgs.system_prompt,
             messages=prepared_msgs.messages,
@@ -388,7 +386,6 @@ async def semantic_search(
 
 
 @router.post("/explain", response_model=ExplainResponse)
-@limiter.limit(settings.RATE_LIMIT_CHAT_EXPLAIN)
 async def explain_annotation(
     request: Request,
     data: ExplainRequest,
@@ -409,7 +406,11 @@ async def explain_annotation(
         annotation.note_content
     )  # capture before any intermediate commit
 
-    resolution = await resolve_api_key_with_quota(current_user, db, "explain")
+    resolution, quota_result = await resolve_api_key_with_quota(
+        current_user,
+        db,
+        "explain_paraphrase",
+    )
     provider = resolution.provider
     api_key = resolution.api_key
 
@@ -439,8 +440,6 @@ async def explain_annotation(
         )
     except IndexInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    except OpenRouterQuotaError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
     except (EmbeddingError, IndexingError) as exc:
         raise HTTPException(status_code=502, detail=f"Explanation failed: {exc}")
 
@@ -454,21 +453,18 @@ async def explain_annotation(
     annotation.note_content = user_note
     annotation.ann_metadata = metadata
 
-    # OpenRouter (free) has no per-user quota. BYOK = unlimited.
-    remaining = -1  # signals unlimited
-
     await db.commit()
 
     return ExplainResponse(
         explanation=result.explanation,
         note_content=user_note,
         metadata=metadata,
-        explain_uses_remaining=remaining,
+        explain_paraphrase_remaining=quota_result.remaining,
+        global_warning=quota_result.global_warning,
     )
 
 
 @router.post("/paraphrase", response_model=ParaphraseResponse)
-@limiter.limit(settings.RATE_LIMIT_CHAT_EXPLAIN)
 async def paraphrase_annotation(
     request: Request,
     data: ParaphraseRequest,
@@ -485,7 +481,11 @@ async def paraphrase_annotation(
     )
     existing_note_content = annotation.note_content
 
-    resolution = await resolve_api_key_with_quota(current_user, db, "explain")
+    resolution, quota_result = await resolve_api_key_with_quota(
+        current_user,
+        db,
+        "explain_paraphrase",
+    )
     provider = resolution.provider
     api_key = resolution.api_key
 
@@ -506,8 +506,6 @@ async def paraphrase_annotation(
             status_code=429,
             detail="Free tier rate limited. Please try again later or use your own API key.",
         )
-    except OpenRouterQuotaError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
 
     user_note = _strip_legacy_ai_note_blocks(existing_note_content)
     metadata = dict(annotation.ann_metadata or {})
@@ -519,14 +517,12 @@ async def paraphrase_annotation(
     annotation.note_content = user_note
     annotation.ann_metadata = metadata
 
-    # OpenRouter (free) has no per-user quota. BYOK = unlimited.
-    remaining = -1  # signals unlimited
-
     await db.commit()
 
     return ParaphraseResponse(
         paraphrase=result.paraphrase,
         note_content=user_note,
         metadata=metadata,
-        explain_uses_remaining=remaining,
+        explain_paraphrase_remaining=quota_result.remaining,
+        global_warning=quota_result.global_warning,
     )

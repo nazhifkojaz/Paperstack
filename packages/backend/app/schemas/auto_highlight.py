@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,6 +44,11 @@ class AutoHighlightCacheResponse(BaseModel):
 
 
 class QuotaResponse(BaseModel):
-    free_uses_remaining: int
+    chat_remaining: int
+    explain_paraphrase_remaining: int
+    auto_highlight_quick_remaining: int
+    auto_highlight_thorough_remaining: int
+    reset_at: date
     has_own_key: bool
     providers: list[str]
+    global_warning: Optional[str] = None

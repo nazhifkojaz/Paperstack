@@ -65,29 +65,41 @@ async def get_embedding_http_client(
 
 _PREFERENCE_MAP = {
     "chat": "chat_model",
-    "explain": "explain_model",
-    "auto_highlight": "auto_highlight_model",
+    "explain_paraphrase": "explain_model",
+    "auto_highlight_quick": "auto_highlight_model",
+    "auto_highlight_thorough": "auto_highlight_model",
+}
+
+_RESOLVER_MAP = {
+    "chat": "resolve_for_chat",
+    "explain_paraphrase": "resolve_for_explain",
+    "auto_highlight_quick": "resolve_for_auto_highlight",
+    "auto_highlight_thorough": "resolve_for_auto_highlight",
 }
 
 
 async def resolve_api_key_with_quota(
     user: User,
     db: AsyncSession,
-    feature: Literal["chat", "explain", "auto_highlight"],
-    check_openrouter_quota: bool = True,
+    feature: Literal[
+        "chat",
+        "explain_paraphrase",
+        "auto_highlight_quick",
+        "auto_highlight_thorough",
+    ],
 ):
     """Resolve API key for a feature, check quotas, raise HTTPException on errors.
 
     Queries UserLLMPreferences for the preferred model, resolves the key
-    via api_key_service, and optionally checks OpenRouter free-tier quota.
+    via api_key_service, and decrements daily quotas for in-house OpenRouter.
     """
     from app.services.api_key_service import api_key_service
     from app.services.exceptions import (
         ApiKeyNotFoundError,
-        OpenRouterQuotaError,
         QuotaExhaustedError,
     )
     from app.services.openrouter_usage_service import openrouter_usage_service
+    from app.services.quota_service import quota_service
 
     pref_column = _PREFERENCE_MAP[feature]
     prefs_result = await db.execute(
@@ -97,16 +109,20 @@ async def resolve_api_key_with_quota(
     )
     preferred_model = prefs_result.scalar_one_or_none()
 
-    resolve_fn = getattr(api_key_service, f"resolve_for_{feature}")
+    resolve_fn = getattr(api_key_service, _RESOLVER_MAP[feature])
     try:
         resolution = await resolve_fn(user, db, force_free_model=preferred_model)
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
         raise HTTPException(status_code=402, detail=str(e))
 
-    if check_openrouter_quota and resolution.is_in_house and resolution.provider == "openrouter":
-        try:
-            await openrouter_usage_service.record_and_check(db)
-        except OpenRouterQuotaError as exc:
-            raise HTTPException(status_code=503, detail=str(exc))
+    if not (resolution.is_in_house and resolution.provider == "openrouter"):
+        return resolution, quota_service.unlimited()
 
-    return resolution
+    try:
+        quota_result = await quota_service.check_and_decrement(user.id, db, feature)
+    except QuotaExhaustedError as exc:
+        raise HTTPException(status_code=402, detail=str(exc))
+
+    global_status = await openrouter_usage_service.record_and_check(db)
+    await db.commit()
+    return resolution, quota_result.with_global_warning(global_status.warning_message)

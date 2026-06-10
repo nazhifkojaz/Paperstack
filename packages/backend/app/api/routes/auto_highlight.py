@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user, resolve_api_key_with_quota
 from app.services.exceptions import IndexingError, LLMProviderError, LLMRateLimitError
-from app.core.config import settings
 from app.core.http_client import HTTPClientState
 from app.db.engine import SessionLocal
 from app.db.models import (
@@ -26,11 +25,8 @@ from app.db.models import (
     Annotation,
     AnnotationSet,
     AutoHighlightCache,
-    UserUsageQuota,
-    UserApiKey,
     PdfChunk,
 )
-from app.middleware.rate_limit import limiter
 from app.schemas.auto_highlight import (
     AutoHighlightRequest,
     AutoHighlightResponse,
@@ -42,6 +38,7 @@ from app.services.llm_service import LLMService
 from app.services.highlight_shortlist_service import highlight_shortlist_service
 from app.services.pdf_download_service import pdf_download_service
 from app.services.indexing_service import IndexingService
+from app.services.quota_service import quota_service
 
 logger = logging.getLogger(__name__)
 
@@ -676,7 +673,6 @@ async def _run_llm_analysis(
                 provider,
                 api_key,
                 model=model,
-                db=None,
             )
             latency_ms = int((perf_counter() - attempt_started) * 1000)
             reasoning_trace = llm_svc.last_reasoning_trace
@@ -1293,7 +1289,6 @@ async def _run_analysis_background(
 
 
 @router.post("/analyze", response_model=AutoHighlightResponse, status_code=202)
-@limiter.limit(settings.RATE_LIMIT_AUTO_HIGHLIGHT_ANALYZE)
 async def analyze_paper(
     request: Request,
     data: AutoHighlightRequest,
@@ -1312,22 +1307,6 @@ async def analyze_paper(
             detail=f"Cannot analyze more than {_MAX_PAGES} pages at once",
         )
 
-    # Resolve API key (fail fast on quota/auth errors)
-    resolution = await resolve_api_key_with_quota(
-        current_user,
-        db,
-        "auto_highlight",
-        check_openrouter_quota=False,
-    )
-    provider = resolution.provider
-    api_key = resolution.api_key
-    model = resolution.model
-    logger.info(
-        "Resolved provider=%s for background analysis, user=%s",
-        provider,
-        current_user.id,
-    )
-
     # Reuse existing failed entry or create new cache entry
     existing_result = await db.execute(
         select(AutoHighlightCache).where(
@@ -1342,6 +1321,27 @@ async def analyze_paper(
     if pending_cache:
         if pending_cache.status in {"pending", "running"}:
             raise HTTPException(status_code=409, detail="Analysis already in progress.")
+
+    feature = (
+        "auto_highlight_thorough"
+        if data.tier == "thorough"
+        else "auto_highlight_quick"
+    )
+    resolution, _quota_result = await resolve_api_key_with_quota(
+        current_user,
+        db,
+        feature,
+    )
+    provider = resolution.provider
+    api_key = resolution.api_key
+    model = resolution.model
+    logger.info(
+        "Resolved provider=%s for background analysis, user=%s",
+        provider,
+        current_user.id,
+    )
+
+    if pending_cache:
         pending_cache.status = "pending"
         pending_cache.provider = provider
         pending_cache.llm_response = None
@@ -1482,19 +1482,15 @@ async def get_quota(
     current_user: User = Depends(get_current_user),
 ):
     """Get current usage quota and API key status."""
-    quota_result = await db.execute(
-        select(UserUsageQuota).where(UserUsageQuota.user_id == current_user.id)
-    )
-    quota_row = quota_result.scalar_one_or_none()
-    free_remaining = quota_row.free_uses_remaining if quota_row else 5
-
-    keys_result = await db.execute(
-        select(UserApiKey.provider).where(UserApiKey.user_id == current_user.id)
-    )
-    providers = [row[0] for row in keys_result.all()]
+    snapshot = await quota_service.get_all_quotas(current_user.id, db)
 
     return QuotaResponse(
-        free_uses_remaining=free_remaining,
-        has_own_key=len(providers) > 0,
-        providers=providers,
+        chat_remaining=snapshot.chat_remaining,
+        explain_paraphrase_remaining=snapshot.explain_paraphrase_remaining,
+        auto_highlight_quick_remaining=snapshot.auto_highlight_quick_remaining,
+        auto_highlight_thorough_remaining=snapshot.auto_highlight_thorough_remaining,
+        reset_at=snapshot.reset_at,
+        has_own_key=snapshot.has_own_key,
+        providers=snapshot.providers,
+        global_warning=snapshot.global_warning,
     )
