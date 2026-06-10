@@ -37,7 +37,8 @@ from app.schemas.auto_highlight import (
     AutoHighlightCacheResponse,
     QuotaResponse,
 )
-from app.services.llm_service import LLMService, CATEGORY_COLORS
+from app.constants.colors import CATEGORY_COLORS
+from app.services.llm_service import LLMService
 from app.services.highlight_shortlist_service import highlight_shortlist_service
 from app.services.pdf_download_service import pdf_download_service
 from app.services.indexing_service import IndexingService

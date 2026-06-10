@@ -2,9 +2,9 @@ import json
 import pytest
 import httpx
 from unittest.mock import AsyncMock, patch
+from app.constants.colors import CATEGORY_COLORS
 from app.services.llm_service import (
     LLMService, _parse_highlights_json, strip_markdown_fences,
-    CATEGORY_COLORS,
 )
 
 
