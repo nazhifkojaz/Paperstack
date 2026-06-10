@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
+from app.constants.colors import DEFAULT_COLOR_LABELS, VALID_ANNOTATION_COLORS
 from app.db.models import User, UserOAuthAccount, UserLLMPreferences
 from app.schemas.auth import UserResponse
 from app.services.llm_service import FREE_MODELS
@@ -185,3 +186,48 @@ async def update_llm_preferences(
         auto_highlight_model=prefs.auto_highlight_model,
         explain_model=prefs.explain_model,
     )
+
+
+class ColorLabelsResponse(BaseModel):
+    labels: dict[str, str]
+
+
+class ColorLabelsUpdate(BaseModel):
+    labels: dict[str, str]
+
+
+@router.get("/color-labels", response_model=ColorLabelsResponse)
+async def get_color_labels(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    merged = dict(DEFAULT_COLOR_LABELS)
+    if current_user.color_labels:
+        merged.update(current_user.color_labels)
+    return ColorLabelsResponse(labels=merged)
+
+
+@router.patch("/color-labels", response_model=ColorLabelsResponse)
+async def update_color_labels(
+    data: ColorLabelsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    invalid = set(data.labels.keys()) - VALID_ANNOTATION_COLORS
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid color keys: {', '.join(sorted(invalid))}. Must be one of: {', '.join(sorted(VALID_ANNOTATION_COLORS))}",
+        )
+
+    current = dict(current_user.color_labels or {})
+    current.update(data.labels)
+    current_user.color_labels = current
+    db.add(current_user)
+    await db.commit()
+    await db.refresh(current_user)
+
+    merged = dict(DEFAULT_COLOR_LABELS)
+    if current_user.color_labels:
+        merged.update(current_user.color_labels)
+    return ColorLabelsResponse(labels=merged)
