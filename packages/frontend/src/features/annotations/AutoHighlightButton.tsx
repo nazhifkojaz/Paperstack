@@ -10,6 +10,7 @@ import {
 import { CategorySelectionDialog } from './CategorySelectionDialog';
 import { ApiKeyDialog } from './ApiKeyDialog';
 import { toast } from 'sonner';
+import { GlobalQuotaWarning } from '@/components/GlobalQuotaWarning';
 
 interface AutoHighlightButtonProps {
     pdfId: string;
@@ -27,7 +28,9 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
     const cancelMutation = useCancelAnalysis();
     const queryClient = useQueryClient();
 
-    const canAnalyze = quota?.has_own_key || (quota?.free_uses_remaining ?? 0) > 0;
+    const quickRemaining = quota?.auto_highlight_quick_remaining ?? 0;
+    const thoroughRemaining = quota?.auto_highlight_thorough_remaining ?? 0;
+    const canAnalyze = quota?.has_own_key || quickRemaining > 0 || thoroughRemaining > 0;
 
     // Poll for background analysis status
     const { data: statusData } = useAnalysisStatus(activeCacheId);
@@ -151,9 +154,9 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
                 <div className="mt-1.5 text-xs text-muted-foreground text-center">
                     {quota.has_own_key ? (
                         <span>Using your {quota.providers.join(', ')} key</span>
-                    ) : quota.free_uses_remaining > 0 ? (
+                    ) : quickRemaining > 0 || thoroughRemaining > 0 ? (
                         <span>
-                            {quota.free_uses_remaining} free use{quota.free_uses_remaining !== 1 ? 's' : ''} remaining
+                            {quickRemaining} quick / {thoroughRemaining} thorough remaining today
                             {' · '}
                             <button
                                 className="text-blue-400 hover:underline"
@@ -172,6 +175,8 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
                     )}
                 </div>
             )}
+
+            <GlobalQuotaWarning message={quota?.global_warning} />
 
             <CategorySelectionDialog
                 open={showCategoryDialog}

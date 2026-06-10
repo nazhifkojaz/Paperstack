@@ -45,7 +45,11 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
             },
             {
                 onSuccess: (result) => {
-                    setExplainUsesRemaining(result.explain_uses_remaining);
+                    setExplainUsesRemaining(result.explain_paraphrase_remaining);
+
+                    if (result.global_warning) {
+                        toast.info(result.global_warning);
+                    }
 
                     if (result.provider_fallback) {
                         toast.info('Free tier was busy — used backup model for this explanation.');

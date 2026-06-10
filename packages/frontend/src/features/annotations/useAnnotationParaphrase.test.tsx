@@ -88,7 +88,7 @@ describe('useAnnotationParaphrase', () => {
             level: 'plain',
           },
         },
-        explain_uses_remaining: -1,
+        explain_paraphrase_remaining: -1,
       });
     });
 

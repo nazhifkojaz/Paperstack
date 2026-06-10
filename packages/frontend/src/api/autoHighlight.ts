@@ -30,9 +30,14 @@ export interface AutoHighlightCacheEntry {
 }
 
 interface QuotaInfo {
-    free_uses_remaining: number;
+    chat_remaining: number;
+    explain_paraphrase_remaining: number;
+    auto_highlight_quick_remaining: number;
+    auto_highlight_thorough_remaining: number;
+    reset_at: string;
     has_own_key: boolean;
     providers: string[];
+    global_warning?: string | null;
 }
 
 interface ApiKeyCreate {
