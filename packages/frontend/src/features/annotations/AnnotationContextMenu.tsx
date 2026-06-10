@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { RefreshCw, Sparkles } from 'lucide-react'
 import { useUpdateAnnotation, useDeleteAnnotation } from '@/api/annotations'
 import { useAnnotationStore } from '@/stores/annotationStore'
 import type { Annotation } from '@/api/annotations'
 import { ANNOTATION_COLORS } from './constants'
+import { getAnnotationUserNote } from './annotationContent'
 
 interface Position {
   x: number
@@ -16,7 +18,8 @@ interface AnnotationContextMenuProps {
   onClose: () => void
   onEditNote: (annotationId: string) => void
   onExplainThis?: (annotationId: string) => void
-  explainUsesRemaining?: number | null
+  onParaphraseThis?: (annotationId: string) => void
+  aiUsesRemaining?: number | null
 }
 
 export const AnnotationContextMenu = ({
@@ -25,16 +28,35 @@ export const AnnotationContextMenu = ({
   onClose,
   onEditNote,
   onExplainThis,
-  explainUsesRemaining,
+  onParaphraseThis,
+  aiUsesRemaining,
 }: AnnotationContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null)
   const { mutate: updateAnnotation } = useUpdateAnnotation()
   const { mutate: deleteAnnotation } = useDeleteAnnotation()
   const setSelectedAnnotationId = useAnnotationStore(s => s.setSelectedAnnotationId)
+  const hasUserNote = !!getAnnotationUserNote(annotation)
+  const isHighlight = annotation.type === 'highlight'
+  const hasSelectedText = !!annotation.selected_text
+  const canShowExplain = isHighlight && !!onExplainThis
+  const canShowParaphrase = isHighlight && !!onParaphraseThis
+  const canUseAiActions = hasSelectedText
+  const aiUnavailableTitle = canUseAiActions
+    ? undefined
+    : 'No selected text for this annotation'
+  const showAiQuota = canUseAiActions
+    && (canShowExplain || canShowParaphrase)
+    && aiUsesRemaining !== null
+    && aiUsesRemaining !== undefined
+    && aiUsesRemaining >= 0
 
   const menuPosition = (() => {
     const MENU_WIDTH = 180
-    const MENU_HEIGHT = annotation.type === 'highlight' && annotation.selected_text ? 220 : annotation.type === 'highlight' ? 180 : 140
+    const MENU_HEIGHT = 140
+      + (isHighlight && hasSelectedText ? 40 : 0)
+      + (canShowExplain ? 40 : 0)
+      + (canShowParaphrase ? 40 : 0)
+      + (showAiQuota ? 18 : 0)
     const PADDING = 8
 
     let x = position.x
@@ -93,7 +115,14 @@ export const AnnotationContextMenu = ({
   }
 
   const handleExplainThis = () => {
+    if (!canUseAiActions) return
     if (onExplainThis) onExplainThis(annotation.id)
+    onClose()
+  }
+
+  const handleParaphraseThis = () => {
+    if (!canUseAiActions) return
+    if (onParaphraseThis) onParaphraseThis(annotation.id)
     onClose()
   }
 
@@ -139,26 +168,35 @@ export const AnnotationContextMenu = ({
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
         </svg>
-        {annotation.note_content ? 'Edit Note' : 'Add Note'}
+        {hasUserNote ? 'Edit Note' : 'Add Note'}
       </button>
 
-      {/* Explain This (only for highlights with selected text) */}
-      {annotation.type === 'highlight' && annotation.selected_text && onExplainThis && (
+      {/* AI actions are visible for highlights; selected text is required to run them. */}
+      {canShowExplain && (
         <button
-          className="w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 flex items-center gap-2"
+          className="w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 flex items-center gap-2 disabled:cursor-not-allowed disabled:text-violet-300 disabled:hover:bg-transparent"
           onClick={handleExplainThis}
+          disabled={!canUseAiActions}
+          title={aiUnavailableTitle}
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347a5.001 5.001 0 01-3.011 1.247" />
-          </svg>
+          <Sparkles className="w-4 h-4" />
           Explain This
         </button>
       )}
-      {annotation.type === 'highlight' && annotation.selected_text && onExplainThis
-        && explainUsesRemaining !== null && explainUsesRemaining !== undefined
-        && explainUsesRemaining >= 0 && (
+      {canShowParaphrase && (
+        <button
+          className="w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 flex items-center gap-2 disabled:cursor-not-allowed disabled:text-violet-300 disabled:hover:bg-transparent"
+          onClick={handleParaphraseThis}
+          disabled={!canUseAiActions}
+          title={aiUnavailableTitle}
+        >
+          <RefreshCw className="w-4 h-4" />
+          Paraphrase This
+        </button>
+      )}
+      {showAiQuota && (
         <p className="px-4 pb-1 text-[11px] text-gray-500">
-          {explainUsesRemaining} explain use{explainUsesRemaining !== 1 ? 's' : ''} remaining
+          {aiUsesRemaining} AI use{aiUsesRemaining !== 1 ? 's' : ''} remaining
         </p>
       )}
 

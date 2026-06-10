@@ -40,12 +40,41 @@ EXPLAIN_SYSTEM_PROMPT = (
     "You may use **bold** for key terms. Cite page numbers as [p.N] when relevant."
 )
 
+PARAPHRASE_SYSTEM_PROMPT = (
+    "You are a precise academic writing assistant. Paraphrase the highlighted "
+    "passage without adding interpretation, claims, examples, citations, or "
+    "outside context. Preserve the original meaning, technical terms, hedging, "
+    "and scope. Return only the paraphrase."
+)
+
+PARAPHRASE_LEVEL_INSTRUCTIONS = {
+    "same": (
+        "Use the same technical level as the original passage while changing "
+        "the wording and sentence structure."
+    ),
+    "simpler": (
+        "Use simpler wording than the original passage while keeping important "
+        "academic terms when replacing them would change the meaning."
+    ),
+    "plain": (
+        "Use beginner-friendly plain language while preserving the original "
+        "meaning and avoiding extra explanation."
+    ),
+}
+
 
 @dataclass
 class ExplainResult:
     explanation: str
     context_chunks: list[ContextChunkDict]
-    note_content: str
+    generated_at: str
+
+
+@dataclass
+class ParaphraseResult:
+    paraphrase: str
+    generated_at: str
+    level: str
 
 
 class ExplainService:
@@ -67,6 +96,29 @@ class ExplainService:
         self._indexing_service = indexing_service or get_indexing_service(
             pdf_download_service
         )
+
+    async def _call_provider(
+        self,
+        provider: str,
+        api_key: str,
+        system_prompt: str,
+        user_prompt: str,
+        model: Optional[str] = None,
+    ) -> str:
+        call_method = getattr(self._llm_service, f"call_{provider}")
+        kwargs: dict[str, Any] = {
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "api_key": api_key,
+        }
+        if provider == "openrouter":
+            if model:
+                kwargs["model"] = model
+            if settings.OPENROUTER_REASONING_ENABLED:
+                kwargs["reasoning_effort"] = settings.OPENROUTER_REASONING_EFFORT
+        elif model and provider != "openrouter":
+            kwargs["model"] = model
+        return await call_method(**kwargs)
 
     async def explain_with_provider(
         self,
@@ -104,7 +156,14 @@ class ExplainService:
         )
 
         context = self._chat_service.build_context(
-            [{"page_number": c.page_number, "end_page_number": c.end_page_number, "content": c.content} for c in top_chunks]
+            [
+                {
+                    "page_number": c.page_number,
+                    "end_page_number": c.end_page_number,
+                    "content": c.content,
+                }
+                for c in top_chunks
+            ]
         )
 
         system_prompt = (
@@ -114,16 +173,13 @@ class ExplainService:
             f'Explain this passage from page {page_number}:\n\n"{selected_text}"'
         )
 
-        call_method = getattr(self._llm_service, f"call_{provider}")
-        kwargs: dict[str, Any] = {"system_prompt": system_prompt, "user_prompt": user_message, "api_key": api_key}
-        if provider == "openrouter":
-            if model:
-                kwargs["model"] = model
-            if settings.OPENROUTER_REASONING_ENABLED:
-                kwargs["reasoning_effort"] = settings.OPENROUTER_REASONING_EFFORT
-        elif model and provider != "openrouter":
-            kwargs["model"] = model
-        explanation = await call_method(**kwargs)
+        explanation = await self._call_provider(
+            provider=provider,
+            api_key=api_key,
+            system_prompt=system_prompt,
+            user_prompt=user_message,
+            model=model,
+        )
 
         context_chunks_payload = [
             {
@@ -135,10 +191,43 @@ class ExplainService:
         ]
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        new_block = f"[AI Explanation — {timestamp}]\n{explanation}"
-
         return ExplainResult(
             explanation=explanation,
             context_chunks=context_chunks_payload,
-            note_content=new_block,
+            generated_at=timestamp,
+        )
+
+    async def paraphrase_with_provider(
+        self,
+        selected_text: str,
+        page_number: int,
+        provider: str,
+        api_key: str,
+        level: str = "same",
+        model: Optional[str] = None,
+    ) -> ParaphraseResult:
+        """Generate a paraphrase with explicit provider and API key."""
+        normalized_level = level if level in PARAPHRASE_LEVEL_INSTRUCTIONS else "same"
+        system_prompt = (
+            PARAPHRASE_SYSTEM_PROMPT
+            + "\n\n"
+            + PARAPHRASE_LEVEL_INSTRUCTIONS[normalized_level]
+        )
+        user_message = (
+            f'Paraphrase this passage from page {page_number}:\n\n"{selected_text}"'
+        )
+
+        paraphrase = await self._call_provider(
+            provider=provider,
+            api_key=api_key,
+            system_prompt=system_prompt,
+            user_prompt=user_message,
+            model=model,
+        )
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return ParaphraseResult(
+            paraphrase=paraphrase,
+            generated_at=timestamp,
+            level=normalized_level,
         )

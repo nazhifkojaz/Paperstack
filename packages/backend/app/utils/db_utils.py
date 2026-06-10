@@ -67,4 +67,3 @@ async def handle_unique_violation(
         # Rollback for any other exception too
         await db.rollback()
         raise
-

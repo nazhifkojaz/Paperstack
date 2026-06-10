@@ -2,10 +2,27 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import Markdown from 'react-markdown';
 import { useUpdateAnnotation, type Annotation } from '@/api/annotations';
+import type { ParaphraseLevel } from '@/api/chat';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
-import { Save, Pencil, Loader2, Sparkles } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Pencil, Save } from 'lucide-react';
+import { AnnotationAiActionControls } from './AnnotationAiActionControls';
+import {
+    getDefaultAnnotationContentTab,
+    type AnnotationContentTab,
+} from './annotationTabs';
+import {
+    AnnotationAiExplanationLoading,
+    AnnotationAiExplanationView,
+} from './AnnotationAiExplanation';
+import {
+    buildNoteUpdateData,
+    getAnnotationAiExplanation,
+    getAnnotationAiParaphrase,
+    getAnnotationUserNote,
+} from './annotationContent';
+import { getParaphraseLevelLabel } from './paraphraseLevels';
 
 const PREFERRED_CARD_WIDTH = 384;
 const CARD_MAX_HEIGHT = 420;
@@ -20,15 +37,10 @@ interface NotePopoverProps {
     onClose: () => void;
     isExplaining?: boolean;
     explainStatusMessage?: string;
-}
-
-function parseAiHeader(content: string): { isAi: boolean; header?: string; body: string } {
-    const trimmed = content.trim();
-    const match = trimmed.match(/^\[AI Explanation\s*—\s*([^\]]+)\]\s*(.*)$/s);
-    if (match) {
-        return { isAi: true, header: match[1].trim(), body: match[2].trim() };
-    }
-    return { isAi: false, body: trimmed };
+    onExplainThis?: (annotationId: string) => void;
+    isParaphrasing?: boolean;
+    paraphraseStatusMessage?: string;
+    onParaphraseThis?: (annotationId: string, level?: ParaphraseLevel) => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -48,20 +60,79 @@ function getAnnotationBounds(rects: Annotation['rects']) {
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
-export const NotePopover = ({ annotation, containerDims, containerElement, onClose, isExplaining, explainStatusMessage }: NotePopoverProps) => {
-    const [content, setContent] = useState(annotation.note_content || '');
-    const [isEditing, setIsEditing] = useState(!annotation.note_content);
+export const NotePopover = ({
+    annotation,
+    containerDims,
+    containerElement,
+    onClose,
+    isExplaining,
+    explainStatusMessage,
+    onExplainThis,
+    isParaphrasing,
+    paraphraseStatusMessage,
+    onParaphraseThis,
+}: NotePopoverProps) => {
+    const userNote = useMemo(() => getAnnotationUserNote(annotation), [annotation]);
+    const aiExplanation = useMemo(() => getAnnotationAiExplanation(annotation), [annotation]);
+    const aiParaphrase = useMemo(() => getAnnotationAiParaphrase(annotation), [annotation]);
+    const hasAiExplanation = !!aiExplanation || !!isExplaining;
+    const hasAiParaphrase = !!aiParaphrase || !!isParaphrasing;
+    const hasAiContent = hasAiExplanation || hasAiParaphrase;
+    const canShowAiActions = annotation.type === 'highlight' && (!!onExplainThis || !!onParaphraseThis);
+    const canUseAiActions = canShowAiActions && !!annotation.selected_text;
+    const hasTabbedContent = hasAiContent || canShowAiActions;
+    const aiUnavailableTitle = canUseAiActions
+        ? undefined
+        : 'No selected text for this annotation';
+    const [content, setContent] = useState(userNote);
+    const [isEditing, setIsEditing] = useState(!userNote && !hasAiContent);
+    const [activeTab, setActiveTab] = useState<AnnotationContentTab>(
+        getDefaultAnnotationContentTab(
+            userNote,
+            hasAiExplanation,
+            hasAiParaphrase,
+        ),
+    );
+    const [paraphraseLevel, setParaphraseLevel] = useState<ParaphraseLevel>('same');
     const prevIsExplainingRef = useRef(isExplaining ?? false);
+    const prevIsParaphrasingRef = useRef(isParaphrasing ?? false);
 
-    // Sync state only when isExplaining transitions true → false (explain just completed)
-    /* eslint-disable react-hooks/set-state-in-effect -- Sync after explain completes */
+    /* eslint-disable react-hooks/set-state-in-effect -- Sync while/after explain generation */
     useEffect(() => {
-        if (prevIsExplainingRef.current && !isExplaining && annotation.note_content) {
-            setContent(annotation.note_content);
+        if (isExplaining) {
+            setContent(userNote);
             setIsEditing(false);
+            setActiveTab('explanation');
+        } else if (prevIsExplainingRef.current) {
+            setContent(userNote);
+            setIsEditing(false);
+            setActiveTab('explanation');
         }
         prevIsExplainingRef.current = isExplaining ?? false;
-    }, [isExplaining, annotation.note_content]);
+    }, [isExplaining, userNote]);
+    /* eslint-enable react-hooks/set-state-in-effect */
+
+    /* eslint-disable react-hooks/set-state-in-effect -- Sync while/after paraphrase generation */
+    useEffect(() => {
+        if (isParaphrasing) {
+            setContent(userNote);
+            setIsEditing(false);
+            setActiveTab('paraphrase');
+        } else if (prevIsParaphrasingRef.current) {
+            setContent(userNote);
+            setIsEditing(false);
+            setActiveTab('paraphrase');
+        }
+        prevIsParaphrasingRef.current = isParaphrasing ?? false;
+    }, [isParaphrasing, userNote]);
+    /* eslint-enable react-hooks/set-state-in-effect */
+
+    /* eslint-disable react-hooks/set-state-in-effect -- Keep local editor state aligned when annotation changes */
+    useEffect(() => {
+        if (isEditing) return;
+        setContent(userNote);
+        if (activeTab === 'note' && !userNote && !hasAiContent) setIsEditing(true);
+    }, [activeTab, annotation.id, hasAiContent, isEditing, userNote]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
     const { mutate: updateAnnotation } = useUpdateAnnotation();
@@ -89,14 +160,14 @@ export const NotePopover = ({ annotation, containerDims, containerElement, onClo
     const handleSave = () => {
         updateAnnotation({
             id: annotation.id,
-            data: { note_content: content },
+            data: buildNoteUpdateData(annotation, content),
         });
         onClose();
     };
 
     const handleCancel = () => {
-        setContent(annotation.note_content || '');
-        if (annotation.note_content) {
+        setContent(userNote);
+        if (userNote || hasAiContent) {
             setIsEditing(false);
         } else {
             onClose();
@@ -109,7 +180,19 @@ export const NotePopover = ({ annotation, containerDims, containerElement, onClo
         }
     };
 
-    const parsedContent = useMemo(() => parseAiHeader(content), [content]);
+    const handleExplain = () => {
+        if (!canUseAiActions || !onExplainThis) return;
+        setActiveTab('explanation');
+        setIsEditing(false);
+        onExplainThis(annotation.id);
+    };
+
+    const handleParaphrase = () => {
+        if (!canUseAiActions || !onParaphraseThis) return;
+        setActiveTab('paraphrase');
+        setIsEditing(false);
+        onParaphraseThis(annotation.id, paraphraseLevel);
+    };
 
     if (!containerDims || !annotation.rects[0]) return null;
 
@@ -120,7 +203,66 @@ export const NotePopover = ({ annotation, containerDims, containerElement, onClo
     const fallbackPosition = getContainerPosition(rect, containerDims);
     const position = viewportPosition ?? fallbackPosition;
 
-    const isAiContent = parsedContent.isAi && !isEditing && !isExplaining;
+    const isAiTab = activeTab !== 'note' && hasTabbedContent;
+    const isAiContent = isAiTab && !isExplaining && !isParaphrasing;
+
+    const noteContent = isEditing ? (
+        <div className="p-3">
+            <Textarea
+                ref={textareaRef}
+                placeholder="Add a note…"
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="min-h-[100px] resize-none text-sm border-0 focus-visible:ring-1 focus-visible:ring-violet-400 bg-transparent shadow-none"
+            />
+        </div>
+    ) : userNote ? (
+        <div className="p-4">
+            <div className="prose prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 text-gray-800 leading-relaxed">
+                <Markdown>{userNote}</Markdown>
+            </div>
+        </div>
+    ) : (
+        <div className="p-4 text-sm text-muted-foreground">
+            No note yet.
+        </div>
+    );
+
+    const explanationContent = isExplaining ? (
+        <AnnotationAiExplanationLoading
+            message={explainStatusMessage || 'Generating explanation…'}
+            className="rounded-none border-0 bg-transparent"
+        />
+    ) : aiExplanation ? (
+        <AnnotationAiExplanationView
+            explanation={aiExplanation}
+            className="rounded-none border-0 bg-transparent"
+        />
+    ) : (
+        <div className="p-4 text-sm text-muted-foreground">
+            No AI explanation yet.
+        </div>
+    );
+
+    const paraphraseContent = isParaphrasing ? (
+        <AnnotationAiExplanationLoading
+            message={paraphraseStatusMessage || 'Generating paraphrase…'}
+            className="rounded-none border-0 bg-transparent"
+        />
+    ) : aiParaphrase ? (
+        <AnnotationAiExplanationView
+            explanation={aiParaphrase}
+            badgeLabel="AI Paraphrase"
+            detailLabel={getParaphraseLevelLabel(aiParaphrase.level)}
+            className="rounded-none border-0 bg-transparent"
+        />
+    ) : (
+        <div className="p-4 text-sm text-muted-foreground">
+            No AI paraphrase yet.
+        </div>
+    );
+
     const popover = (
         <div
             ref={popoverRef}
@@ -140,73 +282,45 @@ export const NotePopover = ({ annotation, containerDims, containerElement, onClo
             >
                 {/* Scrollable content */}
                 <div className="flex-1 min-h-0 overflow-y-auto">
-                    {isExplaining ? (
-                        <div className="p-4 space-y-3">
-                            <div className="flex items-center gap-2">
-                                <Loader2 className="h-4 w-4 text-violet-600 animate-spin" />
-                                <span className="text-sm text-gray-600 font-medium">
-                                    {explainStatusMessage || 'Generating explanation…'}
-                                </span>
-                            </div>
-                            <div className="space-y-2">
-                                {[0.95, 0.8, 0.6, 0.85].map((w, i) => (
-                                    <div
-                                        key={i}
-                                        className="h-3 bg-gray-200 rounded animate-pulse"
-                                        style={{ width: `${w * 100}%` }}
-                                    />
-                                ))}
-                            </div>
-                        </div>
-                    ) : isEditing ? (
-                        <div className="p-3">
-                            <Textarea
-                                ref={textareaRef}
-                                placeholder="Add a note…"
-                                value={content}
-                                onChange={(e) => setContent(e.target.value)}
-                                onKeyDown={handleKeyDown}
-                                className="min-h-[100px] resize-none text-sm border-0 focus-visible:ring-1 focus-visible:ring-violet-400 bg-transparent shadow-none"
-                            />
-                        </div>
+                    {hasTabbedContent ? (
+                        <Tabs
+                            value={activeTab}
+                            onValueChange={(value) => {
+                                const next = value as AnnotationContentTab;
+                                setActiveTab(next);
+                                if (next !== 'note') setIsEditing(false);
+                            }}
+                            className="p-3"
+                        >
+                            <TabsList className="grid w-full grid-cols-3">
+                                <TabsTrigger value="note">Note</TabsTrigger>
+                                <TabsTrigger value="explanation">Explanation</TabsTrigger>
+                                <TabsTrigger value="paraphrase">Paraphrase</TabsTrigger>
+                            </TabsList>
+                            <TabsContent value="note" className="mt-3 rounded-md border border-gray-100">
+                                {noteContent}
+                            </TabsContent>
+                            <TabsContent value="explanation" className="mt-3 rounded-md border border-violet-100 bg-violet-50/30">
+                                {explanationContent}
+                            </TabsContent>
+                            <TabsContent value="paraphrase" className="mt-3 rounded-md border border-violet-100 bg-violet-50/30">
+                                {paraphraseContent}
+                            </TabsContent>
+                        </Tabs>
                     ) : (
-                        <div className="p-4">
-                            {isAiContent && (
-                                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-violet-100/80">
-                                    <Sparkles className="h-3.5 w-3.5 text-violet-600 shrink-0" />
-                                    <Badge
-                                        variant="outline"
-                                        className="text-xs font-medium text-violet-700 border-violet-200 bg-violet-50 hover:bg-violet-100"
-                                    >
-                                        AI Explanation
-                                    </Badge>
-                                    {parsedContent.header && (
-                                        <span className="text-xs text-violet-400 ml-auto tabular-nums shrink-0">
-                                            {parsedContent.header}
-                                        </span>
-                                    )}
-                                </div>
-                            )}
-                            <div className="prose prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 text-gray-800 leading-relaxed">
-                                <Markdown>{parsedContent.body}</Markdown>
-                            </div>
-                        </div>
+                        noteContent
                     )}
                 </div>
 
                 {/* Sticky footer */}
                 <div
-                    className={`shrink-0 border-t px-3 py-2.5 flex justify-end gap-2 ${
+                    className={`shrink-0 border-t px-3 py-2.5 flex flex-wrap items-center justify-end gap-2 ${
                         isAiContent
                             ? 'border-violet-100 bg-violet-50/60'
                             : 'border-gray-100 bg-white/80 backdrop-blur-sm'
                     }`}
                 >
-                    {isExplaining ? (
-                        <Button size="sm" variant="ghost" onClick={onClose}>
-                            Cancel
-                        </Button>
-                    ) : isEditing ? (
+                    {isEditing && activeTab === 'note' ? (
                         <>
                             <Button size="sm" variant="ghost" onClick={handleCancel}>
                                 Cancel
@@ -216,15 +330,61 @@ export const NotePopover = ({ annotation, containerDims, containerElement, onClo
                                 Save
                             </Button>
                         </>
+                    ) : activeTab === 'explanation' && onExplainThis ? (
+                        <>
+                            <Button size="sm" variant="ghost" onClick={onClose}>
+                                Close
+                            </Button>
+                            <AnnotationAiActionControls
+                                activeTab={activeTab}
+                                aiUnavailableTitle={aiUnavailableTitle}
+                                canUseAiActions={canUseAiActions}
+                                explanationClassName="contents"
+                                hasAiExplanation={!!aiExplanation}
+                                hasAiParaphrase={!!aiParaphrase}
+                                iconClassName="h-3 w-3"
+                                isExplaining={!!isExplaining}
+                                isParaphrasing={!!isParaphrasing}
+                                onExplain={handleExplain}
+                                onParaphraseLevelChange={setParaphraseLevel}
+                                paraphraseLevel={paraphraseLevel}
+                            />
+                        </>
+                    ) : activeTab === 'paraphrase' && onParaphraseThis ? (
+                        <>
+                            <Button size="sm" variant="ghost" onClick={onClose}>
+                                Close
+                            </Button>
+                            <AnnotationAiActionControls
+                                activeTab={activeTab}
+                                aiUnavailableTitle={aiUnavailableTitle}
+                                canUseAiActions={canUseAiActions}
+                                hasAiExplanation={!!aiExplanation}
+                                hasAiParaphrase={!!aiParaphrase}
+                                iconClassName="h-3 w-3"
+                                isExplaining={!!isExplaining}
+                                isParaphrasing={!!isParaphrasing}
+                                onParaphrase={handleParaphrase}
+                                onParaphraseLevelChange={setParaphraseLevel}
+                                paraphraseClassName="contents"
+                                paraphraseLevel={paraphraseLevel}
+                                selectTriggerClassName="h-11 w-32"
+                            />
+                        </>
                     ) : (
                         <>
                             <Button size="sm" variant="ghost" onClick={onClose}>
                                 Close
                             </Button>
-                            <Button size="sm" onClick={() => setIsEditing(true)}>
-                                <Pencil className="h-3 w-3 mr-1" />
-                                Edit Note
-                            </Button>
+                            {activeTab === 'note' && (
+                                <Button size="sm" onClick={() => {
+                                    setActiveTab('note');
+                                    setIsEditing(true);
+                                }}>
+                                    <Pencil className="h-3 w-3 mr-1" />
+                                    Edit Note
+                                </Button>
+                            )}
                         </>
                     )}
                 </div>

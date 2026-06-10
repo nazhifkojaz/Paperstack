@@ -55,7 +55,6 @@ export const AnnotationSidebar = () => {
         createSet({
             pdf_id: pdfId,
             name: newSetName.trim(),
-            color: '#FFFF00',
         }, {
             onSuccess: (newSet) => {
                 setNewSetName('');
@@ -147,12 +146,12 @@ export const AnnotationSidebar = () => {
                             By Page
                         </Button>
                         <Button
-                            variant={sidebarGroupBy === 'type' ? 'default' : 'ghost'}
+                            variant={sidebarGroupBy === 'color' ? 'default' : 'ghost'}
                             size="sm"
                             className="flex-1 h-7 text-xs"
-                            onClick={() => setSidebarGroupBy('type')}
+                            onClick={() => setSidebarGroupBy('color')}
                         >
-                            By Type
+                            By Color
                         </Button>
                     </div>
                 </div>
@@ -219,12 +218,6 @@ export const AnnotationSidebar = () => {
                                                 }
                                             </div>
 
-                                            {/* Color dot */}
-                                            <div
-                                                className="w-2.5 h-2.5 rounded-full shrink-0 mt-1"
-                                                style={{ backgroundColor: set.color }}
-                                            />
-
                                             {/* AI badge */}
                                             {isAiSet && <span className="text-xs shrink-0 mt-0.5 text-purple-500">✦</span>}
 
@@ -269,14 +262,6 @@ export const AnnotationSidebar = () => {
                                             </div>
                                         </div>
 
-                                        {/* Selected indicator bar */}
-                                        {isSelected && (
-                                            <div
-                                                className="absolute left-0 top-0 bottom-0 w-0.5 rounded-r"
-                                                style={{ backgroundColor: set.color }}
-                                            />
-                                        )}
-
                                         {/* Nested annotations (collapsible) */}
                                         {isExpanded && (
                                             <div className={`border-l-2 ml-3 ${
@@ -284,6 +269,7 @@ export const AnnotationSidebar = () => {
                                             }`}>
                                                 <SetAnnotationList
                                                     setId={set.id}
+                                                    pdfId={pdfId}
                                                     groupBy={sidebarGroupBy}
                                                 />
                                             </div>

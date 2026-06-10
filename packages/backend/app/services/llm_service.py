@@ -49,14 +49,6 @@ FREE_MODELS = [
 
 DEFAULT_FREE_MODEL = FREE_MODELS[0]["id"]
 
-CATEGORY_COLORS = {
-    "findings": "#22c55e",
-    "methods": "#3b82f6",
-    "definitions": "#a855f7",
-    "limitations": "#f97316",
-    "background": "#6b7280",
-}
-
 CATEGORY_DEFINITIONS = {
     "findings": "Key results, conclusions, statistical outcomes, novel contributions",
     "methods": "Core experimental design, techniques, key parameters",

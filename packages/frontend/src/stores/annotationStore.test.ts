@@ -37,9 +37,9 @@ describe('annotationStore', () => {
       expect(useAnnotationStore.getState().sidebarGroupBy).toBe('page')
     })
 
-    it('can be set to type', () => {
-      useAnnotationStore.getState().setSidebarGroupBy('type')
-      expect(useAnnotationStore.getState().sidebarGroupBy).toBe('type')
+    it('can be set to color', () => {
+      useAnnotationStore.getState().setSidebarGroupBy('color')
+      expect(useAnnotationStore.getState().sidebarGroupBy).toBe('color')
     })
   })
 

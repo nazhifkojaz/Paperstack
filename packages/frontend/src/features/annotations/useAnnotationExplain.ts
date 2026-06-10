@@ -2,16 +2,11 @@ import { useState, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useExplainAnnotation } from '@/api/chat';
-
-interface Annotation {
-    id: string;
-    set_id: string;
-    selected_text?: string | null;
-    page_number: number;
-}
+import type { Annotation } from '@/api/annotations';
+import { applyAiResultToAnnotation } from './annotationAiCache';
 
 interface UseAnnotationExplainOptions {
-    onSuccess?: (explanation: string, noteContent: string, annotationId: string) => void;
+    onSuccess?: (explanation: string, noteContent: string | null, annotationId: string) => void;
     onError?: (error: string) => void;
 }
 
@@ -57,17 +52,14 @@ export function useAnnotationExplain(options: UseAnnotationExplainOptions = {}):
                         queryClient.invalidateQueries({ queryKey: ['auto-highlight-quota'] });
                     }
 
-                    // Optimistically update cache so NotePopover sees the new note_content immediately
-                    queryClient.setQueryData(
-                        ['annotations', annotation.set_id],
-                        (old: Annotation[] | undefined) => {
-                            if (!old) return old;
-                            return old.map(a =>
-                                a.id === annotation.id
-                                    ? { ...a, note_content: result.note_content }
-                                    : a
-                            );
-                        }
+                    const applyResult = applyAiResultToAnnotation(
+                        annotation.id,
+                        result.note_content,
+                        result.metadata,
+                    );
+                    queryClient.setQueriesData<Annotation[]>(
+                        { queryKey: ['annotations'] },
+                        applyResult,
                     );
 
                     // Call onSuccess before resetting state (so annotation ID is available)

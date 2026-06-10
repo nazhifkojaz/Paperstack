@@ -5,6 +5,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { useSharedAnnotations } from '@/api/sharing';
 import { Loader2, AlertCircle, Share2 } from 'lucide-react';
 import { API_URL } from '@/lib/config';
+import { DEFAULT_HIGHLIGHT_COLOR } from '@/features/annotations/constants';
 
 export function SharedViewerPage() {
     const { token } = useParams<{ token: string }>();
@@ -86,7 +87,7 @@ export function SharedViewerPage() {
 
             <div className="flex-1 overflow-auto p-4 md:p-8 bg-neutral-100 dark:bg-neutral-900">
                 {pdfDocument ? (
-                    <SharedPdfViewer pdfDocument={pdfDocument} annotations={annotation_set.annotations} setColor={annotation_set.color} />
+                    <SharedPdfViewer pdfDocument={pdfDocument} annotations={annotation_set.annotations} />
                 ) : (
                     <div className="flex items-center justify-center h-full">
                         <Loader2 className="h-8 w-8 animate-spin text-primary/50" />
@@ -100,17 +101,17 @@ export function SharedViewerPage() {
 interface AnnotationRect { x: number; y: number; w: number; h: number; }
 interface SharedAnnotation { id: string; page_number: number; type: string; rects: AnnotationRect[]; color?: string | null; }
 
-function SharedPdfViewer({ pdfDocument, annotations, setColor }: { pdfDocument: PDFDocumentProxy; annotations: SharedAnnotation[]; setColor: string }) {
+function SharedPdfViewer({ pdfDocument, annotations }: { pdfDocument: PDFDocumentProxy; annotations: SharedAnnotation[] }) {
     return (
         <div className="flex flex-col w-full max-w-5xl mx-auto gap-4">
             {Array.from({ length: pdfDocument.numPages }, (_, i) => i + 1).map((pageNum) => (
-                <SharedPdfPage key={pageNum} pdfDocument={pdfDocument} pageNumber={pageNum} annotations={annotations.filter((a) => a.page_number === pageNum)} setColor={setColor} />
+                <SharedPdfPage key={pageNum} pdfDocument={pdfDocument} pageNumber={pageNum} annotations={annotations.filter((a) => a.page_number === pageNum)} />
             ))}
         </div>
     );
 }
 
-function SharedPdfPage({ pdfDocument, pageNumber, annotations, setColor }: { pdfDocument: PDFDocumentProxy; pageNumber: number; annotations: SharedAnnotation[]; setColor: string }) {
+function SharedPdfPage({ pdfDocument, pageNumber, annotations }: { pdfDocument: PDFDocumentProxy; pageNumber: number; annotations: SharedAnnotation[] }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [dims, setDims] = useState({ width: 0, height: 0 });
 
@@ -139,7 +140,7 @@ function SharedPdfPage({ pdfDocument, pageNumber, annotations, setColor }: { pdf
             {dims.width > 0 && (
                 <svg className="absolute inset-0 pointer-events-none" width={dims.width} height={dims.height}>
                     {annotations.map((ann) => ann.rects.map((rect, idx) => (
-                        <rect key={`${ann.id}-${idx}`} x={rect.x * dims.width} y={rect.y * dims.height} width={rect.w * dims.width} height={rect.h * dims.height} fill={ann.color || setColor} fillOpacity={0.35} stroke={ann.color || setColor} strokeWidth={1} strokeOpacity={0.7} />
+                        <rect key={`${ann.id}-${idx}`} x={rect.x * dims.width} y={rect.y * dims.height} width={rect.w * dims.width} height={rect.h * dims.height} fill={ann.color || DEFAULT_HIGHLIGHT_COLOR} fillOpacity={0.35} stroke={ann.color || DEFAULT_HIGHLIGHT_COLOR} strokeWidth={1} strokeOpacity={0.7} />
                     )))}
                 </svg>
             )}

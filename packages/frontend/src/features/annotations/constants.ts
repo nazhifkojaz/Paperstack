@@ -3,13 +3,19 @@ interface AnnotationColor {
   label: string;
 }
 
+export const DEFAULT_HIGHLIGHT_COLOR = '#FFFF00' as const;
+
 export const ANNOTATION_COLORS: readonly AnnotationColor[] = [
-  { color: '#EF4444', label: 'Red' },
-  { color: '#3B82F6', label: 'Blue' },
-  { color: '#22C55E', label: 'Green' },
-  { color: '#FFFF00', label: 'Yellow' },
-  { color: '#F97316', label: 'Orange' },
-  { color: '#A855F7', label: 'Purple' },
-  { color: '#FF00FF', label: 'Magenta' },
-  { color: '#00FFFF', label: 'Cyan' },
+  { color: '#22c55e', label: 'Findings' },
+  { color: '#3b82f6', label: 'Methods' },
+  { color: '#a855f7', label: 'Definitions' },
+  { color: '#f97316', label: 'Limitations' },
+  { color: '#6b7280', label: 'Background' },
+  { color: '#FFFF00', label: 'Highlights' },
+  { color: '#EF4444', label: 'Important' },
+  { color: '#00FFFF', label: 'Follow-up' },
 ] as const;
+
+export const DEFAULT_COLOR_LABELS: Readonly<Record<string, string>> = Object.fromEntries(
+  ANNOTATION_COLORS.map(({ color, label }) => [color, label]),
+);
