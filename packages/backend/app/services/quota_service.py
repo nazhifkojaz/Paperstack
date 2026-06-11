@@ -10,7 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.models import UserApiKey, UserUsageQuota
+from app.db.models import UserApiKey, UserLLMPreferences, UserUsageQuota
 from app.services.exceptions import QuotaExhaustedError
 from app.services.openrouter_usage_service import openrouter_usage_service
 
@@ -50,6 +50,7 @@ class UserQuotaSnapshot:
     reset_at: date
     has_own_key: bool
     providers: list[str]
+    openrouter_key_mode: str
     global_warning: str | None = None
 
 
@@ -158,9 +159,19 @@ class QuotaService:
         quota = result.scalar_one()
 
         keys_result = await db.execute(
-            select(UserApiKey.provider).where(UserApiKey.user_id == user_id)
+            select(UserApiKey.provider).where(
+                UserApiKey.user_id == user_id,
+                UserApiKey.provider == "openrouter",
+            )
         )
         providers = [row[0] for row in keys_result.all()]
+
+        mode_result = await db.execute(
+            select(UserLLMPreferences.openrouter_key_mode).where(
+                UserLLMPreferences.user_id == user_id
+            )
+        )
+        openrouter_key_mode = mode_result.scalar_one_or_none() or "app"
 
         global_status = await openrouter_usage_service.get_status(db)
         return UserQuotaSnapshot(
@@ -171,6 +182,7 @@ class QuotaService:
             reset_at=quota.reset_at,
             has_own_key=bool(providers),
             providers=providers,
+            openrouter_key_mode=openrouter_key_mode,
             global_warning=global_status.warning_message,
         )
 
