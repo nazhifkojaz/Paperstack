@@ -10,7 +10,7 @@ from app.services.exceptions import (
     LLMRateLimitError,
 )
 
-TEST_EMBEDDING = [0.01] * 1024
+from tests.helpers import TEST_EMBEDDING
 
 
 @pytest.fixture

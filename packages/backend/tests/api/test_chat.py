@@ -11,9 +11,7 @@ from tests.fixtures import (
     create_test_collection,
 )
 
-TEST_EMBEDDING = [0.01] * 1024
-
-from tests.helpers import make_resolve_result as _resolve_result
+from tests.helpers import make_resolve_result as _resolve_result, init_http_clients, override_get_llm_http_client, override_get_embedding_http_client, TEST_EMBEDDING
 
 
 class TestExplainNoteHelpers:
@@ -229,40 +227,13 @@ class TestParaphraseAnnotation:
         mock_resolve.assert_not_called()
 
 
-def _init_http_clients():
-    """Initialize HTTP clients on app state for tests that need streaming."""
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    if not hasattr(app.state, "llm_http_client"):
-        HTTPClientState.init_http_clients(app)
-
-
-async def _override_get_llm_http_client():
-    """Override LLM HTTP client dependency for tests."""
-    _init_http_clients()
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    yield HTTPClientState.get_llm_client(app)
-
-
-async def _override_get_embedding_http_client():
-    """Override embedding HTTP client dependency for tests."""
-    _init_http_clients()
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    yield HTTPClientState.get_embedding_client(app)
-
-
 def _setup_stream_mocks():
     """Set up common mocks for streaming tests (HTTP client overrides)."""
-    _init_http_clients()
+    init_http_clients()
     from app.api import deps
 
-    deps.get_llm_http_client = _override_get_llm_http_client
-    deps.get_embedding_http_client = _override_get_embedding_http_client
+    deps.get_llm_http_client = override_get_llm_http_client
+    deps.get_embedding_http_client = override_get_embedding_http_client
 
 
 def _make_stream_mocks(*, stream_reply=None, embed_side_effect=None):

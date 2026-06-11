@@ -9,9 +9,9 @@ from tests.fixtures import (
     create_test_annotation_set,
 )
 
-_Passage = namedtuple("_Passage", ["content"])
+from tests.helpers import make_resolve_result as _make_resolve_result, init_http_clients
 
-from tests.helpers import make_resolve_result as _make_resolve_result
+_Passage = namedtuple("_Passage", ["content"])
 
 
 @pytest.mark.asyncio
@@ -88,15 +88,6 @@ async def test_cache_delete_not_found(client: AsyncClient, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 404
-
-
-def _init_http_clients():
-    """Initialize HTTP clients on app state for auto-highlight tests."""
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    if not hasattr(app.state, "llm_http_client"):
-        HTTPClientState.init_http_clients(app)
 
 
 class TestAutoHighlightOpenRouterRateLimit:

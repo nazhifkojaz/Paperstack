@@ -6,39 +6,7 @@ from httpx import AsyncClient
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.fixtures import create_test_pdf
-
-TEST_EMBEDDING = [0.01] * 1024
-
-
-def _init_http_clients():
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    if not hasattr(app.state, "llm_http_client"):
-        HTTPClientState.init_http_clients(app)
-
-
-def _setup_http_mocks():
-    _init_http_clients()
-    from app.api import deps
-
-    async def _override_llm():
-        from app.main import app
-        from app.core.http_client import HTTPClientState
-
-        yield HTTPClientState.get_llm_client(app)
-
-    async def _override_embed():
-        from app.main import app
-        from app.core.http_client import HTTPClientState
-
-        yield HTTPClientState.get_embedding_client(app)
-
-    deps.get_llm_http_client = _override_llm
-    deps.get_embedding_http_client = _override_embed
-
-
-from tests.helpers import make_resolve_result as _make_resolve_result
+from tests.helpers import make_resolve_result as _make_resolve_result, setup_http_client_mocks
 
 
 def _make_create_task_stub(real_create_task):
@@ -80,7 +48,7 @@ class TestAutoHighlightAnalyze:
     async def test_analyze_no_api_key_no_quota_returns_402(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
-        _setup_http_mocks()
+        setup_http_client_mocks()
 
         pdf = await create_test_pdf(
             db_session, user_id=test_user.id, title="Test", filename="test.pdf"
@@ -126,7 +94,7 @@ class TestAutoHighlightAnalyze:
         self, client: AsyncClient, auth_headers
     ):
         """Without a stored API key or free quota, /analyze returns 402."""
-        _setup_http_mocks()
+        setup_http_client_mocks()
 
         response = await client.post(
             "/v1/auto-highlight/analyze",
@@ -144,7 +112,7 @@ class TestAutoHighlightAnalyze:
     async def test_analyze_creates_pending_cache(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
-        _setup_http_mocks()
+        setup_http_client_mocks()
 
         pdf = await create_test_pdf(
             db_session, user_id=test_user.id, title="Test", filename="test.pdf"
@@ -197,7 +165,7 @@ class TestAutoHighlightAnalyze:
     async def test_analyze_pending_cache_returns_409(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
-        _setup_http_mocks()
+        setup_http_client_mocks()
 
         pdf = await create_test_pdf(
             db_session, user_id=test_user.id, title="Test", filename="test.pdf"
@@ -237,7 +205,7 @@ class TestAutoHighlightAnalyze:
     async def test_analyze_running_cache_returns_409(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
-        _setup_http_mocks()
+        setup_http_client_mocks()
 
         pdf = await create_test_pdf(
             db_session, user_id=test_user.id, title="Test", filename="test.pdf"
@@ -277,7 +245,7 @@ class TestAutoHighlightAnalyze:
     async def test_analyze_failed_cache_is_reset(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
-        _setup_http_mocks()
+        setup_http_client_mocks()
 
         pdf = await create_test_pdf(
             db_session, user_id=test_user.id, title="Test", filename="test.pdf"
@@ -330,7 +298,7 @@ class TestAutoHighlightAnalyze:
     async def test_analyze_page_less_than_1_returns_400(
         self, client: AsyncClient, auth_headers
     ):
-        _setup_http_mocks()
+        setup_http_client_mocks()
 
         response = await client.post(
             "/v1/auto-highlight/analyze",
@@ -349,7 +317,7 @@ class TestAutoHighlightAnalyze:
     async def test_analyze_more_than_100_pages_returns_400(
         self, client: AsyncClient, auth_headers
     ):
-        _setup_http_mocks()
+        setup_http_client_mocks()
 
         response = await client.post(
             "/v1/auto-highlight/analyze",
