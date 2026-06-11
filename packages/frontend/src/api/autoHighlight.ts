@@ -31,9 +31,13 @@ export interface AutoHighlightCacheEntry {
 
 interface QuotaInfo {
     chat_remaining: number;
+    chat_total: number;
     explain_paraphrase_remaining: number;
+    explain_paraphrase_total: number;
     auto_highlight_quick_remaining: number;
+    auto_highlight_quick_total: number;
     auto_highlight_thorough_remaining: number;
+    auto_highlight_thorough_total: number;
     reset_at: string;
     has_own_key: boolean;
     providers: string[];

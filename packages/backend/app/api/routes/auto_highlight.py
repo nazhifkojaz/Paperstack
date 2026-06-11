@@ -1492,9 +1492,13 @@ async def get_quota(
 
     return QuotaResponse(
         chat_remaining=snapshot.chat_remaining,
+        chat_total=snapshot.chat_total,
         explain_paraphrase_remaining=snapshot.explain_paraphrase_remaining,
+        explain_paraphrase_total=snapshot.explain_paraphrase_total,
         auto_highlight_quick_remaining=snapshot.auto_highlight_quick_remaining,
+        auto_highlight_quick_total=snapshot.auto_highlight_quick_total,
         auto_highlight_thorough_remaining=snapshot.auto_highlight_thorough_remaining,
+        auto_highlight_thorough_total=snapshot.auto_highlight_thorough_total,
         reset_at=snapshot.reset_at,
         has_own_key=snapshot.has_own_key,
         providers=snapshot.providers,

@@ -96,11 +96,10 @@ export function UserNav() {
                         <DropdownMenuSeparator />
                         <DropdownMenuLabel className="font-normal">
                             <div className="flex flex-col gap-1">
-                                {/* Totals must match QUOTA_*_DAILY defaults in backend config.py */}
-                                <QuotaRow label="Chat" remaining={quota.chat_remaining} total={50} />
-                                <QuotaRow label="Explain / Paraphrase" remaining={quota.explain_paraphrase_remaining} total={30} />
-                                <QuotaRow label="Quick highlight" remaining={quota.auto_highlight_quick_remaining} total={5} />
-                                <QuotaRow label="Thorough highlight" remaining={quota.auto_highlight_thorough_remaining} total={3} />
+                                <QuotaRow label="Chat" remaining={quota.chat_remaining} total={quota.chat_total} />
+                                <QuotaRow label="Explain / Paraphrase" remaining={quota.explain_paraphrase_remaining} total={quota.explain_paraphrase_total} />
+                                <QuotaRow label="Quick highlight" remaining={quota.auto_highlight_quick_remaining} total={quota.auto_highlight_quick_total} />
+                                <QuotaRow label="Thorough highlight" remaining={quota.auto_highlight_thorough_remaining} total={quota.auto_highlight_thorough_total} />
                                 <ResetCountdown />
                             </div>
                         </DropdownMenuLabel>

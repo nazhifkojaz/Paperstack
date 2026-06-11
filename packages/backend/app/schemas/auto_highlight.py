@@ -45,9 +45,13 @@ class AutoHighlightCacheResponse(BaseModel):
 
 class QuotaResponse(BaseModel):
     chat_remaining: int
+    chat_total: int
     explain_paraphrase_remaining: int
+    explain_paraphrase_total: int
     auto_highlight_quick_remaining: int
+    auto_highlight_quick_total: int
     auto_highlight_thorough_remaining: int
+    auto_highlight_thorough_total: int
     reset_at: date
     has_own_key: bool
     providers: list[str]
