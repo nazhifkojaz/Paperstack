@@ -1,14 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
 from app.api.deps import get_db, get_current_user
 from app.core.security import encrypt_token
-from app.db.models import User, UserApiKey
+from app.db.models import User, UserApiKey, UserLLMPreferences
 from app.schemas.api_key import ApiKeyCreate, ApiKeyResponse
 from app.middleware.rate_limit import limiter
 from app.core.config import settings
+from app.services.llm_service import OPENROUTER_BYOK_MODEL_IDS
 
 router = APIRouter()
 
@@ -59,13 +60,30 @@ async def delete_api_key(
     current_user: User = Depends(get_current_user),
 ):
     """Remove a stored API key."""
+    if provider != "openrouter":
+        raise HTTPException(status_code=404, detail="API key not found")
+
     result = await db.execute(
         delete(UserApiKey).where(
             UserApiKey.user_id == current_user.id,
             UserApiKey.provider == provider,
         )
     )
-    await db.commit()
 
     if result.rowcount == 0:
+        await db.rollback()
         raise HTTPException(status_code=404, detail="API key not found")
+
+    prefs_result = await db.execute(
+        select(UserLLMPreferences).where(
+            UserLLMPreferences.user_id == current_user.id,
+        )
+    )
+    prefs = prefs_result.scalar_one_or_none()
+    if prefs is not None:
+        prefs.openrouter_key_mode = "app"
+        for field in ("chat_model", "auto_highlight_model", "explain_model"):
+            if getattr(prefs, field) in OPENROUTER_BYOK_MODEL_IDS:
+                setattr(prefs, field, None)
+
+    await db.commit()

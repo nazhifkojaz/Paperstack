@@ -64,7 +64,8 @@ interface ExplainResponse {
     explanation: string;
     note_content: string | null;
     metadata?: Record<string, unknown> | null;
-    explain_uses_remaining: number;
+    explain_paraphrase_remaining: number;
+    global_warning?: string | null;
     provider_fallback?: boolean;
 }
 
@@ -72,7 +73,8 @@ interface ParaphraseResponse {
     paraphrase: string;
     note_content: string | null;
     metadata?: Record<string, unknown> | null;
-    explain_uses_remaining: number;
+    explain_paraphrase_remaining: number;
+    global_warning?: string | null;
     provider_fallback?: boolean;
 }
 

@@ -43,7 +43,6 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str | None = None
 
     # Auto-highlight rate limits
-    RATE_LIMIT_AUTO_HIGHLIGHT_ANALYZE: str = "3/minute"
     RATE_LIMIT_AUTO_HIGHLIGHT_QUOTA: str = "30/minute"
     RATE_LIMIT_AUTO_HIGHLIGHT_CACHE: str = "30/minute"
     RATE_LIMIT_API_KEYS: str = "10/minute"
@@ -54,6 +53,13 @@ class Settings(BaseSettings):
 
     # OpenRouter free-tier daily request limit (for soft-gating at 90%).
     OPENROUTER_FREE_TIER_LIMIT: int = 1000
+    GLOBAL_QUOTA_WARNING_PCT: int = 90
+
+    # Daily free-tier quotas for users without their own LLM API key
+    QUOTA_CHAT_DAILY: int = 50
+    QUOTA_EXPLAIN_PARAPHRASE_DAILY: int = 30
+    QUOTA_AUTO_HIGHLIGHT_QUICK_DAILY: int = 5
+    QUOTA_AUTO_HIGHLIGHT_THOROUGH_DAILY: int = 3
 
     # OpenRouter reasoning (thinking) mode
     OPENROUTER_REASONING_ENABLED: bool = True
@@ -61,10 +67,8 @@ class Settings(BaseSettings):
     OPENROUTER_REASONING_TIMEOUT_READ: float = 180.0  # Longer timeout for reasoning calls
 
     # Chat rate limits
-    RATE_LIMIT_CHAT_MESSAGE: str = "20/minute"
     RATE_LIMIT_CHAT_CONVERSATIONS: str = "30/minute"
     RATE_LIMIT_SEMANTIC_SEARCH: str = "10/minute"
-    RATE_LIMIT_CHAT_EXPLAIN: str = "10/minute"
 
     # Chunking
     CHUNK_SIZE: int = 800

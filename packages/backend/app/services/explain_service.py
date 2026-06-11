@@ -105,20 +105,18 @@ class ExplainService:
         user_prompt: str,
         model: Optional[str] = None,
     ) -> str:
-        call_method = getattr(self._llm_service, f"call_{provider}")
+        if provider != "openrouter":
+            raise ValueError(f"Unknown provider: {provider}")
         kwargs: dict[str, Any] = {
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "api_key": api_key,
         }
-        if provider == "openrouter":
-            if model:
-                kwargs["model"] = model
-            if settings.OPENROUTER_REASONING_ENABLED:
-                kwargs["reasoning_effort"] = settings.OPENROUTER_REASONING_EFFORT
-        elif model and provider != "openrouter":
+        if model:
             kwargs["model"] = model
-        return await call_method(**kwargs)
+        if settings.OPENROUTER_REASONING_ENABLED:
+            kwargs["reasoning_effort"] = settings.OPENROUTER_REASONING_EFFORT
+        return await self._llm_service.call_openrouter(**kwargs)
 
     async def explain_with_provider(
         self,

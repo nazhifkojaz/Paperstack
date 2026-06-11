@@ -80,7 +80,7 @@ describe('useAnnotationExplain', () => {
             generated_at: '2026-06-08 14:00 UTC',
           },
         },
-        explain_uses_remaining: -1,
+        explain_paraphrase_remaining: -1,
       });
     });
 

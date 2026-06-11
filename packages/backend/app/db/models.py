@@ -298,7 +298,7 @@ class UserApiKey(Base):
     )
     provider: Mapped[str] = mapped_column(
         String(20), nullable=False
-    )  # 'glm' | 'gemini'
+    )  # 'openrouter'
     encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
@@ -368,14 +368,20 @@ class UserUsageQuota(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    free_uses_remaining: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("5")
-    )
     chat_uses_remaining: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("20")
+        Integer, nullable=False, server_default=text("50")
     )
     explain_uses_remaining: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("20")
+        Integer, nullable=False, server_default=text("30")
+    )
+    auto_highlight_quick_remaining: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("5")
+    )
+    auto_highlight_thorough_remaining: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("3")
+    )
+    reset_at: Mapped[date] = mapped_column(
+        Date, nullable=False, server_default=text("(now() AT TIME ZONE 'UTC')::date")
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
@@ -487,6 +493,9 @@ class UserLLMPreferences(Base):
     chat_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     auto_highlight_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     explain_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    openrouter_key_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="app", default="app"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
     )

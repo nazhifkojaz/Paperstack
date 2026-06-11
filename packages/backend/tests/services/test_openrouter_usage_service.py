@@ -7,7 +7,6 @@ from httpx import Response
 from sqlalchemy import text
 
 from app.services.openrouter_usage_service import OpenRouterUsageService
-from app.services.exceptions import OpenRouterQuotaError
 
 
 @pytest.fixture
@@ -35,15 +34,17 @@ class TestRecordAndCheck:
         self, db_session, usage_service, seed_usage_row, monkeypatch
     ):
         monkeypatch.setattr("app.core.config.settings.OPENROUTER_FREE_TIER_LIMIT", 1000)
-        count = await usage_service.record_and_check(db_session)
-        assert count == 1
-        count = await usage_service.record_and_check(db_session)
-        assert count == 2
+        status = await usage_service.record_and_check(db_session)
+        assert status.count_today == 1
+        status = await usage_service.record_and_check(db_session)
+        assert status.count_today == 2
+        assert status.warning_message is None
 
-    async def test_raises_quota_error_at_threshold(
+    async def test_returns_warning_at_threshold(
         self, db_session, usage_service, seed_usage_row, monkeypatch
     ):
         monkeypatch.setattr("app.core.config.settings.OPENROUTER_FREE_TIER_LIMIT", 100)
+        monkeypatch.setattr("app.core.config.settings.GLOBAL_QUOTA_WARNING_PCT", 90)
         threshold = 90  # 90% of 100
         # Set counter to just below threshold
         await db_session.execute(
@@ -52,11 +53,12 @@ class TestRecordAndCheck:
         )
         await db_session.commit()
 
-        # This increment hits the threshold
-        with pytest.raises(OpenRouterQuotaError) as exc_info:
-            await usage_service.record_and_check(db_session)
-        assert exc_info.value.count_today == threshold
-        assert exc_info.value.limit == 100
+        # This increment hits the warning threshold but does not raise.
+        status = await usage_service.record_and_check(db_session)
+        assert status.count_today == threshold
+        assert status.limit == 100
+        assert status.is_near_limit is True
+        assert status.warning_message is not None
 
     async def test_resets_on_new_day(
         self, db_session, usage_service, monkeypatch
@@ -72,8 +74,21 @@ class TestRecordAndCheck:
         )
         await db_session.commit()
 
-        count = await usage_service.record_and_check(db_session)
-        assert count == 1  # Reset to 1 on new day
+        status = await usage_service.record_and_check(db_session)
+        assert status.count_today == 1  # Reset to 1 on new day
+
+    async def test_get_status_does_not_increment(
+        self, db_session, usage_service, seed_usage_row, monkeypatch
+    ):
+        monkeypatch.setattr("app.core.config.settings.OPENROUTER_FREE_TIER_LIMIT", 1000)
+
+        status = await usage_service.get_status(db_session)
+        assert status.count_today == 0
+
+        row = await db_session.execute(
+            text("SELECT request_count_today FROM openrouter_usage_cache WHERE id = 1")
+        )
+        assert row.scalar_one() == 0
 
 
 @pytest.mark.asyncio

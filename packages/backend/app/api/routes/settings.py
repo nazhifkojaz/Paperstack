@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -8,9 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
 from app.constants.colors import DEFAULT_COLOR_LABELS, VALID_ANNOTATION_COLORS
-from app.db.models import User, UserOAuthAccount, UserLLMPreferences
+from app.db.models import User, UserApiKey, UserOAuthAccount, UserLLMPreferences
 from app.schemas.auth import UserResponse
-from app.services.llm_service import FREE_MODELS
+from app.services.llm_service import (
+    OPENROUTER_BYOK_MODEL_IDS,
+    OPENROUTER_MODEL_IDS,
+    OPENROUTER_MODELS,
+)
 
 router = APIRouter()
 
@@ -93,6 +97,7 @@ class LLMModelResponse(BaseModel):
     id: str
     label: str
     description: str
+    requires_byok: bool = False
 
 
 class LLMModelsListResponse(BaseModel):
@@ -103,15 +108,22 @@ class LLMPreferencesResponse(BaseModel):
     chat_model: Optional[str] = None
     auto_highlight_model: Optional[str] = None
     explain_model: Optional[str] = None
+    openrouter_key_mode: Literal["app", "byok"] = "app"
 
 
 class LLMPreferencesUpdate(BaseModel):
     chat_model: Optional[str] = None
     auto_highlight_model: Optional[str] = None
     explain_model: Optional[str] = None
+    openrouter_key_mode: Literal["app", "byok"] = "app"
 
 
-VALID_MODEL_IDS = {m["id"] for m in FREE_MODELS}
+VALID_MODEL_IDS = OPENROUTER_MODEL_IDS
+MODEL_PREFERENCE_FIELDS = {
+    "chat_model",
+    "auto_highlight_model",
+    "explain_model",
+}
 
 
 def _validate_model(value: Optional[str], field: str) -> None:
@@ -136,11 +148,30 @@ async def _get_or_create_prefs(
     return prefs
 
 
+async def _has_openrouter_key(user_id: uuid.UUID, db: AsyncSession) -> bool:
+    result = await db.execute(
+        select(UserApiKey.id).where(
+            UserApiKey.user_id == user_id,
+            UserApiKey.provider == "openrouter",
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+def _selected_models(prefs: UserLLMPreferences, updates: dict) -> list[str]:
+    selected: list[str] = []
+    for field in MODEL_PREFERENCE_FIELDS:
+        value = updates.get(field, getattr(prefs, field))
+        if value:
+            selected.append(value)
+    return selected
+
+
 @router.get("/llm-models", response_model=LLMModelsListResponse)
 async def get_llm_models():
-    """Return the curated list of available free-tier LLM models."""
+    """Return the curated list of available OpenRouter LLM models."""
     return LLMModelsListResponse(
-        models=[LLMModelResponse(**m) for m in FREE_MODELS]
+        models=[LLMModelResponse(**m) for m in OPENROUTER_MODELS]
     )
 
 
@@ -155,6 +186,7 @@ async def get_llm_preferences(
         chat_model=prefs.chat_model,
         auto_highlight_model=prefs.auto_highlight_model,
         explain_model=prefs.explain_model,
+        openrouter_key_mode=prefs.openrouter_key_mode,
     )
 
 
@@ -171,9 +203,29 @@ async def update_llm_preferences(
     """
     updates = data.model_dump(exclude_unset=True)
     for field, value in updates.items():
-        _validate_model(value, field)
+        if field in MODEL_PREFERENCE_FIELDS:
+            _validate_model(value, field)
 
     prefs = await _get_or_create_prefs(current_user.id, db)
+    effective_key_mode = updates.get(
+        "openrouter_key_mode",
+        prefs.openrouter_key_mode,
+    )
+    selected_models = _selected_models(prefs, updates)
+    byok_models = [m for m in selected_models if m in OPENROUTER_BYOK_MODEL_IDS]
+    has_openrouter_key = await _has_openrouter_key(current_user.id, db)
+
+    if effective_key_mode == "byok" and not has_openrouter_key:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenRouter API key required for BYOK mode.",
+        )
+
+    if effective_key_mode == "app" and byok_models:
+        raise HTTPException(
+            status_code=400,
+            detail="BYOK-only models require BYOK mode.",
+        )
 
     for field, value in updates.items():
         setattr(prefs, field, value)
@@ -185,6 +237,7 @@ async def update_llm_preferences(
         chat_model=prefs.chat_model,
         auto_highlight_model=prefs.auto_highlight_model,
         explain_model=prefs.explain_model,
+        openrouter_key_mode=prefs.openrouter_key_mode,
     )
 
 

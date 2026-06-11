@@ -9,6 +9,8 @@ from tests.fixtures import (
     create_test_annotation_set,
 )
 
+from tests.helpers import make_resolve_result as _make_resolve_result, init_http_clients
+
 _Passage = namedtuple("_Passage", ["content"])
 
 
@@ -17,13 +19,14 @@ async def test_get_quota_with_key(admin_client: AsyncClient, auth_headers):
     """User with stored key should show it."""
     await admin_client.post(
         "/v1/settings/api-keys",
-        json={"provider": "gemini", "api_key": "test-key"},
+        json={"provider": "openrouter", "api_key": "test-key"},
         headers=auth_headers,
     )
     resp = await admin_client.get("/v1/auto-highlight/quota", headers=auth_headers)
     data = resp.json()
     assert data["has_own_key"] is True
-    assert "gemini" in data["providers"]
+    assert "openrouter" in data["providers"]
+    assert data["openrouter_key_mode"] == "app"
 
 
 @pytest.mark.asyncio
@@ -87,15 +90,6 @@ async def test_cache_delete_not_found(client: AsyncClient, auth_headers):
     assert resp.status_code == 404
 
 
-def _init_http_clients():
-    """Initialize HTTP clients on app state for auto-highlight tests."""
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    if not hasattr(app.state, "llm_http_client"):
-        HTTPClientState.init_http_clients(app)
-
-
 class TestAutoHighlightOpenRouterRateLimit:
     """Tests for OpenRouter error handling in auto-highlight."""
 
@@ -103,7 +97,7 @@ class TestAutoHighlightOpenRouterRateLimit:
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
         """When OpenRouter 429s in background, POST still returns 202."""
-        _init_http_clients()
+        init_http_clients()
 
         from app.services.exceptions import LLMRateLimitError
 
@@ -128,11 +122,9 @@ class TestAutoHighlightOpenRouterRateLimit:
                 "app.api.routes.auto_highlight.IndexingService",
             ) as mock_idx_cls,
         ):
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _make_resolve_result(
                 provider="openrouter",
                 api_key="openrouter-key",
-                is_in_house=True,
-                quota_remaining=5,
             )
 
             mock_llm = MagicMock()
@@ -160,7 +152,7 @@ class TestAutoHighlightOpenRouterRateLimit:
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
         """When user has their own key, OpenRouter is never tried for auto-highlight."""
-        _init_http_clients()
+        init_http_clients()
 
         pdf = await create_test_pdf(
             db_session,
@@ -192,11 +184,11 @@ class TestAutoHighlightOpenRouterRateLimit:
                 "app.api.routes.auto_highlight.IndexingService",
             ) as mock_idx_cls,
         ):
-            mock_resolve.return_value = MagicMock(
-                provider="anthropic",
+            mock_resolve.return_value = _make_resolve_result(
+                provider="openrouter",
                 api_key="user-own-key",
                 is_in_house=False,
-                quota_remaining=None,
+                remaining=-1,
             )
 
             mock_llm = MagicMock()

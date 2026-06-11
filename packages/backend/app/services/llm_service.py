@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
 
@@ -12,42 +12,129 @@ from app.schemas.types import ChatMessageDict, HighlightDict
 from app.services.exceptions import LLMRateLimitError, LLMProviderError
 from app.core.config import settings
 
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
-
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-FREE_MODELS = [
-    {
-        "id": "nvidia/nemotron-3-super-120b-a12b:free",
-        "label": "Nemotron 3 Super 120B",
-        "description": "NVIDIA's large model, good general-purpose quality",
-    },
-    {
-        "id": "openai/gpt-oss-120b:free",
-        "label": "GPT-OSS 120B",
-        "description": "OpenAI's open-source 120B model",
-    },
-    {
-        "id": "inclusionai/ring-2.6-1t:free",
-        "label": "Ring 2.6 1T",
-        "description": "InclusionAI's large 1T parameter model",
-    },
-    {
-        "id": "z-ai/glm-4.5-air:free",
-        "label": "GLM 4.5 Air",
-        "description": "Zhipu AI's efficient Air variant",
-    },
-    {
-        "id": "minimax/minimax-m2.5:free",
-        "label": "MiniMax M2.5",
-        "description": "MiniMax's efficient long-context model",
-    },
+
+def _openrouter_model(
+    model_id: str,
+    label: str,
+    description: str,
+    requires_byok: bool | None = None,
+) -> dict[str, str | bool]:
+    if requires_byok is None:
+        requires_byok = not (
+            model_id.endswith(":free") or model_id == "openrouter/owl-alpha"
+        )
+    return {
+        "id": model_id,
+        "label": label,
+        "description": description,
+        "requires_byok": requires_byok,
+    }
+
+
+OPENROUTER_MODELS = [
+    _openrouter_model(
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "Nemotron 3 Super 120B",
+        "NVIDIA's large model, good general-purpose quality",
+    ),
+    _openrouter_model(
+        "openai/gpt-oss-120b:free",
+        "GPT-OSS 120B",
+        "OpenAI's open-source 120B model",
+    ),
+    _openrouter_model(
+        "inclusionai/ring-2.6-1t:free",
+        "Ring 2.6 1T",
+        "InclusionAI's large 1T parameter model",
+    ),
+    _openrouter_model(
+        "z-ai/glm-4.5-air:free",
+        "GLM 4.5 Air",
+        "Zhipu AI's efficient Air variant",
+    ),
+    _openrouter_model(
+        "minimax/minimax-m2.5:free",
+        "MiniMax M2.5",
+        "MiniMax's efficient long-context model",
+    ),
+    _openrouter_model(
+        "anthropic/claude-fable-5",
+        "Claude Fable 5",
+        "Anthropic's Claude Fable model through OpenRouter",
+    ),
+    _openrouter_model(
+        "nex-agi/nex-n2-pro:free",
+        "Nex N2 Pro",
+        "Nex AGI's N2 Pro model",
+    ),
+    _openrouter_model(
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "Nemotron 3 Ultra 550B",
+        "NVIDIA's ultra-scale Nemotron 3 model",
+    ),
+    _openrouter_model(
+        "qwen/qwen3.7-plus",
+        "Qwen3.7 Plus",
+        "Qwen's plus model through OpenRouter",
+    ),
+    _openrouter_model(
+        "minimax/minimax-m3",
+        "MiniMax M3",
+        "MiniMax's M3 model through OpenRouter",
+    ),
+    _openrouter_model(
+        "anthropic/claude-opus-4.8",
+        "Claude Opus 4.8",
+        "Anthropic's Claude Opus model through OpenRouter",
+    ),
+    _openrouter_model(
+        "x-ai/grok-4.3",
+        "Grok 4.3",
+        "xAI's Grok model through OpenRouter",
+    ),
+    _openrouter_model(
+        "openrouter/owl-alpha",
+        "Owl Alpha",
+        "OpenRouter's Owl Alpha model",
+    ),
+    _openrouter_model(
+        "openai/gpt-5.5",
+        "GPT-5.5",
+        "OpenAI's GPT model through OpenRouter",
+    ),
+    _openrouter_model(
+        "deepseek/deepseek-v4-pro",
+        "DeepSeek V4 Pro",
+        "DeepSeek's V4 Pro model through OpenRouter",
+    ),
+    _openrouter_model(
+        "deepseek/deepseek-v4-flash",
+        "DeepSeek V4 Flash",
+        "DeepSeek's V4 Flash model through OpenRouter",
+    ),
+    _openrouter_model(
+        "qwen/qwen3.6-plus",
+        "Qwen3.6 Plus",
+        "Qwen's plus model through OpenRouter",
+    ),
+    _openrouter_model(
+        "moonshotai/kimi-k2.6:free",
+        "Kimi K2.6",
+        "Moonshot AI's Kimi K2.6 model",
+    ),
 ]
 
-DEFAULT_FREE_MODEL = FREE_MODELS[0]["id"]
+FREE_MODELS = [m for m in OPENROUTER_MODELS if not m["requires_byok"]]
+OPENROUTER_MODEL_IDS = {str(m["id"]) for m in OPENROUTER_MODELS}
+OPENROUTER_BYOK_MODEL_IDS = {
+    str(m["id"]) for m in OPENROUTER_MODELS if m["requires_byok"]
+}
+
+DEFAULT_FREE_MODEL = str(FREE_MODELS[0]["id"])
 
 CATEGORY_DEFINITIONS = {
     "findings": "Key results, conclusions, statistical outcomes, novel contributions",
@@ -192,74 +279,6 @@ class LLMService:
             on_response(data)
         return extract_fn(data)
 
-    async def call_glm(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
-        """Call Zhipu AI GLM API and return extracted text content."""
-        return await self._call_provider(
-            url="https://api.z.ai/api/paas/v4/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json_body={
-                "model": "glm-4.7-flash",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.1,
-            },
-            extract_fn=lambda d: d["choices"][0]["message"]["content"],
-            provider_name="glm",
-            timeout_msg="Request timed out. The paper may be too large for this model.",
-        )
-
-    async def call_gemini(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
-        """Call Google Gemini API and return extracted text content."""
-        return await self._call_provider(
-            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-            headers={"x-goog-api-key": api_key},
-            json_body={
-                "system_instruction": {"parts": [{"text": system_prompt}]},
-                "contents": [{"parts": [{"text": user_prompt}]}],
-                "generationConfig": {"temperature": 0.1},
-            },
-            extract_fn=lambda d: d["candidates"][0]["content"]["parts"][0]["text"],
-            provider_name="gemini",
-            timeout_msg="Request timed out. The paper may be too large for this model.",
-        )
-
-    async def call_openai(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
-        """Call OpenAI Chat Completions API and return text content."""
-        return await self._call_provider(
-            url="https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json_body={
-                "model": "gpt-4o-mini",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.2,
-            },
-            extract_fn=lambda d: d["choices"][0]["message"]["content"],
-            provider_name="openai",
-        )
-
-    async def call_anthropic(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
-        """Call Anthropic Messages API and return text content."""
-        return await self._call_provider(
-            url="https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            json_body={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 4096,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_prompt}],
-            },
-            extract_fn=lambda d: d["content"][0]["text"],
-            provider_name="anthropic",
-        )
-
     async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str, model: str = DEFAULT_FREE_MODEL, reasoning_effort: str | None = None) -> str:
         """Call OpenRouter API (OpenAI-compatible) and return text content.
 
@@ -272,8 +291,8 @@ class LLMService:
         blocking the pipeline on slow model responses.
         """
         logger.info(
-            "Calling OpenRouter %s (prompt: %d chars, reasoning: %s, key: ...%s)",
-            model, len(user_prompt), reasoning_effort or "off", api_key[-4:],
+            "Calling OpenRouter %s (prompt: %d chars, reasoning: %s)",
+            model, len(user_prompt), reasoning_effort or "off",
         )
 
         json_body: dict[str, Any] = {
@@ -365,116 +384,6 @@ class LLMService:
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
 
-    async def stream_openai(
-        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
-    ) -> AsyncIterator[str]:
-        """Stream tokens from OpenAI Chat Completions (SSE)."""
-        async for token in self._stream_openai_compatible(
-            url="https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            payload={
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "system", "content": system_prompt}] + messages,
-                "temperature": 0.3,
-                "stream": True,
-            },
-            provider_name="openai",
-        ):
-            yield token
-
-    async def stream_anthropic(
-        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
-    ) -> AsyncIterator[str]:
-        """Stream tokens from Anthropic Messages API (SSE)."""
-        client = self._require_client()
-        async with client.stream(
-            "POST",
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 4096,
-                "system": system_prompt,
-                "messages": messages,
-                "stream": True,
-            },
-        ) as resp:
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                self._handle_http_error(exc, "anthropic")
-            async for line in resp.aiter_lines():
-                if line.startswith("data: "):
-                    try:
-                        event = json.loads(line[6:])
-                        if event.get("type") == "content_block_delta":
-                            text = event.get("delta", {}).get("text", "")
-                            if text:
-                                yield text
-                    except (json.JSONDecodeError, KeyError):
-                        continue
-
-    async def stream_gemini(
-        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
-    ) -> AsyncIterator[str]:
-        """Stream tokens from Gemini (SSE)."""
-        contents = [
-            {
-                "role": m["role"] if m["role"] != "assistant" else "model",
-                "parts": [{"text": m["content"]}],
-            }
-            for m in messages
-        ]
-        client = self._require_client()
-        async with client.stream(
-            "POST",
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
-            headers={"x-goog-api-key": api_key},
-            json={
-                "system_instruction": {"parts": [{"text": system_prompt}]},
-                "contents": contents,
-                "generationConfig": {"temperature": 0.3},
-            },
-        ) as resp:
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                self._handle_http_error(exc, "gemini")
-            async for line in resp.aiter_lines():
-                if line.startswith("data: "):
-                    try:
-                        chunk = json.loads(line[6:])
-                        parts = (
-                            chunk.get("candidates", [{}])[0]
-                            .get("content", {})
-                            .get("parts", [])
-                        )
-                        for part in parts:
-                            if "text" in part and part["text"]:
-                                yield part["text"]
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
-
-    async def stream_glm(
-        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str
-    ) -> AsyncIterator[str]:
-        """Stream tokens from GLM (OpenAI-compatible SSE)."""
-        async for token in self._stream_openai_compatible(
-            url="https://api.z.ai/api/paas/v4/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            payload={
-                "model": "glm-4.7-flash",
-                "messages": [{"role": "system", "content": system_prompt}] + messages,
-                "temperature": 0.3,
-                "stream": True,
-            },
-            provider_name="glm",
-        ):
-            yield token
-
     async def stream_openrouter(
         self, system_prompt: str, messages: list[ChatMessageDict], api_key: str, model: str = DEFAULT_FREE_MODEL
     ) -> AsyncIterator[str]:
@@ -499,15 +408,12 @@ class LLMService:
         provider: str,
         api_key: str,
         model: Optional[str] = None,
-        db: AsyncSession | None = None,
     ) -> list[HighlightDict]:
         """Given pre-filtered passages, pick verbatim highlight-worthy quotes.
 
         Each passage must have: content, page_number, categories (list[str]).
-        Always a single non-streaming call. For OpenRouter, records usage.
+        Always a single non-streaming call.
         """
-        from app.services.openrouter_usage_service import openrouter_usage_service
-
         if not passages:
             return []
 
@@ -559,18 +465,7 @@ CRITICAL:
 --- PASSAGES ---
 {passages_block}"""
 
-        if provider == "openrouter" and db is not None:
-            await openrouter_usage_service.record_and_check(db)
-
-        if provider == "glm":
-            raw = await self.call_glm(system_prompt, user_prompt, api_key)
-        elif provider == "gemini":
-            raw = await self.call_gemini(system_prompt, user_prompt, api_key)
-        elif provider == "openai":
-            raw = await self.call_openai(system_prompt, user_prompt, api_key)
-        elif provider == "anthropic":
-            raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
-        elif provider == "openrouter":
+        if provider == "openrouter":
             reasoning_effort = settings.OPENROUTER_REASONING_EFFORT if settings.OPENROUTER_REASONING_ENABLED else None
             raw = await self.call_openrouter(system_prompt, user_prompt, api_key, model=model or DEFAULT_FREE_MODEL, reasoning_effort=reasoning_effort)
         else:
@@ -618,15 +513,7 @@ CRITICAL:
         )
 
         try:
-            if provider == "glm":
-                raw = await self.call_glm(system_prompt, user_prompt, api_key)
-            elif provider == "gemini":
-                raw = await self.call_gemini(system_prompt, user_prompt, api_key)
-            elif provider == "openai":
-                raw = await self.call_openai(system_prompt, user_prompt, api_key)
-            elif provider == "anthropic":
-                raw = await self.call_anthropic(system_prompt, user_prompt, api_key)
-            elif provider == "openrouter":
+            if provider == "openrouter":
                 reasoning_effort = settings.OPENROUTER_REASONING_EFFORT if settings.OPENROUTER_REASONING_ENABLED else None
                 raw = await self.call_openrouter(
                     system_prompt, user_prompt, api_key,
@@ -641,13 +528,3 @@ CRITICAL:
             return {}
 
         return _parse_queries_json(raw, categories)
-
-
-# Registry mapping provider name → streaming method name on LLMService
-STREAM_PROVIDERS: dict[str, str] = {
-    "openai": "stream_openai",
-    "anthropic": "stream_anthropic",
-    "gemini": "stream_gemini",
-    "glm": "stream_glm",
-    "openrouter": "stream_openrouter",
-}

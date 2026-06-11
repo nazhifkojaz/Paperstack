@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,6 +44,16 @@ class AutoHighlightCacheResponse(BaseModel):
 
 
 class QuotaResponse(BaseModel):
-    free_uses_remaining: int
+    chat_remaining: int
+    chat_total: int
+    explain_paraphrase_remaining: int
+    explain_paraphrase_total: int
+    auto_highlight_quick_remaining: int
+    auto_highlight_quick_total: int
+    auto_highlight_thorough_remaining: int
+    auto_highlight_thorough_total: int
+    reset_at: date
     has_own_key: bool
     providers: list[str]
+    openrouter_key_mode: Literal["app", "byok"] = "app"
+    global_warning: Optional[str] = None

@@ -1,5 +1,4 @@
-import { render, screen } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { render, screen } from '@/test/test-utils'
 import { TopBar } from './TopBar'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -14,11 +13,7 @@ describe('TopBar', () => {
   })
 
   test('renders Paperstack branding as a link to home', () => {
-    render(
-      <BrowserRouter>
-        <TopBar />
-      </BrowserRouter>
-    )
+    render(<TopBar />, { router: true })
 
     const link = screen.getByRole('link', { name: /paperstack/i })
     expect(link).toBeInTheDocument()

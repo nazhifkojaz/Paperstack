@@ -6,12 +6,12 @@ from app.services.api_key_service import ApiKeyService
 from app.services.exceptions import ApiKeyNotFoundError
 
 
-class TestInHousePriority:
-    """Tests for IN_HOUSE_PRIORITY configuration."""
+class TestProviderPriority:
+    """Tests for _PROVIDER_PRIORITY configuration."""
 
-    def test_openrouter_is_only_in_house_provider(self):
+    def test_openrouter_is_only_provider(self):
         svc = ApiKeyService()
-        assert svc.IN_HOUSE_PRIORITY == ["openrouter"]
+        assert svc._PROVIDER_PRIORITY == ["openrouter"]
 
 
 class TestResolveApiKeyOpenRouter:
@@ -37,43 +37,160 @@ class TestResolveApiKeyOpenRouter:
         return db
 
     @pytest.mark.asyncio
-    async def test_user_own_key_takes_priority_over_openrouter(self, svc, mock_user, mock_db):
-        """When user has their own key, it should be returned instead of OpenRouter."""
+    async def test_app_mode_uses_in_house_key_even_when_user_key_exists(
+        self, svc, mock_user, mock_db
+    ):
+        """App-key mode does not spend the user's OpenRouter key."""
         from app.core.security import encrypt_token
 
-        # Simulate a user-stored API key
         mock_key_row = MagicMock()
-        mock_key_row.provider = "openai"
+        mock_key_row.provider = "openrouter"
         mock_key_row.encrypted_key = encrypt_token("user-own-key")
         mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = [mock_key_row]
+        mock_result.scalar_one_or_none.return_value = mock_key_row
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         with patch("app.services.api_key_service.settings") as mock_settings:
             mock_settings.OPENROUTER_API_KEY = "openrouter-key"
 
-            result = await svc._resolve_api_key(
-                mock_user, mock_db,
-                quota_field="chat_uses_remaining",
-                provider_priority=["openai", "anthropic", "gemini", "glm"],
+            result = await svc.resolve_for_chat(mock_user, mock_db)
+
+        assert result.provider == "openrouter"
+        assert result.api_key == "openrouter-key"
+        assert result.is_in_house is True
+
+    @pytest.mark.asyncio
+    async def test_byok_mode_uses_user_openrouter_key(
+        self, svc, mock_user, mock_db
+    ):
+        """BYOK mode uses the user's OpenRouter key for all models."""
+        from app.core.security import encrypt_token
+
+        mock_key_row = MagicMock()
+        mock_key_row.provider = "openrouter"
+        mock_key_row.encrypted_key = encrypt_token("user-own-key")
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_key_row
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        result = await svc.resolve_for_chat(
+            mock_user,
+            mock_db,
+            preferred_model="openrouter/owl-alpha",
+            openrouter_key_mode="byok",
+        )
+
+        assert result.provider == "openrouter"
+        assert result.api_key == "user-own-key"
+        assert result.is_in_house is False
+        assert result.model == "openrouter/owl-alpha"
+
+    @pytest.mark.asyncio
+    async def test_free_preferred_model_uses_in_house_key(self, svc, mock_user, mock_db):
+        """Free/OpenRouter-owned model preferences do not require BYOK."""
+        with patch("app.services.api_key_service.settings") as mock_settings:
+            mock_settings.OPENROUTER_API_KEY = "openrouter-key"
+
+            result = await svc.resolve_for_chat(
+                mock_user,
+                mock_db,
+                preferred_model="openrouter/owl-alpha",
             )
 
-        assert result.provider == "openai"
+        assert result.provider == "openrouter"
+        assert result.api_key == "openrouter-key"
+        assert result.is_in_house is True
+        assert result.model == "openrouter/owl-alpha"
+
+    @pytest.mark.asyncio
+    async def test_byok_preferred_model_uses_user_openrouter_key(
+        self, svc, mock_user, mock_db
+    ):
+        """BYOK-only model preferences use the user's OpenRouter key."""
+        from app.core.security import encrypt_token
+
+        mock_key_row = MagicMock()
+        mock_key_row.provider = "openrouter"
+        mock_key_row.encrypted_key = encrypt_token("user-openrouter-key")
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_key_row
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        result = await svc.resolve_for_chat(
+            mock_user,
+            mock_db,
+            preferred_model="anthropic/claude-fable-5",
+            openrouter_key_mode="byok",
+        )
+
+        assert result.provider == "openrouter"
+        assert result.api_key == "user-openrouter-key"
         assert result.is_in_house is False
+        assert result.model == "anthropic/claude-fable-5"
+
+    @pytest.mark.asyncio
+    async def test_byok_preferred_model_without_user_key_raises(
+        self, svc, mock_user, mock_db
+    ):
+        """BYOK-only model preferences are not allowed in app-key mode."""
+        with pytest.raises(ApiKeyNotFoundError):
+            await svc.resolve_for_chat(
+                mock_user,
+                mock_db,
+                preferred_model="anthropic/claude-fable-5",
+            )
+
+    @pytest.mark.asyncio
+    async def test_byok_mode_without_user_key_raises(
+        self, svc, mock_user, mock_db
+    ):
+        """BYOK mode requires a stored OpenRouter key."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with pytest.raises(ApiKeyNotFoundError):
+            await svc.resolve_for_chat(
+                mock_user,
+                mock_db,
+                openrouter_key_mode="byok",
+            )
 
     @pytest.mark.asyncio
     async def test_no_openrouter_key_raises_not_found(self, svc, mock_user, mock_db):
         """When OPENROUTER_API_KEY is not set, should raise ApiKeyNotFoundError."""
-        mock_quota = MagicMock()
-        mock_quota.chat_uses_remaining = 10
-
-        with patch.object(svc, "_get_or_create_quota", new=AsyncMock(return_value=mock_quota)), \
-             patch("app.services.api_key_service.settings") as mock_settings:
+        with patch("app.services.api_key_service.settings") as mock_settings:
             mock_settings.OPENROUTER_API_KEY = None
 
             with pytest.raises(ApiKeyNotFoundError):
-                await svc._resolve_api_key(
-                    mock_user, mock_db,
-                    quota_field="chat_uses_remaining",
-                    provider_priority=["openrouter"],
-                )
+                await svc.resolve_for_chat(mock_user, mock_db)
+
+    @pytest.mark.asyncio
+    async def test_embedding_key_not_returned_in_app_mode(self, svc, mock_user, mock_db):
+        """Stored keys are not used for embeddings unless BYOK mode is active."""
+        mode_result = MagicMock()
+        mode_result.scalar_one_or_none.return_value = "app"
+        mock_db.execute = AsyncMock(return_value=mode_result)
+
+        result = await svc.get_user_openrouter_key_for_embeddings(mock_user, mock_db)
+
+        assert result is None
+        mock_db.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_embedding_key_returned_in_byok_mode(self, svc, mock_user, mock_db):
+        """BYOK mode allows embeddings to use the user's stored OpenRouter key."""
+        from app.core.security import encrypt_token
+
+        mode_result = MagicMock()
+        mode_result.scalar_one_or_none.return_value = "byok"
+        mock_key_row = MagicMock()
+        mock_key_row.encrypted_key = encrypt_token("user-embedding-key")
+        key_result = MagicMock()
+        key_result.scalar_one_or_none.return_value = mock_key_row
+        mock_db.execute = AsyncMock(side_effect=[mode_result, key_result])
+
+        result = await svc.get_user_openrouter_key_for_embeddings(mock_user, mock_db)
+
+        assert result == "user-embedding-key"
+        assert mock_db.execute.await_count == 2

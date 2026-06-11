@@ -43,6 +43,14 @@ function getAnnotationPreview(annotation: Annotation): string {
   return FALLBACK_LABELS[annotation.type]
 }
 
+function getAnnotationPosition(ann: Annotation): { y: number; x: number } {
+  if (!ann.rects || ann.rects.length === 0) return { y: 1, x: 1 }
+  const minY = Math.min(...ann.rects.map(r => r.y))
+  const rectsInRow = ann.rects.filter(r => r.y === minY)
+  const minX = rectsInRow.length > 0 ? Math.min(...rectsInRow.map(r => r.x)) : Math.min(...ann.rects.map(r => r.x))
+  return { y: minY, x: minX }
+}
+
 function groupAnnotationsByPage(annotations: Annotation[]): AnnotationGroup[] {
   const grouped = new Map<number, Annotation[]>()
 
@@ -59,7 +67,11 @@ function groupAnnotationsByPage(annotations: Annotation[]): AnnotationGroup[] {
       key: `page-${page}`,
       label: `Page ${page}`,
       count: annotations.length,
-      annotations: annotations.sort((a, b) => a.id.localeCompare(b.id)),
+      annotations: annotations.sort((a, b) => {
+        const pa = getAnnotationPosition(a)
+        const pb = getAnnotationPosition(b)
+        return pa.y !== pb.y ? pa.y - pb.y : pa.x - pb.x
+      }),
     }))
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
 }
@@ -83,7 +95,12 @@ function groupAnnotationsByColor(annotations: Annotation[], labels: Record<strin
       label: labels[color] || color,
       color,
       count: annotations.length,
-      annotations: annotations.sort((a, b) => a.id.localeCompare(b.id)),
+      annotations: annotations.sort((a, b) => {
+        if (a.page_number !== b.page_number) return a.page_number - b.page_number
+        const pa = getAnnotationPosition(a)
+        const pb = getAnnotationPosition(b)
+        return pa.y !== pb.y ? pa.y - pb.y : pa.x - pb.x
+      }),
     }))
     .sort((a, b) => {
       const ai = COLOR_ORDER.indexOf(a.color)

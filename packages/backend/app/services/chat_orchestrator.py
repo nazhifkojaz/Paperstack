@@ -25,7 +25,6 @@ from app.services.exceptions import (
     IndexInProgressError,
     IndexingError,
     LLMRateLimitError,
-    OpenRouterQuotaError,
 )
 from app.services.indexing_service import IndexingService, get_indexing_service
 from app.services.llm_service import LLMService
@@ -124,7 +123,7 @@ class ChatOrchestrator:
             await db.commit()
         except IndexInProgressError:
             raise
-        except (EmbeddingError, OpenRouterQuotaError, IndexingError):
+        except (EmbeddingError, IndexingError):
             await db.commit()
             raise
 

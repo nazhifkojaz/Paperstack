@@ -72,7 +72,8 @@ class ExplainResponse(BaseModel):
     explanation: str
     note_content: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
-    explain_uses_remaining: int
+    explain_paraphrase_remaining: int
+    global_warning: Optional[str] = None
 
 
 ParaphraseLevel = Literal["same", "simpler", "plain"]
@@ -86,4 +87,5 @@ class ParaphraseResponse(BaseModel):
     paraphrase: str
     note_content: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
-    explain_uses_remaining: int
+    explain_paraphrase_remaining: int
+    global_warning: Optional[str] = None

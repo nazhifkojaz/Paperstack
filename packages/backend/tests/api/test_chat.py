@@ -11,7 +11,7 @@ from tests.fixtures import (
     create_test_collection,
 )
 
-TEST_EMBEDDING = [0.01] * 1024
+from tests.helpers import make_resolve_result as _resolve_result, init_http_clients, override_get_llm_http_client, override_get_embedding_http_client, TEST_EMBEDDING
 
 
 class TestExplainNoteHelpers:
@@ -42,7 +42,7 @@ class TestExplainAnnotation:
     async def test_explain_rejects_annotation_from_different_pdf(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        _init_http_clients()
+        init_http_clients()
         pdf = await create_test_pdf(
             db_session,
             user_id=test_user.id,
@@ -95,7 +95,7 @@ class TestParaphraseAnnotation:
     async def test_paraphrase_saves_metadata_and_preserves_user_note(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        _init_http_clients()
+        init_http_clients()
         from sqlalchemy import select
         from app.db.models import Annotation
 
@@ -137,10 +137,10 @@ class TestParaphraseAnnotation:
                 return_value=paraphrase_service,
             ),
         ):
-            mock_resolve.return_value = MagicMock(
-                provider="gemini",
+            mock_resolve.return_value = _resolve_result(
+                provider="openrouter",
                 api_key="fake-key",
-                model="gemini-test",
+                model="openrouter/test-model",
             )
 
             response = await client.post(
@@ -174,13 +174,13 @@ class TestParaphraseAnnotation:
         paraphrase_service.paraphrase_with_provider.assert_awaited_once()
         assert (
             paraphrase_service.paraphrase_with_provider.call_args.kwargs["model"]
-            == "gemini-test"
+            == "openrouter/test-model"
         )
 
     async def test_paraphrase_rejects_annotation_from_different_pdf(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        _init_http_clients()
+        init_http_clients()
         pdf = await create_test_pdf(
             db_session,
             user_id=test_user.id,
@@ -227,40 +227,13 @@ class TestParaphraseAnnotation:
         mock_resolve.assert_not_called()
 
 
-def _init_http_clients():
-    """Initialize HTTP clients on app state for tests that need streaming."""
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    if not hasattr(app.state, "llm_http_client"):
-        HTTPClientState.init_http_clients(app)
-
-
-async def _override_get_llm_http_client():
-    """Override LLM HTTP client dependency for tests."""
-    _init_http_clients()
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    yield HTTPClientState.get_llm_client(app)
-
-
-async def _override_get_embedding_http_client():
-    """Override embedding HTTP client dependency for tests."""
-    _init_http_clients()
-    from app.main import app
-    from app.core.http_client import HTTPClientState
-
-    yield HTTPClientState.get_embedding_client(app)
-
-
 def _setup_stream_mocks():
     """Set up common mocks for streaming tests (HTTP client overrides)."""
-    _init_http_clients()
+    init_http_clients()
     from app.api import deps
 
-    deps.get_llm_http_client = _override_get_llm_http_client
-    deps.get_embedding_http_client = _override_get_embedding_http_client
+    deps.get_llm_http_client = override_get_llm_http_client
+    deps.get_embedding_http_client = override_get_embedding_http_client
 
 
 def _make_stream_mocks(*, stream_reply=None, embed_side_effect=None):
@@ -736,11 +709,10 @@ class TestStreamMessage:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
-                provider="gemini",
+            mock_resolve.return_value = _resolve_result(
+                provider="openrouter",
                 api_key="fake-key",
                 is_in_house=True,
-                quota_remaining=10,
             )
             from contextlib import ExitStack
 
@@ -821,12 +793,11 @@ class TestStreamMessage:
                 new_callable=AsyncMock,
             ) as mock_search_pdf,
         ):
-            mock_resolve.return_value = MagicMock(
-                provider="gemini",
+            mock_resolve.return_value = _resolve_result(
+                provider="openrouter",
                 api_key="fake-key",
                 model=None,
                 is_in_house=True,
-                quota_remaining=10,
             )
             mock_search_pdf.return_value = [chunk]
 
@@ -900,11 +871,10 @@ class TestStreamMessage:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
+            mock_resolve.return_value = _resolve_result(
                 provider="openrouter",
                 api_key="openrouter-key",
                 is_in_house=True,
-                quota_remaining=10,
             )
             from contextlib import ExitStack
 
@@ -944,11 +914,10 @@ class TestStreamMessage:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
-                provider="openai",
+            mock_resolve.return_value = _resolve_result(
+                provider="openrouter",
                 api_key="user-own-key",
                 is_in_house=False,
-                quota_remaining=None,
             )
             from contextlib import ExitStack
 
@@ -977,47 +946,6 @@ class TestStreamMessageOpenRouterQuotaGating:
             headers=auth_headers,
         )
         return conv_resp.json()["id"]
-
-    async def test_stream_message_quota_exceeded_returns_503(
-        self, client: AsyncClient, auth_headers, db_session, test_user
-    ):
-        """When OpenRouter quota is exceeded, stream_message returns 503."""
-        _setup_stream_mocks()
-        from app.services.exceptions import OpenRouterQuotaError
-
-        conv_id = await self._setup_conv(client, auth_headers, db_session, test_user)
-
-        mocks = _make_stream_mocks(
-            embed_side_effect=OpenRouterQuotaError(limit=1000, count_today=900)
-        )
-
-        with patch(
-            "app.api.routes.chat.resolve_api_key_with_quota",
-            new_callable=AsyncMock,
-        ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
-                provider="openrouter",
-                api_key="openrouter-key",
-                is_in_house=True,
-                quota_remaining=10,
-            )
-            with (
-                patch(
-                    "app.services.indexing_service.IndexingService",
-                    return_value=mocks["indexing"],
-                ),
-                patch(
-                    "app.api.routes.chat.EmbeddingService",
-                    return_value=mocks["embedding"],
-                ),
-            ):
-                response = await client.post(
-                    f"/v1/chat/conversations/{conv_id}/stream",
-                    json={"content": "What is this paper about?"},
-                    headers=auth_headers,
-                )
-                assert response.status_code == 503
-                assert "OpenRouter free-tier usage" in response.json()["detail"]
 
     async def test_stream_message_llm_gate_returns_503(
         self, client: AsyncClient, auth_headers, db_session, test_user
@@ -1071,11 +999,10 @@ class TestStreamMessageOpenRouterQuotaGating:
             "app.api.routes.chat.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.return_value = MagicMock(
-                provider="openai",
+            mock_resolve.return_value = _resolve_result(
+                provider="openrouter",
                 api_key="user-own-key",
                 is_in_house=False,
-                quota_remaining=None,
             )
             from contextlib import ExitStack
 

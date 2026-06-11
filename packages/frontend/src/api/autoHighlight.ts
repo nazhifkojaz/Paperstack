@@ -30,13 +30,23 @@ export interface AutoHighlightCacheEntry {
 }
 
 interface QuotaInfo {
-    free_uses_remaining: number;
+    chat_remaining: number;
+    chat_total: number;
+    explain_paraphrase_remaining: number;
+    explain_paraphrase_total: number;
+    auto_highlight_quick_remaining: number;
+    auto_highlight_quick_total: number;
+    auto_highlight_thorough_remaining: number;
+    auto_highlight_thorough_total: number;
+    reset_at: string;
     has_own_key: boolean;
     providers: string[];
+    openrouter_key_mode: 'app' | 'byok';
+    global_warning?: string | null;
 }
 
 interface ApiKeyCreate {
-    provider: 'glm' | 'gemini';
+    provider: 'openrouter';
     api_key: string;
 }
 
@@ -46,10 +56,11 @@ interface ApiKeyResponse {
     created_at: string;
 }
 
-export const useAutoHighlightQuota = () => {
+export const useAutoHighlightQuota = (enabled = true) => {
     return useQuery({
         queryKey: ['auto-highlight-quota'],
         queryFn: (): Promise<QuotaInfo> => apiFetch('/auto-highlight/quota'),
+        enabled,
     });
 };
 
