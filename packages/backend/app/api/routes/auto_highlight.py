@@ -408,9 +408,16 @@ async def _mark_cache_failed(cache_id: uuid.UUID, error_msg: str) -> None:
             if cache_row:
                 if cache_row.status == "cancelled":
                     return
+                if cache_row.annotation_set_id:
+                    await db.execute(
+                        delete(AnnotationSet).where(
+                            AnnotationSet.id == cache_row.annotation_set_id
+                        )
+                    )
                 cache_row.status = "failed"
                 cache_row.progress_pct = 100
                 cache_row.llm_response = {"error": error_msg}
+                cache_row.annotation_set_id = None
                 await db.commit()
                 logger.info(
                     "Auto-highlight failed: cache_id=%s error=%s",
@@ -1348,6 +1355,12 @@ async def analyze_paper(
     )
 
     if pending_cache:
+        if pending_cache.annotation_set_id:
+            await db.execute(
+                delete(AnnotationSet).where(
+                    AnnotationSet.id == pending_cache.annotation_set_id
+                )
+            )
         pending_cache.status = "pending"
         pending_cache.provider = provider
         pending_cache.llm_response = None
