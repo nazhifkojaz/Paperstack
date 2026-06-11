@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 
 class ApiKeyCreate(BaseModel):
-    provider: str = Field(..., pattern=r"^(openai|anthropic|gemini|glm)$")
+    provider: str = Field(..., pattern=r"^openrouter$")
     api_key: str = Field(..., min_length=1)
 
 

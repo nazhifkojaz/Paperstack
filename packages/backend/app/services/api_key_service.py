@@ -10,20 +10,23 @@ are responsible for translating to appropriate HTTP status codes.
 import logging
 from dataclasses import dataclass
 from typing import Literal
+from uuid import UUID
 
-from sqlalchemy import case, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import decrypt_token
 from app.db.models import User, UserApiKey
 from app.services.exceptions import ApiKeyNotFoundError
+from app.services.llm_service import OPENROUTER_BYOK_MODEL_IDS
 
 
 logger = logging.getLogger(__name__)
 
 
-Provider = Literal["openai", "anthropic", "openrouter"]  # gemini/glm removed - no BYOK users
+Provider = Literal["openrouter"]
+OpenRouterKeyMode = Literal["app", "byok"]
 
 
 @dataclass
@@ -31,10 +34,10 @@ class ApiKeyResolution:
     """Result of API key resolution.
 
     Attributes:
-        provider: The LLM provider ('openai', 'anthropic', 'gemini', 'glm', 'openrouter')
+        provider: The LLM provider ('openrouter')
         api_key: The decrypted API key
         is_in_house: True if using in-house key (quota applies), False if user's own key
-        model: Specific model ID to use (set when user forces a free-tier model)
+        model: Specific OpenRouter model ID selected for the request
     """
     provider: str
     api_key: str
@@ -46,9 +49,9 @@ class ApiKeyService:
     """Service for resolving API keys."""
 
     # Provider priorities for BYOK user keys
-    AUTO_HIGHLIGHT_PRIORITY: list[Provider] = ["openai", "anthropic"]
-    CHAT_PRIORITY: list[Provider] = ["openai", "anthropic"]
-    EXPLAIN_PRIORITY: list[Provider] = ["openai", "anthropic"]
+    AUTO_HIGHLIGHT_PRIORITY: list[Provider] = ["openrouter"]
+    CHAT_PRIORITY: list[Provider] = ["openrouter"]
+    EXPLAIN_PRIORITY: list[Provider] = ["openrouter"]
 
     # In-house provider — only OpenRouter free tier
     IN_HOUSE_PRIORITY: list[Provider] = ["openrouter"]
@@ -57,14 +60,16 @@ class ApiKeyService:
         self,
         user: User,
         db: AsyncSession,
-        force_free_model: str | None = None,
+        preferred_model: str | None = None,
+        openrouter_key_mode: OpenRouterKeyMode = "app",
     ) -> ApiKeyResolution:
         """Resolve API key for chat operations.
 
         Args:
             user: The authenticated user
             db: Database session
-            force_free_model: If set, skip BYOK keys and force OpenRouter with this model
+            preferred_model: OpenRouter model selected by the user, if any
+            openrouter_key_mode: Whether to use the app key or user's BYOK key
 
         Returns:
             ApiKeyResolution with provider, key, and optional model
@@ -76,7 +81,8 @@ class ApiKeyService:
             user=user,
             db=db,
             provider_priority=self.CHAT_PRIORITY,
-            force_free_model=force_free_model,
+            preferred_model=preferred_model,
+            openrouter_key_mode=openrouter_key_mode,
             feature_name="chat",
         )
 
@@ -84,14 +90,16 @@ class ApiKeyService:
         self,
         user: User,
         db: AsyncSession,
-        force_free_model: str | None = None,
+        preferred_model: str | None = None,
+        openrouter_key_mode: OpenRouterKeyMode = "app",
     ) -> ApiKeyResolution:
         """Resolve API key for explain operations.
 
         Args:
             user: The authenticated user
             db: Database session
-            force_free_model: If set, skip BYOK keys and force OpenRouter with this model
+            preferred_model: OpenRouter model selected by the user, if any
+            openrouter_key_mode: Whether to use the app key or user's BYOK key
 
         Returns:
             ApiKeyResolution with provider, key, and optional model
@@ -103,7 +111,8 @@ class ApiKeyService:
             user=user,
             db=db,
             provider_priority=self.EXPLAIN_PRIORITY,
-            force_free_model=force_free_model,
+            preferred_model=preferred_model,
+            openrouter_key_mode=openrouter_key_mode,
             feature_name="explain",
         )
 
@@ -111,14 +120,16 @@ class ApiKeyService:
         self,
         user: User,
         db: AsyncSession,
-        force_free_model: str | None = None,
+        preferred_model: str | None = None,
+        openrouter_key_mode: OpenRouterKeyMode = "app",
     ) -> ApiKeyResolution:
         """Resolve API key for auto-highlight operations.
 
         Args:
             user: The authenticated user
             db: Database session
-            force_free_model: If set, skip BYOK keys and force OpenRouter with this model
+            preferred_model: OpenRouter model selected by the user, if any
+            openrouter_key_mode: Whether to use the app key or user's BYOK key
 
         Returns:
             ApiKeyResolution with provider, key, and optional model
@@ -130,16 +141,41 @@ class ApiKeyService:
             user=user,
             db=db,
             provider_priority=self.AUTO_HIGHLIGHT_PRIORITY,
-            force_free_model=force_free_model,
+            preferred_model=preferred_model,
+            openrouter_key_mode=openrouter_key_mode,
             feature_name="auto highlight",
         )
+
+    async def get_user_openrouter_key(
+        self,
+        user: User,
+        db: AsyncSession,
+    ) -> str | None:
+        return await self.get_user_openrouter_key_by_id(user.id, db)
+
+    async def get_user_openrouter_key_by_id(
+        self,
+        user_id: UUID,
+        db: AsyncSession,
+    ) -> str | None:
+        result = await db.execute(
+            select(UserApiKey).where(
+                UserApiKey.user_id == user_id,
+                UserApiKey.provider == "openrouter",
+            )
+        )
+        key_row = result.scalar_one_or_none()
+        if key_row is None:
+            return None
+        return decrypt_token(key_row.encrypted_key)
 
     async def _resolve_api_key(
         self,
         user: User,
         db: AsyncSession,
         provider_priority: list[Provider],
-        force_free_model: str | None = None,
+        preferred_model: str | None = None,
+        openrouter_key_mode: OpenRouterKeyMode = "app",
         feature_name: str = "general",
     ) -> ApiKeyResolution:
         """Internal method to resolve API key with given parameters.
@@ -148,7 +184,8 @@ class ApiKeyService:
             user: The authenticated user
             db: Database session
             provider_priority: Order to check user's stored keys
-            force_free_model: If set, skip BYOK keys and force OpenRouter with this model
+            preferred_model: OpenRouter model selected by the user, if any
+            openrouter_key_mode: Whether to use the app key or user's BYOK key
 
         Returns:
             ApiKeyResolution with provider, key, and optional model
@@ -156,52 +193,43 @@ class ApiKeyService:
         Raises:
             ApiKeyNotFoundError: If no provider is available
         """
-        # 0. If user explicitly chose a free model, skip BYOK and go straight to in-house
-        if force_free_model:
-            logger.info(
-                "User %s forced free-tier model %s for %s",
-                user.id, force_free_model, feature_name,
-            )
-            api_key = getattr(settings, "OPENROUTER_API_KEY")
-            if not api_key:
-                raise ApiKeyNotFoundError("openrouter")
-
-            return ApiKeyResolution(
-                provider="openrouter",
-                api_key=api_key,
-                is_in_house=True,
-                model=force_free_model,
-            )
-
-        # 1. Check user's own keys in priority order
-        result = await db.execute(
-            select(UserApiKey)
-            .where(UserApiKey.user_id == user.id)
-            .order_by(
-                case(
-                    *[(UserApiKey.provider == p, i) for i, p in enumerate(provider_priority)],
-                    else_=len(provider_priority),
+        if openrouter_key_mode == "byok":
+            user_key = await self.get_user_openrouter_key(user, db)
+            if not user_key:
+                logger.info(
+                    "User %s selected BYOK mode for %s without an OpenRouter key",
+                    user.id,
+                    feature_name,
                 )
-            )
-        )
-        user_keys = result.scalars().all()
-
-        for key_row in user_keys:
-            decrypted = decrypt_token(key_row.encrypted_key)
+                raise ApiKeyNotFoundError("openrouter")
             logger.info(
-                "Using user-provided %s key (ending ...%s) for user %s",
-                key_row.provider,
-                decrypted[-4:],
+                "Using user-provided OpenRouter key (ending ...%s) for user %s",
+                user_key[-4:],
                 user.id,
             )
             return ApiKeyResolution(
-                provider=key_row.provider,
-                api_key=decrypted,
+                provider="openrouter",
+                api_key=user_key,
                 is_in_house=False,
+                model=preferred_model,
             )
 
-        # 2. No user keys - use in-house key. Quotas are enforced by QuotaService.
-        logger.info("No user API keys found for user %s, using in-house key", user.id)
+        if preferred_model in OPENROUTER_BYOK_MODEL_IDS:
+            logger.info(
+                "User %s selected BYOK-only OpenRouter model %s in app-key mode",
+                user.id,
+                preferred_model,
+            )
+            raise ApiKeyNotFoundError("openrouter")
+
+        # App-key mode only allows app-sponsored OpenRouter models.
+        if preferred_model:
+            logger.info(
+                "User %s selected in-house OpenRouter model %s for %s",
+                user.id, preferred_model, feature_name,
+            )
+        else:
+            logger.info("Using in-house OpenRouter key for user %s", user.id)
 
         for provider in self.IN_HOUSE_PRIORITY:
             api_key = getattr(settings, f"{provider.upper()}_API_KEY")
@@ -215,9 +243,9 @@ class ApiKeyService:
                     provider=provider,
                     api_key=api_key,
                     is_in_house=True,
+                    model=preferred_model,
                 )
 
-        # 3. No provider available
         raise ApiKeyNotFoundError(feature_name)
 
 
