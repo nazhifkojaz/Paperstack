@@ -80,6 +80,8 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
         } else if (statusData.status === 'failed') {
             notifiedRef.current = activeCacheId;
             toast.error(statusData.error_message ?? 'Analysis failed. Please try again.');
+            queryClient.invalidateQueries({ queryKey: ['annotation_sets', pdfId] });
+            queryClient.invalidateQueries({ queryKey: ['auto-highlight-cache', pdfId] });
         } else if (statusData.status === 'cancelled') {
             notifiedRef.current = activeCacheId;
             toast('Analysis cancelled.');
