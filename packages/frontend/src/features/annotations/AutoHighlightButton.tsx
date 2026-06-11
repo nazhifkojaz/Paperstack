@@ -32,9 +32,6 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
     const thoroughRemaining = quota?.auto_highlight_thorough_remaining ?? 0;
     const usingOwnKey = quota?.has_own_key && quota.openrouter_key_mode === 'byok';
     const canAnalyze = usingOwnKey || quickRemaining > 0 || thoroughRemaining > 0;
-    const providerLabels = quota?.providers
-        .map((provider) => (provider === 'openrouter' ? 'OpenRouter' : provider))
-        .join(', ');
 
     // Poll for background analysis status
     const { data: statusData } = useAnalysisStatus(activeCacheId);
@@ -157,7 +154,7 @@ export const AutoHighlightButton = ({ pdfId }: AutoHighlightButtonProps) => {
             {quota && (
                 <div className="mt-1.5 text-xs text-muted-foreground text-center">
                     {usingOwnKey ? (
-                        <span>Using your {providerLabels} key</span>
+                        <span>Using your OpenRouter key</span>
                     ) : quickRemaining > 0 || thoroughRemaining > 0 ? (
                         <span>
                             {quickRemaining} quick / {thoroughRemaining} thorough remaining today

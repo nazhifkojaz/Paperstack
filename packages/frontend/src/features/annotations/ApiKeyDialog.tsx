@@ -12,39 +12,34 @@ interface Props {
     onOpenChange: (open: boolean) => void;
 }
 
-const PROVIDERS = [
-    { id: 'openrouter' as const, label: 'OpenRouter', docsUrl: 'https://openrouter.ai/settings/keys' },
-];
-
 export const ApiKeyDialog = ({ open, onOpenChange }: Props) => {
     const { data: quota } = useAutoHighlightQuota();
     const createKey = useCreateApiKey();
     const deleteKey = useDeleteApiKey();
-    const [inputs, setInputs] = useState<Record<string, string>>({});
+    const [keyInput, setKeyInput] = useState('');
 
-    const handleSave = async (provider: 'openrouter') => {
-        const key = inputs[provider];
-        if (!key?.trim()) return;
+    const handleSave = async () => {
+        if (!keyInput.trim()) return;
 
         try {
-            await createKey.mutateAsync({ provider, api_key: key.trim() });
-            setInputs(prev => ({ ...prev, [provider]: '' }));
+            await createKey.mutateAsync({ provider: 'openrouter', api_key: keyInput.trim() });
+            setKeyInput('');
             toast.success('OpenRouter API key saved');
         } catch {
             toast.error('Failed to save API key');
         }
     };
 
-    const handleDelete = async (provider: string) => {
+    const handleDelete = async () => {
         try {
-            await deleteKey.mutateAsync(provider);
+            await deleteKey.mutateAsync('openrouter');
             toast.success('OpenRouter API key removed');
         } catch {
             toast.error('Failed to remove API key');
         }
     };
 
-    const hasKey = (provider: string) => quota?.providers.includes(provider);
+    const hasKey = quota?.providers.includes('openrouter') ?? false;
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -57,55 +52,51 @@ export const ApiKeyDialog = ({ open, onOpenChange }: Props) => {
                 </DialogHeader>
 
                 <div className="flex flex-col gap-4">
-                    {PROVIDERS.map(provider => (
-                        <div key={provider.id} className="space-y-2">
-                            <div className="flex items-center justify-between">
-                                <label className="text-sm font-medium">{provider.label}</label>
-                                <a
-                                    href={provider.docsUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs text-blue-400 hover:underline"
-                                >
-                                    Get API key
-                                </a>
-                            </div>
-
-                            {hasKey(provider.id) ? (
-                                <div className="flex items-center gap-2">
-                                    <span className="text-sm text-muted-foreground flex-1">
-                                        Key configured
-                                    </span>
-                                    <Button
-                                        variant="destructive"
-                                        size="sm"
-                                        onClick={() => handleDelete(provider.id)}
-                                        disabled={deleteKey.isPending}
-                                    >
-                                        Remove
-                                    </Button>
-                                </div>
-                            ) : (
-                                <div className="flex gap-2">
-                                    <Input
-                                        type="password"
-                                        placeholder="Enter API key..."
-                                        value={inputs[provider.id] || ''}
-                                        onChange={e => setInputs(prev => ({
-                                            ...prev, [provider.id]: e.target.value,
-                                        }))}
-                                    />
-                                    <Button
-                                        size="sm"
-                                        onClick={() => handleSave(provider.id)}
-                                        disabled={!inputs[provider.id]?.trim() || createKey.isPending}
-                                    >
-                                        Save
-                                    </Button>
-                                </div>
-                            )}
+                    <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                            <label className="text-sm font-medium">OpenRouter</label>
+                            <a
+                                href="https://openrouter.ai/settings/keys"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-blue-400 hover:underline"
+                            >
+                                Get API key
+                            </a>
                         </div>
-                    ))}
+
+                        {hasKey ? (
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm text-muted-foreground flex-1">
+                                    Key configured
+                                </span>
+                                <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={handleDelete}
+                                    disabled={deleteKey.isPending}
+                                >
+                                    Remove
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="flex gap-2">
+                                <Input
+                                    type="password"
+                                    placeholder="Enter API key..."
+                                    value={keyInput}
+                                    onChange={e => setKeyInput(e.target.value)}
+                                />
+                                <Button
+                                    size="sm"
+                                    onClick={handleSave}
+                                    disabled={!keyInput.trim() || createKey.isPending}
+                                >
+                                    Save
+                                </Button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </DialogContent>
         </Dialog>

@@ -187,12 +187,12 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
 
     const handleDeleteOpenRouterKey = async () => {
         try {
+            await deleteKey.mutateAsync('openrouter')
             if (preferences.openrouter_key_mode === 'byok') {
                 const { update, next } = buildAppModeUpdate()
                 await updateLLMPreferences(update)
                 setPreferences(next)
             }
-            await deleteKey.mutateAsync('openrouter')
             toast.success('OpenRouter API key removed')
         } catch {
             toast.error('Failed to remove OpenRouter API key')
