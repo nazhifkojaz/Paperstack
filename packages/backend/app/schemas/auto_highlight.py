@@ -51,4 +51,5 @@ class QuotaResponse(BaseModel):
     reset_at: date
     has_own_key: bool
     providers: list[str]
+    openrouter_key_mode: Literal["app", "byok"] = "app"
     global_warning: Optional[str] = None

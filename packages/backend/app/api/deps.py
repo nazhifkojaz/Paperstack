@@ -103,15 +103,22 @@ async def resolve_api_key_with_quota(
 
     pref_column = _PREFERENCE_MAP[feature]
     prefs_result = await db.execute(
-        select(getattr(UserLLMPreferences, pref_column)).where(
+        select(UserLLMPreferences).where(
             UserLLMPreferences.user_id == user.id
         )
     )
-    preferred_model = prefs_result.scalar_one_or_none()
+    prefs = prefs_result.scalar_one_or_none()
+    preferred_model = getattr(prefs, pref_column) if prefs else None
+    openrouter_key_mode = prefs.openrouter_key_mode if prefs else "app"
 
     resolve_fn = getattr(api_key_service, _RESOLVER_MAP[feature])
     try:
-        resolution = await resolve_fn(user, db, force_free_model=preferred_model)
+        resolution = await resolve_fn(
+            user,
+            db,
+            preferred_model=preferred_model,
+            openrouter_key_mode=openrouter_key_mode,
+        )
     except (QuotaExhaustedError, ApiKeyNotFoundError) as e:
         raise HTTPException(status_code=402, detail=str(e))
 

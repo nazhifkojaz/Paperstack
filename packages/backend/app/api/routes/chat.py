@@ -29,6 +29,7 @@ from app.db.models import (
 )
 from app.middleware.rate_limit import limiter
 from app.services.chat_orchestrator import ChatOrchestrator
+from app.services.api_key_service import api_key_service
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
     EmbeddingError,
@@ -257,7 +258,11 @@ async def stream_message(
 
     resolution, quota_result = await resolve_api_key_with_quota(current_user, db, "chat")
 
-    embedding_svc = EmbeddingService(http_client=embedding_client)
+    user_openrouter_key = await api_key_service.get_user_openrouter_key(current_user, db)
+    embedding_svc = EmbeddingService(
+        http_client=embedding_client,
+        user_api_key=user_openrouter_key,
+    )
     llm_svc = LLMService(http_client=llm_client)
     orchestrator = ChatOrchestrator(
         embedding_service=embedding_svc,
@@ -349,7 +354,14 @@ async def semantic_search(
 ):
     """Search across indexed PDFs using semantic similarity."""
     try:
-        embedding_svc = EmbeddingService(http_client=embedding_client)
+        user_openrouter_key = await api_key_service.get_user_openrouter_key(
+            current_user,
+            db,
+        )
+        embedding_svc = EmbeddingService(
+            http_client=embedding_client,
+            user_api_key=user_openrouter_key,
+        )
         query_vector = await embedding_svc.embed_query(data.query)
     except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
@@ -415,7 +427,11 @@ async def explain_annotation(
     api_key = resolution.api_key
 
     # Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
-    embedding_svc = EmbeddingService(http_client=embedding_client)
+    user_openrouter_key = await api_key_service.get_user_openrouter_key(current_user, db)
+    embedding_svc = EmbeddingService(
+        http_client=embedding_client,
+        user_api_key=user_openrouter_key,
+    )
     llm_svc = LLMService(http_client=llm_client)
     local_explain_service = ExplainService(
         embedding_service=embedding_svc,

@@ -59,6 +59,9 @@ async def delete_api_key(
     current_user: User = Depends(get_current_user),
 ):
     """Remove a stored API key."""
+    if provider != "openrouter":
+        raise HTTPException(status_code=404, detail="API key not found")
+
     result = await db.execute(
         delete(UserApiKey).where(
             UserApiKey.user_id == current_user.id,

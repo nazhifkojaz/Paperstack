@@ -34,6 +34,7 @@ from app.schemas.auto_highlight import (
     QuotaResponse,
 )
 from app.constants.colors import CATEGORY_COLORS
+from app.services.api_key_service import api_key_service
 from app.services.llm_service import LLMService
 from app.services.highlight_shortlist_service import highlight_shortlist_service
 from app.services.pdf_download_service import pdf_download_service
@@ -445,6 +446,10 @@ async def _chunk_for_analysis(
     custom_queries: dict[str, str] | None = None,
 ) -> list:
     """Return candidate chunks for LLM analysis."""
+    user_openrouter_key = await api_key_service.get_user_openrouter_key_by_id(
+        user_id,
+        db,
+    )
     return await highlight_shortlist_service.shortlist_chunks(
         pdf_id=str(pdf_id),
         user_id=str(user_id),
@@ -453,6 +458,7 @@ async def _chunk_for_analysis(
         tier=tier,
         db=db,
         custom_queries=custom_queries,
+        user_api_key=user_openrouter_key,
     )
 
 
@@ -1492,5 +1498,6 @@ async def get_quota(
         reset_at=snapshot.reset_at,
         has_own_key=snapshot.has_own_key,
         providers=snapshot.providers,
+        openrouter_key_mode=snapshot.openrouter_key_mode,
         global_warning=snapshot.global_warning,
     )
