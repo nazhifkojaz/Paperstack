@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date
-from typing import Literal
+from typing import ClassVar, Literal
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -44,9 +44,13 @@ class QuotaCheckResult:
 @dataclass(frozen=True)
 class UserQuotaSnapshot:
     chat_remaining: int
+    chat_total: int
     explain_paraphrase_remaining: int
+    explain_paraphrase_total: int
     auto_highlight_quick_remaining: int
+    auto_highlight_quick_total: int
     auto_highlight_thorough_remaining: int
+    auto_highlight_thorough_total: int
     reset_at: date
     has_own_key: bool
     providers: list[str]
@@ -176,9 +180,13 @@ class QuotaService:
         global_status = await openrouter_usage_service.get_status(db)
         return UserQuotaSnapshot(
             chat_remaining=quota.chat_uses_remaining,
+            chat_total=settings.QUOTA_CHAT_DAILY,
             explain_paraphrase_remaining=quota.explain_uses_remaining,
+            explain_paraphrase_total=settings.QUOTA_EXPLAIN_PARAPHRASE_DAILY,
             auto_highlight_quick_remaining=quota.auto_highlight_quick_remaining,
+            auto_highlight_quick_total=settings.QUOTA_AUTO_HIGHLIGHT_QUICK_DAILY,
             auto_highlight_thorough_remaining=quota.auto_highlight_thorough_remaining,
+            auto_highlight_thorough_total=settings.QUOTA_AUTO_HIGHLIGHT_THOROUGH_DAILY,
             reset_at=quota.reset_at,
             has_own_key=bool(providers),
             providers=providers,
@@ -220,13 +228,17 @@ class QuotaService:
         )
         await db.flush()
 
+    _VALID_COLUMNS: ClassVar[frozenset[str]] = frozenset(
+        config.column for config in _FEATURES.values()
+    )
+
     async def _current_remaining(
         self,
         user_id: UUID,
         db: AsyncSession,
         column: str,
     ) -> int:
-        if column not in {config.column for config in _FEATURES.values()}:
+        if column not in self._VALID_COLUMNS:
             raise ValueError(f"Unknown quota column: {column}")
         result = await db.execute(
             text(f"""

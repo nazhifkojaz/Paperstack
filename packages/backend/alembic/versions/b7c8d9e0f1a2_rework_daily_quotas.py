@@ -58,6 +58,17 @@ def upgrade() -> None:
     )
     op.drop_column("user_usage_quotas", "free_uses_remaining")
 
+    op.execute(
+        sa.text(
+            "UPDATE user_usage_quotas "
+            "SET chat_uses_remaining = 50, "
+            "    explain_uses_remaining = 30, "
+            "    auto_highlight_quick_remaining = 5, "
+            "    auto_highlight_thorough_remaining = 3, "
+            "    reset_at = (now() AT TIME ZONE 'UTC')::date"
+        )
+    )
+
 
 def downgrade() -> None:
     op.add_column(

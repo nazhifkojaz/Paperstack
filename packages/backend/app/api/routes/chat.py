@@ -282,7 +282,7 @@ async def stream_message(
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
     except IndexInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    except (EmbeddingError, IndexingError) as exc:
+    except IndexingError as exc:
         raise HTTPException(status_code=502, detail=f"Indexing failed: {exc}")
     except ValueError as exc:
         msg = str(exc)

@@ -9,6 +9,10 @@ import httpx
 from app.core.config import settings
 from app.services.exceptions import EmbeddingError
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 _EMBED_URL = "https://openrouter.ai/api/v1/embeddings"
 _USER_KEY_FALLBACK_STATUSES = {402, 403, 429}
 
@@ -108,6 +112,10 @@ class EmbeddingService:
                     and exc.response.status_code in _USER_KEY_FALLBACK_STATUSES
                 )
                 if can_fallback:
+                    logger.warning(
+                        "User embedding key returned %d, falling back to app key",
+                        exc.response.status_code,
+                    )
                     continue
                 raise last_error from exc
             except httpx.TimeoutException as exc:

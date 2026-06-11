@@ -48,13 +48,7 @@ class ApiKeyResolution:
 class ApiKeyService:
     """Service for resolving API keys."""
 
-    # Provider priorities for BYOK user keys
-    AUTO_HIGHLIGHT_PRIORITY: list[Provider] = ["openrouter"]
-    CHAT_PRIORITY: list[Provider] = ["openrouter"]
-    EXPLAIN_PRIORITY: list[Provider] = ["openrouter"]
-
-    # In-house provider — only OpenRouter free tier
-    IN_HOUSE_PRIORITY: list[Provider] = ["openrouter"]
+    _PROVIDER_PRIORITY: list[Provider] = ["openrouter"]
 
     async def resolve_for_chat(
         self,
@@ -80,7 +74,7 @@ class ApiKeyService:
         return await self._resolve_api_key(
             user=user,
             db=db,
-            provider_priority=self.CHAT_PRIORITY,
+            provider_priority=self._PROVIDER_PRIORITY,
             preferred_model=preferred_model,
             openrouter_key_mode=openrouter_key_mode,
             feature_name="chat",
@@ -110,7 +104,7 @@ class ApiKeyService:
         return await self._resolve_api_key(
             user=user,
             db=db,
-            provider_priority=self.EXPLAIN_PRIORITY,
+            provider_priority=self._PROVIDER_PRIORITY,
             preferred_model=preferred_model,
             openrouter_key_mode=openrouter_key_mode,
             feature_name="explain",
@@ -140,7 +134,7 @@ class ApiKeyService:
         return await self._resolve_api_key(
             user=user,
             db=db,
-            provider_priority=self.AUTO_HIGHLIGHT_PRIORITY,
+            provider_priority=self._PROVIDER_PRIORITY,
             preferred_model=preferred_model,
             openrouter_key_mode=openrouter_key_mode,
             feature_name="auto highlight",
@@ -231,7 +225,7 @@ class ApiKeyService:
         else:
             logger.info("Using in-house OpenRouter key for user %s", user.id)
 
-        for provider in self.IN_HOUSE_PRIORITY:
+        for provider in self._PROVIDER_PRIORITY:
             api_key = getattr(settings, f"{provider.upper()}_API_KEY")
             if api_key:
                 logger.info(
@@ -246,7 +240,9 @@ class ApiKeyService:
                     model=preferred_model,
                 )
 
-        raise ApiKeyNotFoundError(feature_name)
+        raise ApiKeyNotFoundError(
+            f"server has no {provider} API key configured"
+        )
 
 
 
