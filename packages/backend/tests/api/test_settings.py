@@ -172,3 +172,121 @@ class TestUpdateStorageProvider:
         # Verify DB was updated
         await db_session.refresh(test_user)
         assert test_user.storage_provider == "google"
+
+
+class TestLLMSettings:
+    """Tests for OpenRouter model settings."""
+
+    async def test_llm_models_include_byok_metadata(
+        self, client: AsyncClient, auth_headers: dict
+    ) -> None:
+        resp = await client.get("/v1/settings/llm-models", headers=auth_headers)
+
+        assert resp.status_code == 200
+        models = {m["id"]: m for m in resp.json()["models"]}
+        assert models["anthropic/claude-fable-5"]["requires_byok"] is True
+        assert models["openrouter/owl-alpha"]["requires_byok"] is False
+        assert models["moonshotai/kimi-k2.6:free"]["requires_byok"] is False
+
+    async def test_rejects_byok_model_without_openrouter_key(
+        self, client: AsyncClient, auth_headers: dict
+    ) -> None:
+        resp = await client.patch(
+            "/v1/settings/llm-preferences",
+            json={
+                "openrouter_key_mode": "byok",
+                "chat_model": "anthropic/claude-fable-5",
+            },
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400
+        assert "OpenRouter API key required for BYOK mode" in resp.json()["detail"]
+
+    async def test_rejects_byok_model_in_app_key_mode(
+        self, client: AsyncClient, auth_headers: dict
+    ) -> None:
+        await client.post(
+            "/v1/settings/api-keys",
+            json={"provider": "openrouter", "api_key": "test-key"},
+            headers=auth_headers,
+        )
+
+        resp = await client.patch(
+            "/v1/settings/llm-preferences",
+            json={"chat_model": "anthropic/claude-fable-5"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400
+        assert "BYOK-only models require BYOK mode" in resp.json()["detail"]
+
+    async def test_accepts_byok_model_with_openrouter_key(
+        self, client: AsyncClient, auth_headers: dict
+    ) -> None:
+        await client.post(
+            "/v1/settings/api-keys",
+            json={"provider": "openrouter", "api_key": "test-key"},
+            headers=auth_headers,
+        )
+
+        resp = await client.patch(
+            "/v1/settings/llm-preferences",
+            json={
+                "openrouter_key_mode": "byok",
+                "chat_model": "anthropic/claude-fable-5",
+            },
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["chat_model"] == "anthropic/claude-fable-5"
+        assert resp.json()["openrouter_key_mode"] == "byok"
+
+    async def test_accepts_non_byok_models_without_openrouter_key(
+        self, client: AsyncClient, auth_headers: dict
+    ) -> None:
+        resp = await client.patch(
+            "/v1/settings/llm-preferences",
+            json={
+                "chat_model": "openrouter/owl-alpha",
+                "explain_model": "moonshotai/kimi-k2.6:free",
+            },
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["chat_model"] == "openrouter/owl-alpha"
+        assert data["explain_model"] == "moonshotai/kimi-k2.6:free"
+        assert data["openrouter_key_mode"] == "app"
+
+    async def test_can_switch_to_app_mode_when_byok_models_are_cleared(
+        self, client: AsyncClient, auth_headers: dict
+    ) -> None:
+        await client.post(
+            "/v1/settings/api-keys",
+            json={"provider": "openrouter", "api_key": "test-key"},
+            headers=auth_headers,
+        )
+        await client.patch(
+            "/v1/settings/llm-preferences",
+            json={
+                "openrouter_key_mode": "byok",
+                "chat_model": "anthropic/claude-fable-5",
+            },
+            headers=auth_headers,
+        )
+
+        resp = await client.patch(
+            "/v1/settings/llm-preferences",
+            json={
+                "openrouter_key_mode": "app",
+                "chat_model": None,
+            },
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["openrouter_key_mode"] == "app"
+        assert resp.json()["chat_model"] is None

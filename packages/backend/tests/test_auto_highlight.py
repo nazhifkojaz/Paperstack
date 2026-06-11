@@ -11,19 +11,22 @@ from tests.fixtures import (
 
 _Passage = namedtuple("_Passage", ["content"])
 
+from tests.helpers import make_resolve_result as _make_resolve_result
+
 
 @pytest.mark.asyncio
 async def test_get_quota_with_key(admin_client: AsyncClient, auth_headers):
     """User with stored key should show it."""
     await admin_client.post(
         "/v1/settings/api-keys",
-        json={"provider": "gemini", "api_key": "test-key"},
+        json={"provider": "openrouter", "api_key": "test-key"},
         headers=auth_headers,
     )
     resp = await admin_client.get("/v1/auto-highlight/quota", headers=auth_headers)
     data = resp.json()
     assert data["has_own_key"] is True
-    assert "gemini" in data["providers"]
+    assert "openrouter" in data["providers"]
+    assert data["openrouter_key_mode"] == "app"
 
 
 @pytest.mark.asyncio
@@ -191,7 +194,7 @@ class TestAutoHighlightOpenRouterRateLimit:
             ) as mock_idx_cls,
         ):
             mock_resolve.return_value = _make_resolve_result(
-                provider="anthropic",
+                provider="openrouter",
                 api_key="user-own-key",
                 is_in_house=False,
                 remaining=-1,

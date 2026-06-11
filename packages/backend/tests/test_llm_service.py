@@ -75,15 +75,15 @@ def test_category_colors():
 
 
 @pytest.mark.asyncio
-async def test_extract_highlights_from_passages_glm():
+async def test_extract_highlights_from_passages_openrouter():
     service = LLMService()
     mock_response = json.dumps([
         {"text": "Key result", "page": 1, "category": "findings", "reason": "Primary finding"},
     ])
     passage = type("P", (), {"content": "some text", "page_number": 1, "categories": ["findings"]})()
-    with patch.object(service, "call_glm", new=AsyncMock(return_value=mock_response)):
+    with patch.object(service, "call_openrouter", new=AsyncMock(return_value=mock_response)):
         highlights = await service.extract_highlights_from_passages(
-            [passage], ["findings"], "glm", "fake-key",
+            [passage], ["findings"], "openrouter", "fake-key",
         )
     assert len(highlights) == 1
     assert highlights[0]["text"] == "Key result"
@@ -93,7 +93,7 @@ async def test_extract_highlights_from_passages_glm():
 async def test_extract_highlights_from_passages_empty():
     service = LLMService()
     result = await service.extract_highlights_from_passages(
-        [], ["findings"], "glm", "fake-key",
+        [], ["findings"], "openrouter", "fake-key",
     )
     assert result == []
 

@@ -38,26 +38,7 @@ def _setup_http_mocks():
     deps.get_embedding_http_client = _override_embed
 
 
-def _make_analyze_resolution(provider="openrouter", api_key="test-key"):
-    resolution = MagicMock()
-    resolution.provider = provider
-    resolution.api_key = api_key
-    resolution.model = None
-    return resolution
-
-
-def _make_quota_result(remaining=5, unlimited=False):
-    quota_result = MagicMock()
-    quota_result.remaining = remaining
-    quota_result.global_warning = None
-    quota_result.unlimited = unlimited
-    return quota_result
-
-
-def _make_resolve_result(provider="openrouter", api_key="test-key", is_in_house=True, remaining=5, unlimited=False):
-    resolution = _make_analyze_resolution(provider, api_key)
-    resolution.is_in_house = is_in_house
-    return resolution, _make_quota_result(remaining=remaining, unlimited=unlimited)
+from tests.helpers import make_resolve_result as _make_resolve_result
 
 
 def _make_create_task_stub(real_create_task):
@@ -88,6 +69,7 @@ class TestAutoHighlightQuota:
         assert data["chat_remaining"] == 50
         assert data["explain_paraphrase_remaining"] == 30
         assert data["has_own_key"] is False
+        assert data["openrouter_key_mode"] == "app"
 
     async def test_quota_requires_auth(self, client: AsyncClient):
         response = await client.get("/v1/auto-highlight/quota")

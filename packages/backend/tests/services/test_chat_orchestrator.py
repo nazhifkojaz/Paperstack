@@ -413,7 +413,7 @@ class TestStreamAndSave:
         async for event in orchestrator.stream_and_save(
             system_prompt="system",
             messages=[{"role": "user", "content": "hi"}],
-            provider="gemini",
+            provider="openrouter",
             api_key="test-key",
             model=None,
             conversation_id=conversation_id,
@@ -469,7 +469,7 @@ class TestStreamAndSave:
         async for event in orchestrator.stream_and_save(
             system_prompt="system",
             messages=[{"role": "user", "content": "hi"}],
-            provider="gemini",
+            provider="openrouter",
             api_key="test-key",
             model=None,
             conversation_id=uuid.uuid4(),

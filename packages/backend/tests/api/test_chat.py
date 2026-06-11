@@ -13,32 +13,7 @@ from tests.fixtures import (
 
 TEST_EMBEDDING = [0.01] * 1024
 
-
-def _quota_result(remaining: int = 10, global_warning: str | None = None) -> MagicMock:
-    return MagicMock(
-        remaining=remaining,
-        global_warning=global_warning,
-        unlimited=False,
-    )
-
-
-def _resolve_result(
-    provider: str = "openrouter",
-    api_key: str = "fake-key",
-    model: str | None = None,
-    is_in_house: bool = True,
-    remaining: int = 10,
-    global_warning: str | None = None,
-) -> tuple[MagicMock, MagicMock]:
-    return (
-        MagicMock(
-            provider=provider,
-            api_key=api_key,
-            model=model,
-            is_in_house=is_in_house,
-        ),
-        _quota_result(remaining=remaining, global_warning=global_warning),
-    )
+from tests.helpers import make_resolve_result as _resolve_result
 
 
 class TestExplainNoteHelpers:
@@ -165,9 +140,9 @@ class TestParaphraseAnnotation:
             ),
         ):
             mock_resolve.return_value = _resolve_result(
-                provider="gemini",
+                provider="openrouter",
                 api_key="fake-key",
-                model="gemini-test",
+                model="openrouter/test-model",
             )
 
             response = await client.post(
@@ -201,7 +176,7 @@ class TestParaphraseAnnotation:
         paraphrase_service.paraphrase_with_provider.assert_awaited_once()
         assert (
             paraphrase_service.paraphrase_with_provider.call_args.kwargs["model"]
-            == "gemini-test"
+            == "openrouter/test-model"
         )
 
     async def test_paraphrase_rejects_annotation_from_different_pdf(
@@ -764,7 +739,7 @@ class TestStreamMessage:
             new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = _resolve_result(
-                provider="gemini",
+                provider="openrouter",
                 api_key="fake-key",
                 is_in_house=True,
             )
@@ -848,7 +823,7 @@ class TestStreamMessage:
             ) as mock_search_pdf,
         ):
             mock_resolve.return_value = _resolve_result(
-                provider="gemini",
+                provider="openrouter",
                 api_key="fake-key",
                 model=None,
                 is_in_house=True,
@@ -969,7 +944,7 @@ class TestStreamMessage:
             new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = _resolve_result(
-                provider="openai",
+                provider="openrouter",
                 api_key="user-own-key",
                 is_in_house=False,
             )
@@ -1054,7 +1029,7 @@ class TestStreamMessageOpenRouterQuotaGating:
             new_callable=AsyncMock,
         ) as mock_resolve:
             mock_resolve.return_value = _resolve_result(
-                provider="openai",
+                provider="openrouter",
                 api_key="user-own-key",
                 is_in_house=False,
             )

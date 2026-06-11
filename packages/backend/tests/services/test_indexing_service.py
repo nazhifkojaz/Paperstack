@@ -42,6 +42,16 @@ def indexing_service(mock_download_service, mock_embedding):
     )
 
 
+@pytest.fixture(autouse=True)
+def mock_user_openrouter_key_lookup():
+    with patch(
+        "app.services.indexing_service.api_key_service.get_user_openrouter_key",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        yield
+
+
 @pytest.fixture
 def mock_db():
     db = MagicMock()

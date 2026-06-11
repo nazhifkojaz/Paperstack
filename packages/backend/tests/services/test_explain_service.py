@@ -23,7 +23,7 @@ def mock_embedding():
 @pytest.fixture
 def mock_llm():
     svc = MagicMock()
-    svc.call_gemini = AsyncMock(return_value="This is an explanation.")
+    svc.call_openrouter = AsyncMock(return_value="This is an explanation.")
     return svc
 
 
@@ -91,7 +91,7 @@ class TestExplainWithProvider:
                 page_number=1,
                 pdf_row=pdf_row,
                 user=user,
-                provider="gemini",
+                provider="openrouter",
                 api_key="test-key",
                 db=mock_db,
             )
@@ -117,7 +117,7 @@ class TestExplainWithProvider:
                 page_number=1,
                 pdf_row=pdf_row,
                 user=user,
-                provider="gemini",
+                provider="openrouter",
                 api_key="test-key",
                 db=mock_db,
             )
@@ -138,7 +138,7 @@ class TestExplainWithProvider:
                 page_number=1,
                 pdf_row=pdf_row,
                 user=user,
-                provider="gemini",
+                provider="openrouter",
                 api_key="test-key",
                 db=mock_db,
             )
@@ -191,7 +191,7 @@ class TestExplainWithProvider:
                 page_number=1,
                 pdf_row=pdf_row,
                 user=user,
-                provider="gemini",
+                provider="openrouter",
                 api_key="test-key",
                 db=mock_db,
             )
@@ -199,7 +199,7 @@ class TestExplainWithProvider:
         assert isinstance(result, ExplainResult)
         assert result.context_chunks == []
 
-    async def test_non_openrouter_forwards_model(
+    async def test_openrouter_forwards_model(
         self, explain_service, mock_db, mock_llm
     ):
         pdf_row = MagicMock()
@@ -223,15 +223,15 @@ class TestExplainWithProvider:
                 page_number=1,
                 pdf_row=pdf_row,
                 user=user,
-                provider="gemini",
+                provider="openrouter",
                 api_key="test-key",
                 db=mock_db,
-                model="gemini-2.0-flash",
+                model="openrouter/test-model",
             )
 
-        mock_llm.call_gemini.assert_called_once()
-        call_kwargs = mock_llm.call_gemini.call_args[1]
-        assert call_kwargs.get("model") == "gemini-2.0-flash"
+        mock_llm.call_openrouter.assert_called_once()
+        call_kwargs = mock_llm.call_openrouter.call_args[1]
+        assert call_kwargs.get("model") == "openrouter/test-model"
 
     async def test_llm_rate_limit_error_propagates(
         self, explain_service, mock_db, mock_llm
@@ -276,12 +276,12 @@ class TestParaphraseWithProvider:
     async def test_paraphrase_success_same_level(
         self, explain_service, mock_llm, mock_embedding
     ):
-        mock_llm.call_gemini = AsyncMock(return_value="This passage is reworded.")
+        mock_llm.call_openrouter = AsyncMock(return_value="This passage is reworded.")
 
         result = await explain_service.paraphrase_with_provider(
             selected_text="test passage",
             page_number=3,
-            provider="gemini",
+            provider="openrouter",
             api_key="test-key",
             level="same",
         )
@@ -292,23 +292,23 @@ class TestParaphraseWithProvider:
         assert result.generated_at.endswith(" UTC")
         mock_embedding.embed_query.assert_not_called()
 
-        call_kwargs = mock_llm.call_gemini.call_args[1]
+        call_kwargs = mock_llm.call_openrouter.call_args[1]
         assert "same technical level" in call_kwargs["system_prompt"]
         assert "Paraphrase this passage from page 3" in call_kwargs["user_prompt"]
 
     async def test_paraphrase_unknown_level_falls_back_to_same(
         self, explain_service, mock_llm
     ):
-        mock_llm.call_gemini = AsyncMock(return_value="Fallback paraphrase.")
+        mock_llm.call_openrouter = AsyncMock(return_value="Fallback paraphrase.")
 
         result = await explain_service.paraphrase_with_provider(
             selected_text="test passage",
             page_number=1,
-            provider="gemini",
+            provider="openrouter",
             api_key="test-key",
             level="unknown",
         )
 
         assert result.level == "same"
-        call_kwargs = mock_llm.call_gemini.call_args[1]
+        call_kwargs = mock_llm.call_openrouter.call_args[1]
         assert "same technical level" in call_kwargs["system_prompt"]

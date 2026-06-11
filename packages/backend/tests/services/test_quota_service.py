@@ -106,7 +106,7 @@ class TestQuotaService:
         db_session.add(
             UserApiKey(
                 user_id=test_user.id,
-                provider="openai",
+                provider="openrouter",
                 encrypted_key=encrypt_token("sk-test"),
             )
         )
@@ -119,4 +119,23 @@ class TestQuotaService:
         assert snapshot.auto_highlight_quick_remaining == 5
         assert snapshot.auto_highlight_thorough_remaining == 3
         assert snapshot.has_own_key is True
-        assert snapshot.providers == ["openai"]
+        assert snapshot.providers == ["openrouter"]
+        assert snapshot.openrouter_key_mode == "app"
+
+    async def test_get_all_quotas_ignores_legacy_non_openrouter_keys(
+        self, db_session, test_user, quota_service
+    ):
+        db_session.add(
+            UserApiKey(
+                user_id=test_user.id,
+                provider="gemini",
+                encrypted_key=encrypt_token("legacy-key"),
+            )
+        )
+        await db_session.commit()
+
+        snapshot = await quota_service.get_all_quotas(test_user.id, db_session)
+
+        assert snapshot.has_own_key is False
+        assert snapshot.providers == []
+        assert snapshot.openrouter_key_mode == "app"

@@ -58,6 +58,44 @@ class TestEmbedTexts:
         assert body["provider"] == {"order": ["nebius", "deepinfra"], "allow_fallbacks": True}
 
     @respx.mock
+    async def test_user_key_is_primary_when_provided(self, svc):
+        route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+            return_value=Response(200, json=_make_embedding_response(1))
+        )
+
+        await svc.embed_texts(["hello"], user_api_key="sk-user-key")
+
+        request = route.calls.last.request
+        assert request.headers["authorization"] == "Bearer sk-user-key"
+
+    @respx.mock
+    async def test_user_key_balance_error_falls_back_to_app_key(self, svc):
+        route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+            side_effect=[
+                Response(402, text="insufficient credits"),
+                Response(200, json=_make_embedding_response(1)),
+            ]
+        )
+
+        result = await svc.embed_texts(["hello"], user_api_key="sk-user-key")
+
+        assert len(result) == 1
+        assert route.call_count == 2
+        assert route.calls[0].request.headers["authorization"] == "Bearer sk-user-key"
+        assert route.calls[1].request.headers["authorization"] == "Bearer sk-or-test-key"
+
+    @respx.mock
+    async def test_user_key_auth_error_does_not_fallback(self, svc):
+        route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+            return_value=Response(401, text="invalid key")
+        )
+
+        with pytest.raises(EmbeddingError, match="401"):
+            await svc.embed_texts(["hello"], user_api_key="sk-user-key")
+
+        assert route.call_count == 1
+
+    @respx.mock
     async def test_empty_input(self, svc):
         result = await svc.embed_texts([])
         assert result == []
