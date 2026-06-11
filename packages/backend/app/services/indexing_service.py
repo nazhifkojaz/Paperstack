@@ -31,6 +31,7 @@ from app.services.exceptions import (
 from app.services.pdf_download_service import PdfDownloadService, PdfSource
 from app.services.storage.factory import get_storage_backend
 from app.services.text_extractor import extract_text_with_pages, validate_extraction
+from app.services.api_key_service import api_key_service
 
 
 logger = logging.getLogger(__name__)
@@ -159,7 +160,14 @@ class IndexingService:
                 raise ChunkingError("No chunks produced from PDF text.")
 
             texts = [c.content for c in chunks]
-            embeddings = await self._embedding_service.embed_texts(texts)
+            user_openrouter_key = await api_key_service.get_user_openrouter_key(
+                user,
+                db,
+            )
+            embeddings = await self._embedding_service.embed_texts(
+                texts,
+                user_api_key=user_openrouter_key,
+            )
 
             # Delete stale chunks and insert new ones
             await db.execute(
