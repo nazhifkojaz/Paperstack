@@ -6,7 +6,7 @@ ENV CI=true
 ARG VITE_API_URL=/v1
 ENV VITE_API_URL=$VITE_API_URL
 
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@10.31.0 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/frontend/package.json packages/frontend/package.json
