@@ -122,7 +122,7 @@ def _redirect_with_tokens(user: User) -> RedirectResponse:
     access_token = security.create_access_token(user.id)
     refresh_token = security.create_refresh_token(user.id)
     redirect_url = (
-        f"{settings.FRONTEND_URL}/Paperstack/auth/callback"
+        f"{settings.FRONTEND_URL.rstrip('/')}/auth/callback"
         f"#access_token={access_token}"
         f"&refresh_token={refresh_token}"
     )

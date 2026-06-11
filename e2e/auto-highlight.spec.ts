@@ -17,7 +17,7 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Auto-Highlight Button', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
     await page.waitForSelector('body', { timeout: 10000 })
   })
 
@@ -51,7 +51,7 @@ test.describe('Auto-Highlight Button', () => {
 
 test.describe('Category Selection Dialog', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
     await page.waitForSelector('body', { timeout: 10000 })
   })
 
@@ -179,7 +179,7 @@ test.describe('Category Selection Dialog', () => {
 
 test.describe('API Key Dialog', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
     await page.waitForSelector('body', { timeout: 10000 })
   })
 
@@ -293,7 +293,7 @@ test.describe('API Key Dialog', () => {
 
 test.describe('Annotation Set Visibility Toggle', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
     await page.waitForSelector('body', { timeout: 10000 })
   })
 
@@ -342,7 +342,7 @@ test.describe('Annotation Set Visibility Toggle', () => {
 
 test.describe('AI Set Styling', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
     await page.waitForSelector('body', { timeout: 10000 })
   })
 

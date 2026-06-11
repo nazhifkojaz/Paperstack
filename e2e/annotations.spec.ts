@@ -18,7 +18,7 @@ import { test, expect } from '@playwright/test'
 test.describe('Annotation Tools', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to viewer with a test PDF ID
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
 
     // Wait for viewer to load
     await page.waitForSelector('body', { timeout: 10000 })
@@ -338,7 +338,7 @@ test.describe('Annotation Tools', () => {
  */
 test.describe('Annotation Visuals', () => {
   test('highlight annotations have correct color and opacity', async ({ page }) => {
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
 
     // Highlight annotations should have fill-opacity around 0.3
     const highlightRects = page.locator('rect[fill-opacity="0.3"], rect[fill-opacity*="."]')
@@ -347,7 +347,7 @@ test.describe('Annotation Visuals', () => {
   })
 
   test('selected annotations have blue stroke', async ({ page }) => {
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
 
     const selectButton = page.getByRole('button', { name: /select/i })
     if (!await selectButton.isVisible({ timeout: 2000 }).catch(() => false)) return
@@ -370,7 +370,7 @@ test.describe('Annotation Visuals', () => {
  */
 test.describe('Annotation Keyboard Shortcuts', () => {
   test('Escape key closes note popover', async ({ page }) => {
-    await page.goto('/Paperstack/viewer/test-pdf-id')
+    await page.goto('/viewer/test-pdf-id')
 
     const noteCircle = page.locator('circle').first()
 

@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test'
 test.describe('PDF Upload', () => {
   test('shows upload area', async ({ page }) => {
     // Navigate to home page
-    await page.goto('/Paperstack/')
+    await page.goto('/')
 
     // Should show the main page content
     const body = page.locator('body')
@@ -11,7 +11,7 @@ test.describe('PDF Upload', () => {
   })
 
   test('shows empty state when no PDFs exist', async ({ page }) => {
-    await page.goto('/Paperstack/')
+    await page.goto('/')
 
     // Should show some UI indicating the app is loaded
     const appContainer = page.locator('body')

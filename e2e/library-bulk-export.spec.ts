@@ -4,7 +4,7 @@ import { mockAuth } from './fixtures/auth';
 test.describe('Bulk BibTeX Export', () => {
     test.beforeEach(async ({ page }) => {
         await mockAuth(page);
-        await page.goto('/Paperstack/library');
+        await page.goto('/library');
         // Wait for page to load
         await page.waitForSelector('text=My Library');
     });

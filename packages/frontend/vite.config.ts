@@ -15,7 +15,7 @@ export default defineConfig({
             brotliSize: true,
         }),
     ],
-    base: '/Paperstack/',
+    base: '/',
     resolve: {
         alias: {
             '@': path.resolve(__dirname, './src'),

@@ -52,7 +52,7 @@ export const test = base.extend<{
   authenticatedPage: async ({ page }, use) => {
     // For E2E tests, we'll need to mock or use a test GitHub OAuth flow
     // For now, we'll skip actual auth and focus on testing without it
-    await page.goto('/Paperstack/')
+    await page.goto('/')
     await use(page)
   },
 })

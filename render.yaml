@@ -18,7 +18,7 @@ services:
       - key: GITHUB_CLIENT_SECRET
         sync: false
       - key: FRONTEND_URL
-        value: https://nazhifkjaz.github.io/Paperstack
+        value: https://paperstack.nazhif.dev
 
 databases:
   - name: paperstack-db

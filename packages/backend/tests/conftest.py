@@ -441,7 +441,7 @@ def set_test_env_vars(monkeypatch) -> None:
     monkeypatch.setenv("ENCRYPTION_KEY", "test_encryption_key_32_bytes_long")
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test_github_client_id")
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test_github_client_secret")
-    monkeypatch.setenv("FRONTEND_URL", "http://localhost:5173/Paperstack")
+    monkeypatch.setenv("FRONTEND_URL", "http://localhost:5173")
     # Clear LLM API keys to prevent real API calls during tests
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
