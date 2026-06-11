@@ -97,7 +97,7 @@ class TestAutoHighlightOpenRouterRateLimit:
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
         """When OpenRouter 429s in background, POST still returns 202."""
-        _init_http_clients()
+        init_http_clients()
 
         from app.services.exceptions import LLMRateLimitError
 
@@ -152,7 +152,7 @@ class TestAutoHighlightOpenRouterRateLimit:
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
         """When user has their own key, OpenRouter is never tried for auto-highlight."""
-        _init_http_clients()
+        init_http_clients()
 
         pdf = await create_test_pdf(
             db_session,

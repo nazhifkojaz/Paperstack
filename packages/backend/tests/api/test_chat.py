@@ -42,7 +42,7 @@ class TestExplainAnnotation:
     async def test_explain_rejects_annotation_from_different_pdf(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        _init_http_clients()
+        init_http_clients()
         pdf = await create_test_pdf(
             db_session,
             user_id=test_user.id,
@@ -95,7 +95,7 @@ class TestParaphraseAnnotation:
     async def test_paraphrase_saves_metadata_and_preserves_user_note(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        _init_http_clients()
+        init_http_clients()
         from sqlalchemy import select
         from app.db.models import Annotation
 
@@ -180,7 +180,7 @@ class TestParaphraseAnnotation:
     async def test_paraphrase_rejects_annotation_from_different_pdf(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        _init_http_clients()
+        init_http_clients()
         pdf = await create_test_pdf(
             db_session,
             user_id=test_user.id,

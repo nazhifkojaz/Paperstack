@@ -24,10 +24,10 @@ def pytest_configure(config):
     )
 
 
-from app.main import app
-from app.db.models import Base, User, UserOAuthAccount
-from app.core.security import create_access_token
-from tests.fixtures.pdf import MINIMAL_PDF
+from app.main import app  # noqa: E402
+from app.db.models import Base, User, UserOAuthAccount  # noqa: E402
+from app.core.security import create_access_token  # noqa: E402
+from tests.fixtures.pdf import MINIMAL_PDF  # noqa: E402
 
 
 @pytest.fixture(scope="session")
