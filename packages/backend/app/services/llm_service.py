@@ -291,8 +291,8 @@ class LLMService:
         blocking the pipeline on slow model responses.
         """
         logger.info(
-            "Calling OpenRouter %s (prompt: %d chars, reasoning: %s, key: ...%s)",
-            model, len(user_prompt), reasoning_effort or "off", api_key[-4:],
+            "Calling OpenRouter %s (prompt: %d chars, reasoning: %s)",
+            model, len(user_prompt), reasoning_effort or "off",
         )
 
         json_body: dict[str, Any] = {
@@ -528,4 +528,3 @@ CRITICAL:
             return {}
 
         return _parse_queries_json(raw, categories)
-

@@ -453,7 +453,7 @@ async def _chunk_for_analysis(
     custom_queries: dict[str, str] | None = None,
 ) -> list:
     """Return candidate chunks for LLM analysis."""
-    user_openrouter_key = await api_key_service.get_user_openrouter_key_by_id(
+    user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings_by_id(
         user_id,
         db,
     )

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import decrypt_token
-from app.db.models import User, UserApiKey
+from app.db.models import User, UserApiKey, UserLLMPreferences
 from app.services.exceptions import ApiKeyNotFoundError
 from app.services.llm_service import OPENROUTER_BYOK_MODEL_IDS
 
@@ -163,6 +163,27 @@ class ApiKeyService:
             return None
         return decrypt_token(key_row.encrypted_key)
 
+    async def get_user_openrouter_key_for_embeddings(
+        self,
+        user: User,
+        db: AsyncSession,
+    ) -> str | None:
+        return await self.get_user_openrouter_key_for_embeddings_by_id(user.id, db)
+
+    async def get_user_openrouter_key_for_embeddings_by_id(
+        self,
+        user_id: UUID,
+        db: AsyncSession,
+    ) -> str | None:
+        mode_result = await db.execute(
+            select(UserLLMPreferences.openrouter_key_mode).where(
+                UserLLMPreferences.user_id == user_id
+            )
+        )
+        if mode_result.scalar_one_or_none() != "byok":
+            return None
+        return await self.get_user_openrouter_key_by_id(user_id, db)
+
     async def _resolve_api_key(
         self,
         user: User,
@@ -197,8 +218,7 @@ class ApiKeyService:
                 )
                 raise ApiKeyNotFoundError("openrouter")
             logger.info(
-                "Using user-provided OpenRouter key (ending ...%s) for user %s",
-                user_key[-4:],
+                "Using user-provided OpenRouter key for user %s",
                 user.id,
             )
             return ApiKeyResolution(

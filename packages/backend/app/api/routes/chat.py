@@ -258,7 +258,10 @@ async def stream_message(
 
     resolution, quota_result = await resolve_api_key_with_quota(current_user, db, "chat")
 
-    user_openrouter_key = await api_key_service.get_user_openrouter_key(current_user, db)
+    user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings(
+        current_user,
+        db,
+    )
     embedding_svc = EmbeddingService(
         http_client=embedding_client,
         user_api_key=user_openrouter_key,
@@ -354,7 +357,7 @@ async def semantic_search(
 ):
     """Search across indexed PDFs using semantic similarity."""
     try:
-        user_openrouter_key = await api_key_service.get_user_openrouter_key(
+        user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings(
             current_user,
             db,
         )
@@ -427,7 +430,10 @@ async def explain_annotation(
     api_key = resolution.api_key
 
     # Use explain_service for RAG pipeline (indexing, embedding, search, LLM)
-    user_openrouter_key = await api_key_service.get_user_openrouter_key(current_user, db)
+    user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings(
+        current_user,
+        db,
+    )
     embedding_svc = EmbeddingService(
         http_client=embedding_client,
         user_api_key=user_openrouter_key,

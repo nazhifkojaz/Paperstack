@@ -160,7 +160,7 @@ class IndexingService:
                 raise ChunkingError("No chunks produced from PDF text.")
 
             texts = [c.content for c in chunks]
-            user_openrouter_key = await api_key_service.get_user_openrouter_key(
+            user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings(
                 user,
                 db,
             )

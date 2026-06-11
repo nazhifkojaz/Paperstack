@@ -164,3 +164,33 @@ class TestResolveApiKeyOpenRouter:
 
             with pytest.raises(ApiKeyNotFoundError):
                 await svc.resolve_for_chat(mock_user, mock_db)
+
+    @pytest.mark.asyncio
+    async def test_embedding_key_not_returned_in_app_mode(self, svc, mock_user, mock_db):
+        """Stored keys are not used for embeddings unless BYOK mode is active."""
+        mode_result = MagicMock()
+        mode_result.scalar_one_or_none.return_value = "app"
+        mock_db.execute = AsyncMock(return_value=mode_result)
+
+        result = await svc.get_user_openrouter_key_for_embeddings(mock_user, mock_db)
+
+        assert result is None
+        mock_db.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_embedding_key_returned_in_byok_mode(self, svc, mock_user, mock_db):
+        """BYOK mode allows embeddings to use the user's stored OpenRouter key."""
+        from app.core.security import encrypt_token
+
+        mode_result = MagicMock()
+        mode_result.scalar_one_or_none.return_value = "byok"
+        mock_key_row = MagicMock()
+        mock_key_row.encrypted_key = encrypt_token("user-embedding-key")
+        key_result = MagicMock()
+        key_result.scalar_one_or_none.return_value = mock_key_row
+        mock_db.execute = AsyncMock(side_effect=[mode_result, key_result])
+
+        result = await svc.get_user_openrouter_key_for_embeddings(mock_user, mock_db)
+
+        assert result == "user-embedding-key"
+        assert mock_db.execute.await_count == 2
