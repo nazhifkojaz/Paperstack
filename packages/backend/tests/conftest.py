@@ -10,13 +10,24 @@ import pytest_asyncio
 import respx
 from httpx import AsyncClient, ASGITransport, Response
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
 from testcontainers.postgres import PostgresContainer
+
+
+def pytest_configure(config):
+    """Configure test environment before any test modules are loaded."""
+    from slowapi import Limiter
+    from app.middleware.rate_limit import get_identifier
+    from app.main import app
+    app.state.limiter = Limiter(
+        key_func=get_identifier, default_limits=["1000000/minute"]
+    )
+
 
 from app.main import app
 from app.db.models import Base, User, UserOAuthAccount
 from app.core.security import create_access_token
+from tests.fixtures.pdf import MINIMAL_PDF
 
 
 @pytest.fixture(scope="session")
@@ -56,29 +67,34 @@ def test_engine(postgres_container: PostgresContainer):
     # or we can run it in an event loop if needed
 
 
-@pytest_asyncio.fixture(scope="function")
-async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
-    """Create a fresh database session for each test.
+@pytest_asyncio.fixture(scope="session")
+async def _db_tables(test_engine):
+    """Create all database tables once per test session.
 
-    Creates all tables before the test and drops them after.
+    Tables are then reused across all tests via savepoint rollback,
+    eliminating per-test create_all/drop_all overhead.
     """
     async with test_engine.begin() as conn:
-        # Create pgvector extension first (required for Vector columns)
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
-
-    async_session = sessionmaker(
-        test_engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    async with async_session() as session:
-        yield session
-
-    # Clean up - drop all tables after test
+    yield
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest_asyncio.fixture(scope="function")
+async def db_session(test_engine, _db_tables) -> AsyncGenerator[AsyncSession, None]:
+    """Create a fresh database session for each test using savepoint rollback.
+
+    Each test runs inside a savepoint that is rolled back after the
+    test completes, so tests are isolated without DDL overhead.
+    """
+    async with test_engine.connect() as conn:
+        tx = await conn.begin()
+        await conn.begin_nested()
+        session = AsyncSession(bind=conn, expire_on_commit=False)
+        yield session
+        await tx.rollback()
 
 
 @pytest_asyncio.fixture
@@ -286,46 +302,7 @@ def mock_github_api() -> Generator[respx.MockRouter, None, None]:
     # When Accept header is application/vnd.github.v3.raw, return raw PDF bytes
     def side_effect_get_pdf(request):
         if "application/vnd.github.v3.raw" in request.headers.get("accept", ""):
-            # Return valid minimal PDF
-            return Response(
-                200,
-                content=b"""%PDF-1.4
-1 0 obj
-<<
-/Type /Catalog
-/Pages 2 0 R
->>
-endobj
-2 0 obj
-<<
-/Type /Pages
-/Kids [3 0 R]
-/Count 1
->>
-endobj
-3 0 obj
-<<
-/Type /Page
-/Parent 2 0 R
-/MediaBox [0 0 612 792]
->>
-endobj
-xref
-0 4
-0000000000 65535 f
-0000000009 00000 n
-0000000058 00000 n
-0000000115 00000 n
-trailer
-<<
-/Size 4
-/Root 1 0 R
->>
-startxref
-200
-%%EOF
-""",
-            )
+            return Response(200, content=MINIMAL_PDF)
         else:
             # Return JSON metadata response
             return Response(
@@ -344,45 +321,7 @@ startxref
     )
 
     respx.route(host__regex=r"raw\.githubusercontent\.com", path__regex=r"/.*\.pdf").mock(
-        return_value=Response(
-            200,
-            content=b"""%PDF-1.4
-1 0 obj
-<<
-/Type /Catalog
-/Pages 2 0 R
->>
-endobj
-2 0 obj
-<<
-/Type /Pages
-/Kids [3 0 R]
-/Count 1
->>
-endobj
-3 0 obj
-<<
-/Type /Page
-/Parent 2 0 R
-/MediaBox [0 0 612 792]
->>
-endobj
-xref
-0 4
-0000000000 65535 f
-0000000009 00000 n
-0000000058 00000 n
-0000000115 00000 n
-trailer
-<<
-/Size 4
-/Root 1 0 R
->>
-startxref
-200
-%%EOF
-""",
-        )
+        return_value=Response(200, content=MINIMAL_PDF)
     )
 
     respx.delete(host__regex=r"api\.github\.com").mock(
@@ -485,7 +424,7 @@ def mock_crossref_api_not_found() -> Generator[respx.MockRouter, None, None]:
 @pytest.fixture
 def sample_pdf_bytes() -> bytes:
     """Generate a minimal valid PDF for testing."""
-    return b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Count 1\n/Kids [3 0 R]\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n>>\nendobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000058 00000 n\n0000000115 00000 n\ntrailer\n<<\n/Size 4\n/Root 1 0 R\n>>\nstartxref\n210\n%%EOF"
+    return MINIMAL_PDF
 
 
 @pytest.fixture
