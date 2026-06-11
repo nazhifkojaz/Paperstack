@@ -6,12 +6,12 @@ from app.services.api_key_service import ApiKeyService
 from app.services.exceptions import ApiKeyNotFoundError
 
 
-class TestInHousePriority:
-    """Tests for IN_HOUSE_PRIORITY configuration."""
+class TestProviderPriority:
+    """Tests for _PROVIDER_PRIORITY configuration."""
 
-    def test_openrouter_is_only_in_house_provider(self):
+    def test_openrouter_is_only_provider(self):
         svc = ApiKeyService()
-        assert svc.IN_HOUSE_PRIORITY == ["openrouter"]
+        assert svc._PROVIDER_PRIORITY == ["openrouter"]
 
 
 class TestResolveApiKeyOpenRouter:
