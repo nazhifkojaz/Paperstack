@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test'
  * Covers UI presence and interaction for:
  * - AutoHighlightButton in the annotation sidebar
  * - CategorySelectionDialog (categories, defaults, open/close)
- * - ApiKeyDialog (inputs, provider rows, open/close)
+ * - ApiKeyDialog (OpenRouter input, open/close)
  * - Per-set eye toggle visibility control
  * - AI set styling (sparkle icon, purple background)
  *
@@ -212,7 +212,7 @@ test.describe('API Key Dialog', () => {
     }
   })
 
-  test('shows Gemini and GLM provider rows', async ({ page }) => {
+  test('shows the OpenRouter provider row', async ({ page }) => {
     const addKeyLink = page.locator('text=/add api key/i')
     const appeared = await addKeyLink.waitFor({ timeout: 5000 }).then(() => true).catch(() => false)
     if (!appeared) return
@@ -223,8 +223,7 @@ test.describe('API Key Dialog', () => {
     const opened = await dialog.waitFor({ timeout: 3000 }).then(() => true).catch(() => false)
     if (!opened) return
 
-    await expect(dialog.locator('text=/google gemini/i')).toBeVisible()
-    await expect(dialog.locator('text=/zhipu|glm/i')).toBeVisible()
+    await expect(dialog.locator('text=/openrouter/i')).toBeVisible()
   })
 
   test('each provider row has a password input and Save button', async ({ page }) => {
@@ -287,7 +286,7 @@ test.describe('API Key Dialog', () => {
 
     const getKeyLinks = dialog.getByRole('link', { name: /get api key/i })
     if (await getKeyLinks.count() > 0) {
-      expect(await getKeyLinks.count()).toBeGreaterThanOrEqual(2)
+      expect(await getKeyLinks.count()).toBeGreaterThanOrEqual(1)
     }
   })
 })
