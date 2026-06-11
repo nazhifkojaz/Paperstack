@@ -37,11 +37,12 @@ interface QuotaInfo {
     reset_at: string;
     has_own_key: boolean;
     providers: string[];
+    openrouter_key_mode: 'app' | 'byok';
     global_warning?: string | null;
 }
 
 interface ApiKeyCreate {
-    provider: 'glm' | 'gemini';
+    provider: 'openrouter';
     api_key: string;
 }
 
@@ -51,10 +52,11 @@ interface ApiKeyResponse {
     created_at: string;
 }
 
-export const useAutoHighlightQuota = () => {
+export const useAutoHighlightQuota = (enabled = true) => {
     return useQuery({
         queryKey: ['auto-highlight-quota'],
         queryFn: (): Promise<QuotaInfo> => apiFetch('/auto-highlight/quota'),
+        enabled,
     });
 };
 

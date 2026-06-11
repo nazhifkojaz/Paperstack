@@ -60,7 +60,7 @@ function QuotaRow({ label, remaining, total }: { label: string; remaining: numbe
 
 export function UserNav() {
     const { user, logout } = useAuthStore();
-    const { data: quota } = useAutoHighlightQuota();
+    const { data: quota } = useAutoHighlightQuota(Boolean(user));
 
     if (!user) return null;
 
@@ -91,11 +91,12 @@ export function UserNav() {
                         )}
                     </div>
                 </DropdownMenuLabel>
-                {quota && !quota.has_own_key && (
+                {quota && !(quota.has_own_key && quota.openrouter_key_mode === 'byok') && (
                     <>
                         <DropdownMenuSeparator />
                         <DropdownMenuLabel className="font-normal">
                             <div className="flex flex-col gap-1">
+                                {/* Totals must match QUOTA_*_DAILY defaults in backend config.py */}
                                 <QuotaRow label="Chat" remaining={quota.chat_remaining} total={50} />
                                 <QuotaRow label="Explain / Paraphrase" remaining={quota.explain_paraphrase_remaining} total={30} />
                                 <QuotaRow label="Quick highlight" remaining={quota.auto_highlight_quick_remaining} total={5} />

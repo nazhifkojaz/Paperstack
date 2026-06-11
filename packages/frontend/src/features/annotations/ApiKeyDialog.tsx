@@ -13,8 +13,7 @@ interface Props {
 }
 
 const PROVIDERS = [
-    { id: 'gemini' as const, label: 'Google Gemini', docsUrl: 'https://aistudio.google.com/apikey' },
-    { id: 'glm' as const, label: 'Zhipu AI (GLM)', docsUrl: 'https://open.bigmodel.cn/usercenter/apikeys' },
+    { id: 'openrouter' as const, label: 'OpenRouter', docsUrl: 'https://openrouter.ai/settings/keys' },
 ];
 
 export const ApiKeyDialog = ({ open, onOpenChange }: Props) => {
@@ -23,14 +22,14 @@ export const ApiKeyDialog = ({ open, onOpenChange }: Props) => {
     const deleteKey = useDeleteApiKey();
     const [inputs, setInputs] = useState<Record<string, string>>({});
 
-    const handleSave = async (provider: 'glm' | 'gemini') => {
+    const handleSave = async (provider: 'openrouter') => {
         const key = inputs[provider];
         if (!key?.trim()) return;
 
         try {
             await createKey.mutateAsync({ provider, api_key: key.trim() });
             setInputs(prev => ({ ...prev, [provider]: '' }));
-            toast.success(`${provider.toUpperCase()} API key saved`);
+            toast.success('OpenRouter API key saved');
         } catch {
             toast.error('Failed to save API key');
         }
@@ -39,7 +38,7 @@ export const ApiKeyDialog = ({ open, onOpenChange }: Props) => {
     const handleDelete = async (provider: string) => {
         try {
             await deleteKey.mutateAsync(provider);
-            toast.success(`${provider.toUpperCase()} API key removed`);
+            toast.success('OpenRouter API key removed');
         } catch {
             toast.error('Failed to remove API key');
         }
@@ -53,7 +52,7 @@ export const ApiKeyDialog = ({ open, onOpenChange }: Props) => {
                 <DialogHeader>
                     <DialogTitle>API Key Management</DialogTitle>
                     <p className="text-sm text-muted-foreground">
-                        Add your own API keys for unlimited auto-highlight usage
+                        Add your OpenRouter API key for BYOK models and unlimited AI usage
                     </p>
                 </DialogHeader>
 

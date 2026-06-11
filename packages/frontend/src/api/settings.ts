@@ -24,12 +24,14 @@ export interface LLMModel {
     id: string
     label: string
     description: string
+    requires_byok: boolean
 }
 
 export interface LLMPreferences {
     chat_model: string | null
     auto_highlight_model: string | null
     explain_model: string | null
+    openrouter_key_mode: 'app' | 'byok'
 }
 
 export type LLMPreferencesUpdate = Partial<Record<keyof LLMPreferences, string | null>>

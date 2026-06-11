@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 
 interface GlobalQuotaWarningProps {
@@ -7,12 +7,6 @@ interface GlobalQuotaWarningProps {
 
 export function GlobalQuotaWarning({ message }: GlobalQuotaWarningProps) {
     const [dismissedMessage, setDismissedMessage] = useState<string | null>(null);
-
-    useEffect(() => {
-        if (message && message !== dismissedMessage) {
-            setDismissedMessage(null);
-        }
-    }, [message, dismissedMessage]);
 
     if (!message || dismissedMessage === message) return null;
 

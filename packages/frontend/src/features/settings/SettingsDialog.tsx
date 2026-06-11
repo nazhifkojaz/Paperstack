@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -7,11 +7,13 @@ import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Input } from '@/components/ui/input'
 import { useAuthStore } from '@/stores/authStore'
 import {
     updateStorageProvider, fetchConnectedAccounts,
     fetchLLMModels, fetchLLMPreferences, updateLLMPreferences,
 } from '@/api/settings'
+import { useAutoHighlightQuota, useCreateApiKey, useDeleteApiKey } from '@/api/autoHighlight'
 import type { LLMModel, LLMPreferencesUpdate } from '@/api/settings'
 import { toast } from 'sonner'
 
@@ -34,6 +36,10 @@ const PROVIDERS = [
 ]
 
 type FeatureKey = 'chat_model' | 'auto_highlight_model' | 'explain_model'
+type OpenRouterKeyMode = 'app' | 'byok'
+type PreferenceState = Record<FeatureKey, string | null> & {
+    openrouter_key_mode: OpenRouterKeyMode
+}
 
 const FEATURE_LABELS: Record<FeatureKey, string> = {
     chat_model: 'Chat',
@@ -48,13 +54,26 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
     // Storage state
     const [connectedProviders, setConnectedProviders] = useState<Set<string>>(new Set())
 
+    // OpenRouter BYOK state
+    const { data: quota } = useAutoHighlightQuota(open)
+    const createKey = useCreateApiKey()
+    const deleteKey = useDeleteApiKey()
+    const [openRouterKey, setOpenRouterKey] = useState('')
+    const hasOpenRouterKey = quota?.providers.includes('openrouter') ?? false
+
     // LLM state
     const [models, setModels] = useState<LLMModel[]>([])
-    const [preferences, setPreferences] = useState<Record<FeatureKey, string | null>>({
+    const [preferences, setPreferences] = useState<PreferenceState>({
         chat_model: null,
         auto_highlight_model: null,
         explain_model: null,
+        openrouter_key_mode: 'app',
     })
+    const byokModelIds = useMemo(
+        () => new Set(models.filter((m) => m.requires_byok).map((m) => m.id)),
+        [models],
+    )
+    const isByokMode = preferences.openrouter_key_mode === 'byok'
 
     useEffect(() => {
         if (!open) return
@@ -73,6 +92,7 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
                     chat_model: prefs.chat_model,
                     auto_highlight_model: prefs.auto_highlight_model,
                     explain_model: prefs.explain_model,
+                    openrouter_key_mode: prefs.openrouter_key_mode,
                 }),
             )
             .catch(() => toast.error('Failed to load model preferences'))
@@ -96,6 +116,7 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
     const handleModelChange = useCallback(
         async (feature: FeatureKey, value: string) => {
             const modelId = value === '__auto__' ? null : value
+            const previousModel = preferences[feature]
             setPreferences((prev) => ({ ...prev, [feature]: modelId }))
 
             try {
@@ -103,11 +124,80 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
                 toast.success(`${FEATURE_LABELS[feature]} model updated`)
             } catch {
                 toast.error(`Failed to update ${FEATURE_LABELS[feature]} model`)
-                setPreferences((prev) => ({ ...prev, [feature]: modelId === null ? preferences[feature] : null }))
+                setPreferences((prev) => ({ ...prev, [feature]: previousModel }))
             }
         },
         [preferences],
     )
+
+    const buildAppModeUpdate = useCallback(() => {
+        const update: LLMPreferencesUpdate = { openrouter_key_mode: 'app' }
+        const next: PreferenceState = { ...preferences, openrouter_key_mode: 'app' }
+
+        for (const feature of Object.keys(FEATURE_LABELS) as FeatureKey[]) {
+            const selectedModel = preferences[feature]
+            if (selectedModel && byokModelIds.has(selectedModel)) {
+                update[feature] = null
+                next[feature] = null
+            }
+        }
+
+        return { update, next }
+    }, [byokModelIds, preferences])
+
+    const handleKeyModeChange = useCallback(
+        async (mode: OpenRouterKeyMode) => {
+            if (mode === preferences.openrouter_key_mode) return
+            if (mode === 'byok' && !hasOpenRouterKey) {
+                toast.error('Add an OpenRouter API key before switching to BYOK mode')
+                return
+            }
+
+            const { update, next } = mode === 'app'
+                ? buildAppModeUpdate()
+                : {
+                    update: { openrouter_key_mode: 'byok' } as LLMPreferencesUpdate,
+                    next: { ...preferences, openrouter_key_mode: 'byok' as const },
+                }
+
+            setPreferences(next)
+            try {
+                await updateLLMPreferences(update)
+                toast.success('OpenRouter key source updated')
+            } catch {
+                toast.error('Failed to update OpenRouter key source')
+                setPreferences(preferences)
+            }
+        },
+        [buildAppModeUpdate, hasOpenRouterKey, preferences],
+    )
+
+    const handleSaveOpenRouterKey = async () => {
+        const apiKey = openRouterKey.trim()
+        if (!apiKey) return
+
+        try {
+            await createKey.mutateAsync({ provider: 'openrouter', api_key: apiKey })
+            setOpenRouterKey('')
+            toast.success('OpenRouter API key saved')
+        } catch {
+            toast.error('Failed to save OpenRouter API key')
+        }
+    }
+
+    const handleDeleteOpenRouterKey = async () => {
+        try {
+            if (preferences.openrouter_key_mode === 'byok') {
+                const { update, next } = buildAppModeUpdate()
+                await updateLLMPreferences(update)
+                setPreferences(next)
+            }
+            await deleteKey.mutateAsync('openrouter')
+            toast.success('OpenRouter API key removed')
+        } catch {
+            toast.error('Failed to remove OpenRouter API key')
+        }
+    }
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -166,9 +256,34 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
                     <div>
                         <h3 className="text-sm font-medium">AI Models</h3>
                         <p className="text-xs text-muted-foreground mt-1">
-                            Select a free OpenRouter model per feature. Choosing a model forces
-                            the free tier for that feature, even if you have API keys configured.
+                            App key mode supports free and Owl Alpha models. BYOK mode uses
+                            your OpenRouter key for every LLM request.
                         </p>
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">
+                            Key source
+                        </label>
+                        <div className="grid grid-cols-2 gap-1 rounded-md border border-border p-1">
+                            <Button
+                                type="button"
+                                variant={isByokMode ? 'ghost' : 'secondary'}
+                                size="sm"
+                                onClick={() => handleKeyModeChange('app')}
+                            >
+                                App key
+                            </Button>
+                            <Button
+                                type="button"
+                                variant={isByokMode ? 'secondary' : 'ghost'}
+                                size="sm"
+                                onClick={() => handleKeyModeChange('byok')}
+                                disabled={!hasOpenRouterKey}
+                            >
+                                BYOK key
+                            </Button>
+                        </div>
                     </div>
 
                     <div className="flex flex-col gap-3">
@@ -184,18 +299,74 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
                                     <SelectTrigger>
                                         <SelectValue />
                                     </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="__auto__">Auto (use API keys first)</SelectItem>
-                                        {models.map((m) => (
-                                            <SelectItem key={m.id} value={m.id}>
-                                                {m.label}
-                                            </SelectItem>
-                                        ))}
+                                    <SelectContent className="max-h-72">
+                                        <SelectItem value="__auto__">Auto (default model)</SelectItem>
+                                        {models.map((m) => {
+                                            const disabled = m.requires_byok && !isByokMode
+                                            return (
+                                                <SelectItem key={m.id} value={m.id} disabled={disabled}>
+                                                    {m.label}{m.requires_byok ? ' (BYOK)' : ''}
+                                                </SelectItem>
+                                            )
+                                        })}
                                     </SelectContent>
                                 </Select>
                             </div>
                         ))}
                     </div>
+                </div>
+
+                <Separator />
+
+                {/* OpenRouter BYOK section */}
+                <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <h3 className="text-sm font-medium">OpenRouter API Key</h3>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                BYOK mode uses this key for every LLM call. Embeddings try it
+                                first and fall back to the app key when quota or balance is unavailable.
+                            </p>
+                        </div>
+                        <a
+                            href="https://openrouter.ai/settings/keys"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="shrink-0 text-xs text-blue-400 hover:underline"
+                        >
+                            Get API key
+                        </a>
+                    </div>
+
+                    {hasOpenRouterKey ? (
+                        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                            <span className="text-sm text-muted-foreground">Key configured</span>
+                            <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={handleDeleteOpenRouterKey}
+                                disabled={deleteKey.isPending}
+                            >
+                                Remove
+                            </Button>
+                        </div>
+                    ) : (
+                        <div className="flex gap-2">
+                            <Input
+                                type="password"
+                                placeholder="Enter OpenRouter API key..."
+                                value={openRouterKey}
+                                onChange={(e) => setOpenRouterKey(e.target.value)}
+                            />
+                            <Button
+                                size="sm"
+                                onClick={handleSaveOpenRouterKey}
+                                disabled={!openRouterKey.trim() || createKey.isPending}
+                            >
+                                Save
+                            </Button>
+                        </div>
+                    )}
                 </div>
             </DialogContent>
         </Dialog>
