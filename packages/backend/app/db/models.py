@@ -298,7 +298,7 @@ class UserApiKey(Base):
     )
     provider: Mapped[str] = mapped_column(
         String(20), nullable=False
-    )  # 'glm' | 'gemini'
+    )  # 'openrouter'
     encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
@@ -493,6 +493,9 @@ class UserLLMPreferences(Base):
     chat_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     auto_highlight_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     explain_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    openrouter_key_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="app", default="app"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
     )
