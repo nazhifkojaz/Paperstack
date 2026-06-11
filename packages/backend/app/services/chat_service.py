@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator
 import tiktoken
 
 from app.schemas.types import ChatMessageDict, ChunkDict, PaperMetadata
-from app.services.llm_service import LLMService, STREAM_PROVIDERS
+from app.services.llm_service import LLMService
 
 DEFAULT_CONTEXT_MAX_TOKENS = 4000
 
@@ -201,14 +201,14 @@ class ChatService:
         api_key: str,
         model: str | None = None,
     ) -> AsyncIterator[str]:
-        method_name = STREAM_PROVIDERS.get(provider)
-        if not method_name:
-            raise ValueError(
-                f"Unknown provider '{provider}'. Valid: {list(STREAM_PROVIDERS)}"
-            )
-        stream_method = getattr(self._llm_service, method_name)
-        kwargs: dict[str, Any] = {"system_prompt": system_prompt, "messages": messages, "api_key": api_key}
-        if model and provider == "openrouter":
+        if provider != "openrouter":
+            raise ValueError(f"Unknown provider: {provider}")
+        kwargs: dict[str, Any] = {
+            "system_prompt": system_prompt,
+            "messages": messages,
+            "api_key": api_key,
+        }
+        if model:
             kwargs["model"] = model
-        async for token in stream_method(**kwargs):
+        async for token in self._llm_service.stream_openrouter(**kwargs):
             yield token
