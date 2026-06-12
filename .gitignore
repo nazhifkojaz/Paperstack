@@ -27,10 +27,7 @@ build/
 coverage/
 .coverage
 .pytest_cache/
-.playwright/
-.playwright-mcp/
 test-results/
-playwright-report/
 
 # OS
 .DS_Store
@@ -77,3 +74,5 @@ prompt_experiment_results.json
 .claude/
 # Added by code-review-graph
 .code-review-graph/
+
+.sapi
