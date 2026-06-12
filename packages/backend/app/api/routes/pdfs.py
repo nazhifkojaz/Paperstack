@@ -74,6 +74,16 @@ def _etag(pdf: Pdf) -> str:
     return f'"{_storage_file_id(pdf)}"'
 
 
+def _create_default_set(pdf_id: uuid.UUID, user_id: uuid.UUID) -> AnnotationSet:
+    return AnnotationSet(
+        pdf_id=pdf_id,
+        user_id=user_id,
+        name="Default",
+        color="#FFFF00",
+        source="manual",
+    )
+
+
 @router.post("/upload", response_model=PdfResponse)
 async def upload_pdf(
     file: UploadFile = File(...),
@@ -110,6 +120,9 @@ async def upload_pdf(
         isbn=isbn,
     )
     db.add(pdf)
+    await db.flush()
+
+    db.add(_create_default_set(pdf.id, current_user.id))
 
     if project_ids:
         try:
@@ -224,6 +237,8 @@ async def link_pdf(
         isbn=data.isbn,
     )
     db.add(pdf)
+    await db.flush()
+    db.add(_create_default_set(pdf_id, current_user.id))
 
     if data.project_ids:
         stmt = select(Collection).where(
