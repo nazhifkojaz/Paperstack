@@ -10,6 +10,7 @@ Route handlers translate to appropriate HTTP status codes.
 import logging
 import uuid
 from dataclasses import dataclass
+from time import perf_counter
 from typing import AsyncIterator, Optional
 
 from sqlalchemy import select
@@ -18,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import ChatConversation, ChatMessage, Citation, Pdf, User
 from app.core.config import settings
 from app.schemas.types import ChatMessageDict, PaperMetadata
-from app.services.chat_service import ChatService, COLLECTION_SYSTEM_PROMPT
+from app.services.chat_service import ChatService, COLLECTION_SYSTEM_PROMPT, _count_tokens
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
     EmbeddingError,
@@ -29,6 +30,12 @@ from app.services.exceptions import (
 from app.services.indexing_service import IndexingService, get_indexing_service
 from app.services.llm_service import LLMService
 from app.services.pdf_download_service import pdf_download_service
+from app.services.training_log_service import (
+    ScopeType,
+    TrainingLogContext,
+    TrainingLogService,
+    training_log_service,
+)
 from app.services.vector_search_service import vector_search_service
 
 
@@ -41,6 +48,13 @@ class PreparedContext:
     top_chunks: list
     paper_metadata: PaperMetadata | list[PaperMetadata] | None
     context_chunks_payload: list[dict]
+    query_embedding: list[float]
+    scope_type: ScopeType
+    pdf_id: uuid.UUID | None
+    collection_id: uuid.UUID | None
+    training_chunks_payload: list[dict]
+    retrieval_top_k: int
+    retrieval_config: dict
 
 
 @dataclass
@@ -61,6 +75,7 @@ class ChatOrchestrator:
         llm_service: Optional[LLMService] = None,
         chat_service: Optional[ChatService] = None,
         indexing_service: Optional[IndexingService] = None,
+        training_logger: Optional[TrainingLogService] = None,
     ):
         self._embedding_service = embedding_service or EmbeddingService()
         self._llm_service = llm_service or LLMService()
@@ -68,6 +83,7 @@ class ChatOrchestrator:
         self._indexing_service = indexing_service or get_indexing_service(
             pdf_download_service
         )
+        self._training_log_service = training_logger or training_log_service
 
     async def prepare_context(
         self,
@@ -135,19 +151,45 @@ class ChatOrchestrator:
             db=db,
             query_text=query_text,
         )
-        context = self._chat_service.build_context(
-            [{"page_number": c.page_number, "end_page_number": c.end_page_number, "content": c.content, "section_title": c.section_title} for c in top_chunks]
-        )
+        context_input = [
+            {
+                "chunk_id": c.chunk_id,
+                "page_number": c.page_number,
+                "end_page_number": c.end_page_number,
+                "content": c.content,
+                "section_title": c.section_title,
+            }
+            for c in top_chunks
+        ]
+        built_context = self._chat_service.build_context_with_metadata(context_input)
+        context = built_context.context
 
         paper_metadata = await self._fetch_pdf_citation(pdf_id, pdf_row, user, db)
 
         context_chunks_payload = self._build_chunks_payload(top_chunks)
+        training_chunks_payload = self._build_training_chunks_payload(
+            top_chunks,
+            included_chunk_ids=built_context.included_chunk_ids,
+            fallback_pdf_id=str(pdf_id),
+            fallback_pdf_title=pdf_row.title,
+        )
 
         return PreparedContext(
             context=context,
             top_chunks=top_chunks,
             paper_metadata=paper_metadata,
             context_chunks_payload=context_chunks_payload,
+            query_embedding=query_vector,
+            scope_type="single_pdf",
+            pdf_id=pdf_id,
+            collection_id=None,
+            training_chunks_payload=training_chunks_payload,
+            retrieval_top_k=settings.CHAT_TOP_K_SINGLE_PDF,
+            retrieval_config=self._retrieval_config(
+                scope_type="single_pdf",
+                top_k=settings.CHAT_TOP_K_SINGLE_PDF,
+                query_text=query_text,
+            ),
         )
 
     async def _prepare_collection_context(
@@ -182,16 +224,32 @@ class ChatOrchestrator:
                 page_label = f"Page {c.page_number}"
             context_parts.append(f"[{c.pdf_title}, {page_label}]\n{c.content}")
         context = "\n\n---\n\n".join(context_parts)
+        included_chunk_ids = [str(c.chunk_id) for c in top_chunks if c.chunk_id]
 
         paper_metadata = await self._fetch_collection_citations(top_chunks, user, db)
 
         context_chunks_payload = self._build_chunks_payload(top_chunks)
+        training_chunks_payload = self._build_training_chunks_payload(
+            top_chunks,
+            included_chunk_ids=included_chunk_ids,
+        )
 
         return PreparedContext(
             context=context,
             top_chunks=top_chunks,
             paper_metadata=paper_metadata,
             context_chunks_payload=context_chunks_payload,
+            query_embedding=query_vector,
+            scope_type="collection",
+            pdf_id=None,
+            collection_id=collection_id,
+            training_chunks_payload=training_chunks_payload,
+            retrieval_top_k=settings.CHAT_TOP_K_COLLECTION,
+            retrieval_config=self._retrieval_config(
+                scope_type="collection",
+                top_k=settings.CHAT_TOP_K_COLLECTION,
+                query_text=query_text,
+            ),
         )
 
     async def _fetch_pdf_citation(
@@ -270,6 +328,64 @@ class ChatOrchestrator:
             for c in top_chunks
         ]
 
+    def _build_training_chunks_payload(
+        self,
+        top_chunks: list,
+        *,
+        included_chunk_ids: list[str],
+        fallback_pdf_id: str | None = None,
+        fallback_pdf_title: str | None = None,
+    ) -> list[dict]:
+        prompt_rank_by_chunk_id = {
+            chunk_id: rank for rank, chunk_id in enumerate(included_chunk_ids, 1)
+        }
+        payload = []
+        for retrieval_rank, chunk in enumerate(top_chunks, 1):
+            chunk_id = str(chunk.chunk_id) if chunk.chunk_id else None
+            prompt_rank = prompt_rank_by_chunk_id.get(chunk_id)
+            content = chunk.content or ""
+            payload.append(
+                {
+                    "chunk_id": chunk_id,
+                    "pdf_id": (
+                        str(chunk.pdf_id)
+                        if getattr(chunk, "pdf_id", None)
+                        else fallback_pdf_id
+                    ),
+                    "pdf_title": (
+                        chunk.pdf_title
+                        if getattr(chunk, "pdf_title", None)
+                        else fallback_pdf_title
+                    ),
+                    "page_number": chunk.page_number,
+                    "end_page_number": chunk.end_page_number,
+                    "section_title": chunk.section_title,
+                    "section_level": chunk.section_level,
+                    "retrieval_rank": retrieval_rank,
+                    "retrieval_score": float(getattr(chunk, "score", 0.0) or 0.0),
+                    "content": content,
+                    "snippet": content[:200],
+                    "included_in_prompt": prompt_rank is not None,
+                    "prompt_rank": prompt_rank,
+                }
+            )
+        return payload
+
+    def _retrieval_config(
+        self,
+        *,
+        scope_type: str,
+        top_k: int,
+        query_text: str | None,
+    ) -> dict:
+        return {
+            "scope_type": scope_type,
+            "top_k": top_k,
+            "mode": "hybrid" if query_text else "vector",
+            "hybrid_semantic_weight": settings.HYBRID_SEMANTIC_WEIGHT,
+            "hybrid_keyword_weight": settings.HYBRID_KEYWORD_WEIGHT,
+        }
+
     async def build_messages(
         self,
         *,
@@ -298,8 +414,10 @@ class ChatOrchestrator:
         content: str,
         conv: ChatConversation,
         db: AsyncSession,
-    ) -> None:
+    ) -> uuid.UUID:
+        message_id = uuid.uuid4()
         user_msg = ChatMessage(
+            id=message_id,
             conversation_id=conversation_id,
             role="user",
             content=content,
@@ -309,6 +427,7 @@ class ChatOrchestrator:
             truncated = content.strip()
             conv.title = truncated[:60] + ("…" if len(truncated) > 60 else "")
         await db.commit()
+        return message_id
 
     async def stream_and_save(
         self,
@@ -321,10 +440,12 @@ class ChatOrchestrator:
         conversation_id: uuid.UUID,
         context_chunks_payload: list[dict],
         db: AsyncSession,
+        training_log_context: TrainingLogContext | None = None,
     ) -> AsyncIterator[dict]:
         """Stream LLM reply, persist assistant message, yield SSE event dicts."""
         full_reply: list[str] = []
-        assistant_message_id = str(uuid.uuid4())
+        assistant_message_id = uuid.uuid4()
+        started_at = perf_counter()
 
         try:
             try:
@@ -342,7 +463,7 @@ class ChatOrchestrator:
                 return
 
             msg = ChatMessage(
-                id=uuid.UUID(assistant_message_id),
+                id=assistant_message_id,
                 conversation_id=conversation_id,
                 role="assistant",
                 content="".join(full_reply),
@@ -365,16 +486,32 @@ class ChatOrchestrator:
             )
             db.add(msg)
             await db.commit()
+            assistant_reply = "".join(full_reply)
+            latency_ms = int((perf_counter() - started_at) * 1000)
             logger.info(
                 "Saved assistant message for conversation %s (%d chars, %d chunks)",
                 conversation_id,
-                len("".join(full_reply)),
+                len(assistant_reply),
                 len(context_chunks_payload),
             )
 
+            try:
+                self._training_log_service.schedule_interaction_log(
+                    training_log_context,
+                    assistant_message_id=assistant_message_id,
+                    assistant_reply=assistant_reply,
+                    latency_ms=latency_ms,
+                    token_count=_count_tokens(assistant_reply),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to schedule training data logging for conversation %s",
+                    conversation_id,
+                )
+
             yield {
                 "done": True,
-                "message_id": assistant_message_id,
+                "message_id": str(assistant_message_id),
                 "context_chunks": context_chunks_payload,
             }
 

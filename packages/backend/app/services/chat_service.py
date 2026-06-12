@@ -1,6 +1,7 @@
 """Chat service: builds RAG context and orchestrates streaming LLM calls."""
 
 import logging
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 import tiktoken
@@ -48,6 +49,12 @@ COLLECTION_SYSTEM_PROMPT = (
 )
 
 CONTEXT_WINDOW = 10  # maximum number of past messages sent as conversation history
+
+
+@dataclass(frozen=True)
+class BuiltContext:
+    context: str
+    included_chunk_ids: list[str]
 
 
 def _format_paper_metadata(metadata: PaperMetadata | list[PaperMetadata] | None) -> str:
@@ -144,9 +151,16 @@ class ChatService:
         self, chunks: list[ChunkDict], max_tokens: int = DEFAULT_CONTEXT_MAX_TOKENS
     ) -> str:
         """Format chunks into context string respecting token budget."""
+        return self.build_context_with_metadata(chunks, max_tokens=max_tokens).context
+
+    def build_context_with_metadata(
+        self, chunks: list[ChunkDict], max_tokens: int = DEFAULT_CONTEXT_MAX_TOKENS
+    ) -> BuiltContext:
+        """Format chunks and report which chunk IDs were included in the prompt."""
         deduped = _deduplicate_chunks(chunks)
         parts = []
         total_tokens = 0
+        included_chunk_ids: list[str] = []
 
         for c in deduped:
             end_page = c.get("end_page_number")
@@ -165,12 +179,19 @@ class ChatService:
                 if remaining > 50:
                     truncated = _truncate_to_tokens(chunk_text, remaining)
                     parts.append(truncated)
+                    if c.get("chunk_id"):
+                        included_chunk_ids.append(str(c["chunk_id"]))
                 break
 
             parts.append(chunk_text)
+            if c.get("chunk_id"):
+                included_chunk_ids.append(str(c["chunk_id"]))
             total_tokens += chunk_tokens
 
-        return "\n\n---\n\n".join(parts)
+        return BuiltContext(
+            context="\n\n---\n\n".join(parts),
+            included_chunk_ids=included_chunk_ids,
+        )
 
     def build_messages(
         self,

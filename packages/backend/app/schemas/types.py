@@ -7,6 +7,7 @@ class ChatMessageDict(TypedDict):
 
 
 class ChunkDict(TypedDict, total=False):
+    chunk_id: str
     content: str
     page_number: int
     end_page_number: int

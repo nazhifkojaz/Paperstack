@@ -38,7 +38,8 @@ from app.services.exceptions import (
     LLMRateLimitError,
 )
 from app.services.explain_service import ExplainService
-from app.services.llm_service import LLMService
+from app.services.llm_service import DEFAULT_FREE_MODEL, LLMService
+from app.services.training_log_service import TrainingLogContext
 from app.services.vector_search_service import vector_search_service
 from app.schemas.chat import (
     ConversationCreate,
@@ -313,12 +314,39 @@ async def stream_message(
     )
 
     # Persist user message
-    await orchestrator.persist_user_message(
+    user_message_id = await orchestrator.persist_user_message(
         conversation_id=conversation_id,
         content=data.content,
         conv=conv,
         db=db,
     )
+
+    training_log_context = None
+    if settings.TRAINING_DATA_LOGGING_ENABLED:
+        effective_model = resolution.model or DEFAULT_FREE_MODEL
+        training_log_context = TrainingLogContext(
+            user_id=current_user.id,
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+            query_text=data.content,
+            query_embedding=prepared.query_embedding,
+            embedding_model=EmbeddingService.MODEL,
+            embedding_dimensions=EmbeddingService.DIMENSIONS,
+            scope_type=prepared.scope_type,
+            pdf_id=prepared.pdf_id,
+            collection_id=prepared.collection_id,
+            retrieved_chunks=prepared.training_chunks_payload,
+            retrieval_top_k=prepared.retrieval_top_k,
+            retrieval_config=prepared.retrieval_config,
+            prompt_context=prepared.context,
+            system_prompt=prepared_msgs.system_prompt,
+            prompt_messages=prepared_msgs.messages,
+            llm_provider=resolution.provider,
+            llm_model=effective_model,
+            generation_config={"is_in_house": resolution.is_in_house},
+            training_eligible=settings.TRAINING_DATA_DEFAULT_ELIGIBLE,
+            consent_version=settings.TRAINING_DATA_CONSENT_VERSION,
+        )
 
     # Stream response
     async def event_stream():
@@ -333,6 +361,7 @@ async def stream_message(
             conversation_id=conversation_id,
             context_chunks_payload=prepared.context_chunks_payload,
             db=db,
+            training_log_context=training_log_context,
         ):
             yield f"data: {json.dumps(event)}\n\n"
 
