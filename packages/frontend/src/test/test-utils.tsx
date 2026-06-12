@@ -79,10 +79,14 @@ export function createMockAnnotation(overrides: Partial<import('@/api/annotation
 
 // Re-exports
 
-/**
- * Re-export everything from testing-library.
- */
-export * from '@testing-library/react'
+export {
+  act,
+  cleanup,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 
 /**
  * Override render with our custom implementation that includes providers.

@@ -37,33 +37,34 @@ const TOUR_STEPS: TourStep[] = [
   },
 ];
 
+interface TargetState {
+  rect: DOMRect | null;
+  step: number;
+}
+
 export function OnboardingTour() {
   const { hasSeenTour, tourStep, setTourStep, completeTour } = useOnboardingStore();
-  const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
-  const [isVisible, setIsVisible] = useState(false);
+  const [targetState, setTargetState] = useState<TargetState | null>(null);
 
   const currentStep = TOUR_STEPS[tourStep];
 
   const updateTargetRect = useCallback(() => {
     if (!currentStep) return;
     const el = document.querySelector(currentStep.target);
-    if (el) {
-      setTargetRect(el.getBoundingClientRect());
-    } else {
-      setTargetRect(null);
-    }
-  }, [currentStep]);
+    setTargetState({
+      rect: el ? el.getBoundingClientRect() : null,
+      step: tourStep,
+    });
+  }, [currentStep, tourStep]);
 
   useEffect(() => {
     if (hasSeenTour || !currentStep) {
-      setIsVisible(false);
       return;
     }
 
     // Small delay to ensure DOM is ready
     const timer = setTimeout(() => {
       updateTargetRect();
-      setIsVisible(true);
     }, 500);
 
     window.addEventListener('resize', updateTargetRect);
@@ -94,7 +95,10 @@ export function OnboardingTour() {
     completeTour();
   };
 
-  if (!isVisible || !currentStep || !targetRect) {
+  const targetRect =
+    targetState?.step === tourStep ? targetState.rect : null;
+
+  if (hasSeenTour || !currentStep || !targetRect) {
     return null;
   }
 
