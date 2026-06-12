@@ -148,9 +148,10 @@ export const NotePopover = ({
     // Close on click outside
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
-            if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-                onClose();
-            }
+            const target = e.target as HTMLElement;
+            if (popoverRef.current?.contains(target)) return;
+            if (target.closest('[data-radix-popper-content-wrapper]')) return;
+            onClose();
         };
 
         document.addEventListener('mousedown', handleClickOutside);
@@ -255,6 +256,7 @@ export const NotePopover = ({
             explanation={aiParaphrase}
             badgeLabel="AI Paraphrase"
             detailLabel={getParaphraseLevelLabel(aiParaphrase.level)}
+            enableCopy
             className="rounded-none border-0 bg-transparent"
         />
     ) : (
