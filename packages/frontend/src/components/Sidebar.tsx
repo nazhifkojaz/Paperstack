@@ -48,7 +48,7 @@ export const Sidebar = ({ className }: SidebarProps) => {
                     </Button>
                 </div>
 
-                <div className="px-3 mb-6">
+                <div className="px-3 mb-6" data-tour="sidebar-projects">
                     <div className="flex items-center justify-between mb-2 px-4">
                         <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                             Projects

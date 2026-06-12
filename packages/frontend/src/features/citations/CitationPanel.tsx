@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Sparkles, Copy, Check, Pencil, X } from 'lucide-react';
+import { CitationHelp } from '@/features/onboarding/CitationHelp';
 
 export const CitationPanel = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
@@ -61,6 +62,7 @@ export const CitationPanel = () => {
                 <div className="p-4 border-b flex items-center justify-between">
                     <h2 className="font-semibold">Citation</h2>
                     <div className="flex items-center gap-1">
+                        <CitationHelp />
                         {citation && !isEditing && (
                             <Button variant="ghost" size="icon" onClick={handleStartEdit}>
                                 <Pencil className="h-4 w-4" />

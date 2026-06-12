@@ -2,6 +2,7 @@ import { Pdf } from '@/api/pdfs';
 import { PdfCard } from './PdfCard';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { LibraryEmptyState } from '@/features/onboarding/LibraryEmptyState';
 import { Search } from 'lucide-react';
 
 interface PdfGridProps {
@@ -11,9 +12,10 @@ interface PdfGridProps {
     onEdit?: (pdf: Pdf) => void;
     onManageProjects?: (pdf: Pdf) => void;
     searchQuery?: string;
+    onAddPdf?: () => void;
 }
 
-export const PdfGrid = ({ pdfs, isLoading, onDelete, onEdit, onManageProjects, searchQuery }: PdfGridProps) => {
+export const PdfGrid = ({ pdfs, isLoading, onDelete, onEdit, onManageProjects, searchQuery, onAddPdf }: PdfGridProps) => {
     if (isLoading) {
         return (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
@@ -33,6 +35,15 @@ export const PdfGrid = ({ pdfs, isLoading, onDelete, onEdit, onManageProjects, s
     }
 
     if (pdfs.length === 0) {
+        if (!searchQuery && onAddPdf) {
+            return (
+                <LibraryEmptyState
+                    onAddPdf={onAddPdf}
+                    searchQuery={searchQuery}
+                />
+            );
+        }
+
         return (
             <EmptyState
                 icon={<Search className="w-8 h-8" />}

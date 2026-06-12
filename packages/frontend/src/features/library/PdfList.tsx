@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { LibraryEmptyState } from '@/features/onboarding/LibraryEmptyState';
 import { useLibraryStore } from '@/stores/libraryStore';
 import { getHostname } from '@/lib/url-utils';
 
@@ -16,9 +17,10 @@ interface PdfListProps {
     onEdit?: (pdf: Pdf) => void;
     onManageProjects?: (pdf: Pdf) => void;
     searchQuery?: string;
+    onAddPdf?: () => void;
 }
 
-export const PdfList = ({ pdfs, isLoading, onDelete, onEdit, onManageProjects, searchQuery }: PdfListProps) => {
+export const PdfList = ({ pdfs, isLoading, onDelete, onEdit, onManageProjects, searchQuery, onAddPdf }: PdfListProps) => {
     const navigate = useNavigate();
     const { isSelectionMode, selectedPdfIds, togglePdfSelection } = useLibraryStore();
 
@@ -40,6 +42,15 @@ export const PdfList = ({ pdfs, isLoading, onDelete, onEdit, onManageProjects, s
     }
 
     if (pdfs.length === 0) {
+        if (!searchQuery && onAddPdf) {
+            return (
+                <LibraryEmptyState
+                    onAddPdf={onAddPdf}
+                    searchQuery={searchQuery}
+                />
+            );
+        }
+
         return (
             <EmptyState
                 icon={<Search className="w-8 h-8" />}

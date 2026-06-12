@@ -16,6 +16,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui/button';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
+import { OnboardingTour } from '@/features/onboarding/OnboardingTour';
 
 export function LibraryPage() {
     const {
@@ -180,6 +181,7 @@ export function LibraryPage() {
 
     return (
         <div className="flex-1 overflow-auto bg-background/50 h-full">
+            <OnboardingTour />
             <div className="container mx-auto p-4 md:p-8 max-w-7xl">
                 <div className="mb-8 flex items-start justify-between">
                     <div>
@@ -188,7 +190,7 @@ export function LibraryPage() {
                             Manage, organize, and read your PDF documents.
                         </p>
                     </div>
-                    <Button onClick={() => setAddPdfOpen(true)} className="gap-2">
+                    <Button onClick={() => setAddPdfOpen(true)} className="gap-2" data-tour="library-add">
                         <Plus className="h-4 w-4" />
                         Add PDF
                     </Button>
@@ -218,6 +220,7 @@ export function LibraryPage() {
                                     onEdit={setEditPdf}
                                     onDelete={handleDeleteClick}
                                     onManageProjects={setManageProjectsPdf}
+                                    onAddPdf={() => setAddPdfOpen(true)}
                                 />
                             ) : (
                                 <PdfList
@@ -227,6 +230,7 @@ export function LibraryPage() {
                                     onEdit={setEditPdf}
                                     onDelete={handleDeleteClick}
                                     onManageProjects={setManageProjectsPdf}
+                                    onAddPdf={() => setAddPdfOpen(true)}
                                 />
                             )}
                         </div>

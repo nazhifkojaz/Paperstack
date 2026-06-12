@@ -41,7 +41,7 @@ export const FilterBar = ({ totalCount }: FilterBarProps) => {
                         onChange={(e) => setSearchQuery(e.target.value)}
                     />
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2" data-tour="library-search">
                     <Switch
                         id="deep-search"
                         checked={isDeepSearch}

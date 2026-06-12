@@ -5,6 +5,7 @@ import { ChatConversationSelect } from './ChatConversationSelect';
 import { DeleteConversationDialog } from './DeleteConversationDialog';
 import { PdfChatPanelBody } from './PdfChatPanelBody';
 import { PdfChatPanelHeader } from './PdfChatPanelHeader';
+import { ChatIntroBanner } from '@/features/onboarding/ChatIntroBanner';
 
 export interface PdfChatPanelShellProps {
   activeConversationId: string | null;
@@ -88,6 +89,7 @@ export function PdfChatPanelShell({
           onNewConversation={onNewConversation}
           onToggleFullscreen={onToggleFullscreen}
         />
+        <ChatIntroBanner />
         <ChatConversationSelect
           conversations={conversations}
           activeConversationId={activeConversationId}

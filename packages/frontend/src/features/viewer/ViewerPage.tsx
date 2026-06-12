@@ -23,6 +23,7 @@ import { Loader2, ArrowLeft, ExternalLink, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SettingsDialog } from '@/features/settings/SettingsDialog';
 import { UserNav } from '@/components/UserNav';
+import { AnnotationTooltip } from '@/features/onboarding/AnnotationTooltip';
 
 const EMPTY_SETS: AnnotationSet[] = [];
 const EMPTY_ANNOTATIONS: Annotation[] = [];
@@ -238,6 +239,8 @@ export function ViewerPage() {
 
             <CitationPanel />
             <ChatPanel pdfId={id!} jumpToPage={jumpToPage} />
+
+            <AnnotationTooltip />
 
             {showFps && <FpsCounter />}
             <SettingsDialog
