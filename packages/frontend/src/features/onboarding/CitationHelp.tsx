@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { HelpCircle, BookOpen, Copy, Check } from 'lucide-react';
 import { useState } from 'react';
+import { useClipboard } from '@/hooks/useClipboard';
 
 const SAMPLE_BIBTEX = `@article{sample2024,
   title={Sample Paper Title},
@@ -14,7 +15,7 @@ const SAMPLE_BIBTEX = `@article{sample2024,
 export function CitationHelp() {
   const { hasSeenCitationHelp, markCitationHelpSeen } = useOnboardingStore();
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { copied, copyToClipboard } = useClipboard();
 
   const handleOpenChange = (newOpen: boolean) => {
     setOpen(newOpen);
@@ -24,9 +25,7 @@ export function CitationHelp() {
   };
 
   const handleCopySample = () => {
-    navigator.clipboard.writeText(SAMPLE_BIBTEX);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    copyToClipboard(SAMPLE_BIBTEX);
   };
 
   return (

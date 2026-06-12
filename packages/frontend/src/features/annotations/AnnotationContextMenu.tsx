@@ -4,6 +4,7 @@ import { RefreshCw, Sparkles } from 'lucide-react'
 import { useUpdateAnnotation, useDeleteAnnotation } from '@/api/annotations'
 import { useAnnotationStore } from '@/stores/annotationStore'
 import type { Annotation } from '@/api/annotations'
+import { useClipboard } from '@/hooks/useClipboard'
 import { ANNOTATION_COLORS } from './constants'
 import { getAnnotationUserNote } from './annotationContent'
 
@@ -134,12 +135,7 @@ export const AnnotationContextMenu = ({
     onClose()
   }
 
-  const handleCopyText = async () => {
-    if (annotation.selected_text) {
-      await navigator.clipboard.writeText(annotation.selected_text)
-      onClose()
-    }
-  }
+  const { copyToClipboard } = useClipboard({ onSuccess: onClose })
 
   const handleDelete = () => {
     deleteAnnotation({
@@ -220,7 +216,7 @@ export const AnnotationContextMenu = ({
       {annotation.type === 'highlight' && annotation.selected_text && (
         <button
           className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
-          onClick={handleCopyText}
+          onClick={() => { if (annotation.selected_text) copyToClipboard(annotation.selected_text) }}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Sparkles, Copy, Check, Pencil, X } from 'lucide-react';
+import { useClipboard } from '@/hooks/useClipboard';
 import { CitationHelp } from '@/features/onboarding/CitationHelp';
 
 export const CitationPanel = () => {
@@ -19,14 +20,11 @@ export const CitationPanel = () => {
     const autoExtract = useAutoExtractCitation(pdfId || '');
     const updateCitation = useUpdateCitation(pdfId || '');
 
-    const [copied, setCopied] = useState(false);
+    const { copied, copyToClipboard } = useClipboard();
     const [editForm, setEditForm] = useState<CitationUpdate>({});
 
     const handleCopyBibtex = () => {
-        if (!citation?.bibtex) return;
-        navigator.clipboard.writeText(citation.bibtex);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        if (citation?.bibtex) copyToClipboard(citation.bibtex);
     };
 
     const handleStartEdit = () => {
