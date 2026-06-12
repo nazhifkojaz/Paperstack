@@ -116,26 +116,6 @@ describe('useNewPdfViewerStore', () => {
       expect(dims?.baseHeight).toBe(792);
     });
 
-    it('getScaledDimensions returns scaled dimensions', () => {
-      useNewPdfViewerStore.getState().setPageDimensions(1, { baseWidth: 612, baseHeight: 792 });
-      useNewPdfViewerStore.getState().setZoom(2.0);
-      const scaled = useNewPdfViewerStore.getState().getScaledDimensions(1);
-      expect(scaled?.width).toBeCloseTo(1224);
-      expect(scaled?.height).toBeCloseTo(1584);
-    });
-
-    it('getScaledDimensions returns null for unknown page', () => {
-      expect(useNewPdfViewerStore.getState().getScaledDimensions(999)).toBeNull();
-    });
-
-    it('setPageDimensionsBulk replaces all dimensions', () => {
-      const map = new Map<number, { baseWidth: number; baseHeight: number }>();
-      map.set(1, { baseWidth: 100, baseHeight: 200 });
-      map.set(2, { baseWidth: 300, baseHeight: 400 });
-      useNewPdfViewerStore.getState().setPageDimensionsBulk(map);
-      expect(useNewPdfViewerStore.getState().pageDimensions.size).toBe(2);
-    });
-
     it('clearPageDimensions removes all dimensions', () => {
       useNewPdfViewerStore.getState().setPageDimensions(1, { baseWidth: 100, baseHeight: 100 });
       useNewPdfViewerStore.getState().clearPageDimensions();

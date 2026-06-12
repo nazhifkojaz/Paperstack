@@ -1,19 +1,14 @@
 import { create } from 'zustand';
 import type { PdfViewerState, PdfViewerRotation, PdfViewerZoomMode } from './pdfViewerTypes';
+import type { PageDimensions } from './pdfPageLayout';
 
 // ---------------------------------------------------------------------------
 // Internal: page‑dimension cache (not part of the public PdfViewerState type)
 // ---------------------------------------------------------------------------
 
-interface PageDimensions {
-  baseWidth: number;
-  baseHeight: number;
-}
-
 interface NewPdfViewerStore extends PdfViewerState {
   // ---- Dimension cache ----
   pageDimensions: Map<number, PageDimensions>;
-  isDimensionsLoading: boolean;
 
   // ---- Passive visibility ----
   setVisiblePage: (page: number) => void;
@@ -36,15 +31,15 @@ interface NewPdfViewerStore extends PdfViewerState {
 
   // ---- Dimensions ----
   setPageDimensions: (pageNum: number, dims: PageDimensions) => void;
-  setPageDimensionsBulk: (dims: Map<number, PageDimensions>) => void;
-  getScaledDimensions: (pageNum: number) => { width: number; height: number } | null;
   clearPageDimensions: () => void;
 
   // ---- Lifecycle ----
   reset: () => void;
 }
 
-const initialState: PdfViewerState & { pageDimensions: Map<number, PageDimensions>; isDimensionsLoading: boolean } = {
+const initialState: PdfViewerState & {
+  pageDimensions: Map<number, PageDimensions>;
+} = {
   visiblePage: 1,
   targetPage: null,
   totalPages: 0,
@@ -52,10 +47,9 @@ const initialState: PdfViewerState & { pageDimensions: Map<number, PageDimension
   zoomMode: 'manual' as PdfViewerZoomMode,
   rotation: 0 as PdfViewerRotation,
   pageDimensions: new Map<number, PageDimensions>(),
-  isDimensionsLoading: true,
 };
 
-export const useNewPdfViewerStore = create<NewPdfViewerStore>((set, get) => ({
+export const useNewPdfViewerStore = create<NewPdfViewerStore>((set) => ({
   ...initialState,
 
   // ---- Passive visibility (MUST NOT trigger scrolling) ----
@@ -90,26 +84,12 @@ export const useNewPdfViewerStore = create<NewPdfViewerStore>((set, get) => ({
     set((state) => {
       const next = new Map(state.pageDimensions);
       next.set(pageNum, dims);
-      return { pageDimensions: next, isDimensionsLoading: false };
+      return { pageDimensions: next };
     }),
-
-  setPageDimensionsBulk: (dims) =>
-    set({ pageDimensions: dims, isDimensionsLoading: false }),
-
-  getScaledDimensions: (pageNum) => {
-    const state = get();
-    const dims = state.pageDimensions.get(pageNum);
-    if (!dims) return null;
-    return {
-      width: dims.baseWidth * state.zoom,
-      height: dims.baseHeight * state.zoom,
-    };
-  },
 
   clearPageDimensions: () =>
     set({
       pageDimensions: new Map<number, PageDimensions>(),
-      isDimensionsLoading: true,
     }),
 
   // ---- Lifecycle ----

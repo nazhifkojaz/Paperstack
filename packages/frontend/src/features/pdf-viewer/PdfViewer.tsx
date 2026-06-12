@@ -6,6 +6,16 @@ import { usePdfSource } from '@/features/viewer/usePdfSource';
 import { useNewPdfViewerStore } from './pdfViewerStore';
 import { PdfPage } from './PdfPage';
 import { Loader2 } from 'lucide-react';
+import {
+  buildPdfPageLayout,
+  getBasePageWidthForRotation,
+  getEstimatedPageDimensions,
+  getPageDimensionsFromViewport,
+  getPageAtViewportCenter,
+  getPdfPageWindow,
+  getScrollTopForPage,
+  hasSameDimensions,
+} from './pdfPageLayout';
 
 interface PdfViewerProps {
   pdfId: string;
@@ -20,6 +30,7 @@ interface PdfViewerProps {
 const ZOOM_ANCHOR_RESTORE_DELAY = 150;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5.0;
+const TARGET_PAGE_JUMP_CLEAR_DELAY = 250;
 
 export const PdfViewer = ({
   pdfId,
@@ -33,6 +44,7 @@ export const PdfViewer = ({
     ratioY: number;
   } | null>(null);
   const isZoomingRef = useRef(false);
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
 
   // Internal document state (used only when no external doc provided)
   const [internalDoc, setInternalDoc] =
@@ -56,9 +68,7 @@ export const PdfViewer = ({
   const setVisiblePage = useNewPdfViewerStore((s) => s.setVisiblePage);
   const setZoom = useNewPdfViewerStore((s) => s.setZoom);
   const clearTargetPage = useNewPdfViewerStore((s) => s.clearTargetPage);
-  const setPageDimensionsBulk = useNewPdfViewerStore(
-    (s) => s.setPageDimensionsBulk,
-  );
+  const setPageDimensions = useNewPdfViewerStore((s) => s.setPageDimensions);
   const clearPageDimensions = useNewPdfViewerStore(
     (s) => s.clearPageDimensions,
   );
@@ -131,7 +141,7 @@ export const PdfViewer = ({
     }
   }, [usingExternal, externalDoc, setTotalPages]);
 
-  // ---- Pre‑load page dimensions ----
+  // ---- Seed first-page dimensions for early layout estimates ----
   useEffect(() => {
     if (!pdfDocument) return;
 
@@ -140,26 +150,103 @@ export const PdfViewer = ({
 
     (async () => {
       try {
-        const dims = new Map<
-          number,
-          { baseWidth: number; baseHeight: number }
-        >();
-        for (let p = 1; p <= pdfDocument.numPages; p++) {
-          if (cancelled) return;
-          const page = await pdfDocument.getPage(p);
-          const vp = page.getViewport({ scale: 1.0 });
-          dims.set(p, { baseWidth: vp.width, baseHeight: vp.height });
+        const page = await pdfDocument.getPage(1);
+        if (cancelled) return;
+
+        const nextDimensions = getPageDimensionsFromViewport(
+          page.getViewport({ scale: 1.0 }),
+        );
+        const currentDimensions =
+          useNewPdfViewerStore.getState().pageDimensions.get(1);
+
+        if (!hasSameDimensions(currentDimensions, nextDimensions)) {
+          setPageDimensions(1, nextDimensions);
         }
-        if (!cancelled) setPageDimensionsBulk(dims);
       } catch (err) {
-        console.error('Failed to preload page dimensions:', err);
+        console.error('Failed to load first page dimensions:', err);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [pdfDocument, setPageDimensionsBulk, clearPageDimensions]);
+  }, [pdfDocument, setPageDimensions, clearPageDimensions]);
+
+  const pageLayout = useMemo(
+    () =>
+      buildPdfPageLayout({
+        totalPages,
+        pageDimensions,
+        zoom,
+        rotation,
+      }),
+    [totalPages, pageDimensions, zoom, rotation],
+  );
+
+  const visiblePageLayouts = useMemo(
+    () =>
+      getPdfPageWindow({
+        pages: pageLayout.pages,
+        scrollTop: viewport.scrollTop,
+        viewportHeight: viewport.height,
+      }),
+    [pageLayout.pages, viewport.scrollTop, viewport.height],
+  );
+
+  const firstVisibleLayout = visiblePageLayouts[0];
+  const lastVisibleLayout =
+    visiblePageLayouts[visiblePageLayouts.length - 1];
+  const topSpacerHeight = firstVisibleLayout?.top ?? 0;
+  const bottomSpacerHeight = lastVisibleLayout
+    ? Math.max(
+        0,
+        pageLayout.totalHeight -
+          (lastVisibleLayout.top + lastVisibleLayout.itemHeight),
+      )
+    : 0;
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+
+    let animationFrame: number | null = null;
+    const updateViewport = () => {
+      const nextViewport = {
+        scrollTop: container.scrollTop,
+        height: container.clientHeight,
+      };
+      setViewport((currentViewport) => {
+        if (
+          currentViewport.scrollTop === nextViewport.scrollTop &&
+          currentViewport.height === nextViewport.height
+        ) {
+          return currentViewport;
+        }
+        return nextViewport;
+      });
+    };
+    const scheduleUpdate = () => {
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        updateViewport();
+      });
+    };
+
+    updateViewport();
+    container.addEventListener('scroll', scheduleUpdate, { passive: true });
+
+    const resizeObserver = new ResizeObserver(scheduleUpdate);
+    resizeObserver.observe(container);
+
+    return () => {
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      resizeObserver.disconnect();
+      container.removeEventListener('scroll', scheduleUpdate);
+    };
+  }, [pdfDocument, totalPages]);
 
   // ---- Fit-width zoom mode ----
   useEffect(() => {
@@ -170,20 +257,17 @@ export const PdfViewer = ({
 
     const applyFitWidth = () => {
       const state = useNewPdfViewerStore.getState();
-      const dims =
-        state.pageDimensions.get(state.visiblePage) ??
-        state.pageDimensions.get(1);
-      if (!dims) return;
+      const dims = getEstimatedPageDimensions(
+        state.pageDimensions,
+        state.visiblePage,
+      );
 
       const style = window.getComputedStyle(container);
       const horizontalPadding =
         Number.parseFloat(style.paddingLeft || '0') +
         Number.parseFloat(style.paddingRight || '0');
       const availableWidth = Math.max(0, container.clientWidth - horizontalPadding);
-      const baseWidth =
-        state.rotation === 90 || state.rotation === 270
-          ? dims.baseHeight
-          : dims.baseWidth;
+      const baseWidth = getBasePageWidthForRotation(dims, state.rotation);
 
       if (availableWidth <= 0 || baseWidth <= 0) return;
       const nextZoom = Math.max(
@@ -199,111 +283,86 @@ export const PdfViewer = ({
     return () => resizeObserver.disconnect();
   }, [zoomMode, visiblePage, rotation, pageDimensions, setZoom]);
 
-  // ---- Passive visible‑page tracking ----
+  // ---- Passive visible-page tracking ----
   useEffect(() => {
-    const container = scrollRef.current;
-    if (!container) return;
+    const nextVisiblePage = getPageAtViewportCenter({
+      pages: pageLayout.pages,
+      scrollTop: viewport.scrollTop,
+      viewportHeight: viewport.height,
+    });
 
-    const pageEls = container.querySelectorAll('[data-page-number]');
-    if (pageEls.length === 0) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        let bestPage = 1;
-        let bestRatio = 0;
-        for (const entry of entries) {
-          if (entry.intersectionRatio > bestRatio) {
-            bestRatio = entry.intersectionRatio;
-            const pn = Number(
-              (entry.target as HTMLElement).dataset.pageNumber,
-            );
-            if (!isNaN(pn)) bestPage = pn;
-          }
-        }
-        setVisiblePage(bestPage);
-      },
-      {
-        root: container,
-        threshold: [0, 0.25, 0.5, 0.75, 1.0],
-      },
-    );
-
-    for (const el of pageEls) observer.observe(el);
-    return () => observer.disconnect();
-  }, [totalPages, setVisiblePage, pdfDocument]);
+    if (nextVisiblePage !== visiblePage) {
+      setVisiblePage(nextVisiblePage);
+    }
+  }, [
+    pageLayout.pages,
+    setVisiblePage,
+    viewport.scrollTop,
+    viewport.height,
+    visiblePage,
+  ]);
 
   // ---- Explicit page jumps ----
   useEffect(() => {
     if (targetPage === null) return;
 
     const container = scrollRef.current;
-    const el = document.getElementById(`pdf-page-${targetPage}`);
-    if (!container || !el) return;
-
-    const rect = el.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    const fullyVisible =
-      rect.top >= containerRect.top && rect.bottom <= containerRect.bottom;
-    const mostlyVisible =
-      rect.top >= containerRect.top - rect.height * 0.3 &&
-      rect.bottom <= containerRect.bottom + rect.height * 0.3;
-
-    if (fullyVisible || mostlyVisible) {
+    const targetLayout = pageLayout.pages[targetPage - 1];
+    if (!container || !targetLayout) {
       clearTargetPage();
       return;
     }
 
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    const timer = setTimeout(() => clearTargetPage(), 50);
-    return () => clearTimeout(timer);
-  }, [targetPage, clearTargetPage]);
+    const el = document.getElementById(`pdf-page-${targetPage}`);
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const fullyVisible =
+        rect.top >= containerRect.top && rect.bottom <= containerRect.bottom;
+      const mostlyVisible =
+        rect.top >= containerRect.top - rect.height * 0.3 &&
+        rect.bottom <= containerRect.bottom + rect.height * 0.3;
 
-  // ---- Scroll‑anchor preservation on zoom ----
+      if (fullyVisible || mostlyVisible) {
+        clearTargetPage();
+        return;
+      }
+    }
+
+    container.scrollTo({ top: targetLayout.top, behavior: 'smooth' });
+    setVisiblePage(targetPage);
+    const timer = setTimeout(
+      () => clearTargetPage(),
+      TARGET_PAGE_JUMP_CLEAR_DELAY,
+    );
+    return () => clearTimeout(timer);
+  }, [targetPage, pageLayout.pages, clearTargetPage, setVisiblePage]);
+
+  // ---- Scroll-anchor preservation on zoom ----
   const saveZoomAnchor = useCallback(() => {
     const container = scrollRef.current;
     if (!container) return;
-    const viewTop = container.scrollTop;
-    const viewCenter = viewTop + container.clientHeight / 2;
 
-    for (const el of container.querySelectorAll('[data-page-number]')) {
-      const elRect = el.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      const pageTop =
-        elRect.top - containerRect.top + container.scrollTop;
-      const pageBottom = pageTop + elRect.height;
+    const viewCenter = container.scrollTop + container.clientHeight / 2;
+    const centeredPage = pageLayout.pages.find(
+      (page) =>
+        viewCenter >= page.top && viewCenter < page.top + page.itemHeight,
+    );
 
-      if (viewCenter >= pageTop && viewCenter <= pageBottom) {
-        const pn = Number((el as HTMLElement).dataset.pageNumber);
-        if (!isNaN(pn)) {
-          const ratioY =
-            elRect.height > 0
-              ? (viewCenter - pageTop) / elRect.height
-              : 0.5;
-          zoomAnchorRef.current = {
-            pageCenter: pn,
-            ratioY: Math.max(0, Math.min(1, ratioY)),
-          };
-          return;
-        }
-      }
+    if (!centeredPage) {
+      zoomAnchorRef.current = { pageCenter: visiblePage, ratioY: 0.3 };
+      return;
     }
 
-    let bestPn = 1;
-    let bestHeight = 0;
-    for (const el of container.querySelectorAll('[data-page-number]')) {
-      const elRect = el.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      const overlap =
-        Math.min(elRect.bottom, containerRect.bottom) -
-        Math.max(elRect.top, containerRect.top);
-      if (overlap > bestHeight) {
-        bestHeight = overlap;
-        const pn = Number((el as HTMLElement).dataset.pageNumber);
-        if (!isNaN(pn)) bestPn = pn;
-      }
-    }
-    zoomAnchorRef.current = { pageCenter: bestPn, ratioY: 0.3 };
-  }, []);
+    const ratioY =
+      centeredPage.height > 0
+        ? (viewCenter - centeredPage.top) / centeredPage.height
+        : 0.5;
+    zoomAnchorRef.current = {
+      pageCenter: centeredPage.pageNumber,
+      ratioY: Math.max(0, Math.min(1, ratioY)),
+    };
+  }, [pageLayout.pages, visiblePage]);
 
   useEffect(
     () =>
@@ -321,34 +380,26 @@ export const PdfViewer = ({
 
     const anchor = zoomAnchorRef.current;
     const timer = setTimeout(() => {
-      const el = document.getElementById(
-        `pdf-page-${anchor.pageCenter}`,
-      );
       const container = scrollRef.current;
-      if (!el || !container) return;
+      const anchorLayout = pageLayout.pages[anchor.pageCenter - 1];
+      if (!container || !anchorLayout) {
+        zoomAnchorRef.current = null;
+        return;
+      }
 
-      const elRect = el.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      const pageTopInContainer =
-        elRect.top - containerRect.top + container.scrollTop;
-      const scrollTarget =
-        pageTopInContainer +
-        anchor.ratioY * elRect.height -
-        container.clientHeight / 2;
       container.scrollTo({
-        top: Math.max(0, scrollTarget),
+        top: getScrollTopForPage(
+          anchorLayout,
+          container.clientHeight,
+          anchor.ratioY,
+        ),
         behavior: 'auto',
       });
       zoomAnchorRef.current = null;
     }, ZOOM_ANCHOR_RESTORE_DELAY);
 
     return () => clearTimeout(timer);
-  }, [zoom]);
-
-  const pages = useMemo(
-    () => Array.from({ length: totalPages }, (_, i) => i + 1),
-    [totalPages],
-  );
+  }, [zoom, pageLayout.pages]);
 
   const isLoading = usingExternal
     ? externalLoading
@@ -398,14 +449,17 @@ export const PdfViewer = ({
       className="flex-1 overflow-auto custom-scrollbar bg-neutral-100 dark:bg-neutral-900 p-4 md:p-8"
     >
       <div className="flex flex-col w-full">
-        {pages.map((pageNum) => (
+        <div style={{ height: `${topSpacerHeight}px` }} />
+        {visiblePageLayouts.map((page) => (
           <PdfPage
-            key={pageNum}
+            key={page.pageNumber}
             pdfDocument={pdfDocument}
-            pageNumber={pageNum}
+            pageNumber={page.pageNumber}
             pdfId={pdfId}
+            estimatedDimensions={page.dimensions}
           />
         ))}
+        <div style={{ height: `${bottomSpacerHeight}px` }} />
       </div>
     </div>
   );
