@@ -37,19 +37,9 @@ def _openrouter_model(
 
 OPENROUTER_MODELS = [
     _openrouter_model(
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "Nemotron 3 Super 120B",
-        "NVIDIA's large model, good general-purpose quality",
-    ),
-    _openrouter_model(
         "openai/gpt-oss-120b:free",
         "GPT-OSS 120B",
         "OpenAI's open-source 120B model",
-    ),
-    _openrouter_model(
-        "inclusionai/ring-2.6-1t:free",
-        "Ring 2.6 1T",
-        "InclusionAI's large 1T parameter model",
     ),
     _openrouter_model(
         "z-ai/glm-4.5-air:free",
@@ -62,11 +52,6 @@ OPENROUTER_MODELS = [
         "MiniMax's efficient long-context model",
     ),
     _openrouter_model(
-        "anthropic/claude-fable-5",
-        "Claude Fable 5",
-        "Anthropic's Claude Fable model through OpenRouter",
-    ),
-    _openrouter_model(
         "nex-agi/nex-n2-pro:free",
         "Nex N2 Pro",
         "Nex AGI's N2 Pro model",
@@ -75,6 +60,16 @@ OPENROUTER_MODELS = [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "Nemotron 3 Ultra 550B",
         "NVIDIA's ultra-scale Nemotron 3 model",
+    ),
+    _openrouter_model(
+        "moonshotai/kimi-k2.6:free",
+        "Kimi K2.6",
+        "Moonshot AI's Kimi K2.6 model",
+    ),
+    _openrouter_model(
+        "anthropic/claude-fable-5",
+        "Claude Fable 5",
+        "Anthropic's Claude Fable model through OpenRouter",
     ),
     _openrouter_model(
         "qwen/qwen3.7-plus",
@@ -120,11 +115,6 @@ OPENROUTER_MODELS = [
         "qwen/qwen3.6-plus",
         "Qwen3.6 Plus",
         "Qwen's plus model through OpenRouter",
-    ),
-    _openrouter_model(
-        "moonshotai/kimi-k2.6:free",
-        "Kimi K2.6",
-        "Moonshot AI's Kimi K2.6 model",
     ),
 ]
 
