@@ -263,6 +263,7 @@ export function AnnotationDetailDrawer({
                   explanation={aiParaphrase}
                   badgeLabel="AI Paraphrase"
                   detailLabel={getParaphraseLevelLabel(aiParaphrase.level)}
+                  enableCopy
                 />
               ) : (
                 <div className="rounded-md border bg-background p-4 text-sm text-muted-foreground">

@@ -1,7 +1,8 @@
 import Markdown from 'react-markdown';
-import { Loader2, Sparkles } from 'lucide-react';
+import { Check, Copy, Loader2, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { useClipboard } from '@/hooks/useClipboard';
 import type { AnnotationAiExplanation } from './annotationContent';
 
 interface AnnotationAiExplanationViewProps {
@@ -9,6 +10,7 @@ interface AnnotationAiExplanationViewProps {
   badgeLabel?: string;
   detailLabel?: string | null;
   showContext?: boolean;
+  enableCopy?: boolean;
   className?: string;
 }
 
@@ -22,8 +24,11 @@ export function AnnotationAiExplanationView({
   badgeLabel = 'AI Explanation',
   detailLabel,
   showContext = false,
+  enableCopy = false,
   className,
 }: AnnotationAiExplanationViewProps) {
+  const { copied, copyToClipboard } = useClipboard();
+
   return (
     <div className="space-y-4">
       <div
@@ -40,10 +45,27 @@ export function AnnotationAiExplanationView({
           >
             {badgeLabel}
           </Badge>
-          {(detailLabel || explanation.generated_at) && (
+          {(enableCopy || detailLabel || explanation.generated_at) && (
             <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-violet-400">
               {detailLabel && <span>{detailLabel}</span>}
               {explanation.generated_at && <span>{explanation.generated_at}</span>}
+              {enableCopy && (
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(explanation.content)}
+                  title={copied ? 'Copied!' : 'Copy to clipboard'}
+                  className="flex items-center gap-1 text-violet-500 transition-colors hover:text-violet-700 cursor-pointer"
+                >
+                  {copied ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-green-600" />
+                      <span className="text-green-600">Copied!</span>
+                    </>
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
             </div>
           )}
         </div>
