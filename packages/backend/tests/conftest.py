@@ -76,6 +76,7 @@ async def _db_tables(test_engine):
     """
     async with test_engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS training_data"))
         await conn.run_sync(Base.metadata.create_all)
     yield
     async with test_engine.begin() as conn:

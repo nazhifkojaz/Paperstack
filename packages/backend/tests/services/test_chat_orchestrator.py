@@ -5,11 +5,13 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.chat_orchestrator import ChatOrchestrator, PreparedContext, PreparedMessages
+from app.services.chat_service import BuiltContext
 from app.services.exceptions import (
     EmbeddingError,
     IndexInProgressError,
     LLMRateLimitError,
 )
+from app.services.training_log_service import TrainingLogContext
 
 from tests.helpers import TEST_EMBEDDING
 
@@ -30,6 +32,12 @@ def mock_llm():
 def mock_chat():
     svc = MagicMock()
     svc.build_context = MagicMock(return_value="[Page 1] chunk content")
+    svc.build_context_with_metadata = MagicMock(
+        return_value=BuiltContext(
+            context="[Page 1] chunk content",
+            included_chunk_ids=[],
+        )
+    )
     svc.build_messages = MagicMock(
         return_value=("system prompt", [{"role": "user", "content": "test"}])
     )
@@ -100,6 +108,7 @@ class TestPreparePdfContext:
         search_chunk.section_title = None
         search_chunk.section_level = None
         search_chunk.chunk_id = str(uuid.uuid4())
+        search_chunk.score = 0.82
 
         with patch(
             "app.services.chat_orchestrator.vector_search_service.search_pdf",
@@ -120,6 +129,11 @@ class TestPreparePdfContext:
         assert len(result.top_chunks) == 1
         assert len(result.context_chunks_payload) == 1
         assert result.context_chunks_payload[0]["page_number"] == 1
+        assert result.query_embedding == TEST_EMBEDDING
+        assert result.scope_type == "single_pdf"
+        assert result.pdf_id == pdf_id
+        assert result.training_chunks_payload[0]["retrieval_score"] == 0.82
+        assert result.training_chunks_payload[0]["content"] == "chunk text"
 
     async def test_prepare_pdf_context_pdf_not_found(
         self, orchestrator, mock_user, mock_db
@@ -227,6 +241,7 @@ class TestPrepareCollectionContext:
         chunk.section_title = "Methods"
         chunk.section_level = 2
         chunk.chunk_id = str(uuid.uuid4())
+        chunk.score = 0.91
 
         # Mock citation fetch: execute returns scalar result with no citations
         cite_scalar_result = MagicMock()
@@ -254,6 +269,10 @@ class TestPrepareCollectionContext:
         assert len(result.top_chunks) == 1
         assert len(result.context_chunks_payload) == 1
         assert result.context_chunks_payload[0]["pdf_title"] == "Paper One"
+        assert result.scope_type == "collection"
+        assert result.collection_id == collection_id
+        assert result.training_chunks_payload[0]["included_in_prompt"] is True
+        assert result.training_chunks_payload[0]["prompt_rank"] == 1
 
     async def test_prepare_collection_context_no_collection_id(
         self, orchestrator, mock_user, mock_db
@@ -349,13 +368,14 @@ class TestPersistUserMessage:
         conv = MagicMock()
         conv.title = None
 
-        await orchestrator.persist_user_message(
+        message_id = await orchestrator.persist_user_message(
             conversation_id=uuid.uuid4(),
             content="What is the main finding of this paper?",
             conv=conv,
             db=mock_db,
         )
 
+        assert isinstance(message_id, uuid.UUID)
         assert conv.title == "What is the main finding of this paper?"
         mock_db.add.assert_called_once()
         mock_db.commit.assert_called_once()
@@ -367,13 +387,14 @@ class TestPersistUserMessage:
         conv.title = None
         long_content = "X" * 100
 
-        await orchestrator.persist_user_message(
+        message_id = await orchestrator.persist_user_message(
             conversation_id=uuid.uuid4(),
             content=long_content,
             conv=conv,
             db=mock_db,
         )
 
+        assert isinstance(message_id, uuid.UUID)
         assert len(conv.title) <= 61  # 60 chars + "…"
         assert conv.title.endswith("…")
 
@@ -383,13 +404,14 @@ class TestPersistUserMessage:
         conv = MagicMock()
         conv.title = "Existing Title"
 
-        await orchestrator.persist_user_message(
+        message_id = await orchestrator.persist_user_message(
             conversation_id=uuid.uuid4(),
             content="New message",
             conv=conv,
             db=mock_db,
         )
 
+        assert isinstance(message_id, uuid.UUID)
         assert conv.title == "Existing Title"
 
 
@@ -398,6 +420,30 @@ class TestPersistUserMessage:
 # ---------------------------------------------------------------------------
 
 class TestStreamAndSave:
+    def _training_context(self, conversation_id: uuid.UUID) -> TrainingLogContext:
+        return TrainingLogContext(
+            user_id=uuid.uuid4(),
+            conversation_id=conversation_id,
+            user_message_id=uuid.uuid4(),
+            query_text="hi",
+            query_embedding=TEST_EMBEDDING,
+            embedding_model="test-embedding",
+            embedding_dimensions=1024,
+            scope_type="single_pdf",
+            pdf_id=uuid.uuid4(),
+            collection_id=None,
+            retrieved_chunks=[],
+            retrieval_top_k=6,
+            retrieval_config={"mode": "hybrid"},
+            prompt_context="context",
+            system_prompt="system",
+            prompt_messages=[{"role": "user", "content": "hi"}],
+            llm_provider="openrouter",
+            llm_model="test-model",
+            generation_config={},
+            training_eligible=True,
+            consent_version="test",
+        )
 
     async def test_stream_and_save_success(
         self, orchestrator, mock_chat, mock_db
@@ -427,6 +473,78 @@ class TestStreamAndSave:
         assert "message_id" in events[-1]
         mock_db.add.assert_called_once()
         mock_db.commit.assert_called()
+
+    async def test_stream_and_save_dispatches_training_log(
+        self, mock_embedding, mock_llm, mock_chat, mock_indexing, mock_db
+    ):
+        async def mock_stream(*args, **kwargs):
+            yield "Logged"
+
+        mock_chat.stream_reply = mock_stream
+        training_logger = MagicMock()
+        orchestrator = ChatOrchestrator(
+            embedding_service=mock_embedding,
+            llm_service=mock_llm,
+            chat_service=mock_chat,
+            indexing_service=mock_indexing,
+            training_logger=training_logger,
+        )
+        conversation_id = uuid.uuid4()
+
+        events = []
+        async for event in orchestrator.stream_and_save(
+            system_prompt="system",
+            messages=[{"role": "user", "content": "hi"}],
+            provider="openrouter",
+            api_key="test-key",
+            model="test-model",
+            conversation_id=conversation_id,
+            context_chunks_payload=[],
+            db=mock_db,
+            training_log_context=self._training_context(conversation_id),
+        ):
+            events.append(event)
+
+        assert events[-1]["done"] is True
+        training_logger.schedule_interaction_log.assert_called_once()
+        call_kwargs = training_logger.schedule_interaction_log.call_args.kwargs
+        assert call_kwargs["assistant_reply"] == "Logged"
+        assert call_kwargs["token_count"] > 0
+
+    async def test_stream_and_save_isolates_training_log_schedule_failure(
+        self, mock_embedding, mock_llm, mock_chat, mock_indexing, mock_db
+    ):
+        async def mock_stream(*args, **kwargs):
+            yield "Still succeeds"
+
+        mock_chat.stream_reply = mock_stream
+        training_logger = MagicMock()
+        training_logger.schedule_interaction_log.side_effect = RuntimeError("boom")
+        orchestrator = ChatOrchestrator(
+            embedding_service=mock_embedding,
+            llm_service=mock_llm,
+            chat_service=mock_chat,
+            indexing_service=mock_indexing,
+            training_logger=training_logger,
+        )
+        conversation_id = uuid.uuid4()
+
+        events = []
+        async for event in orchestrator.stream_and_save(
+            system_prompt="system",
+            messages=[{"role": "user", "content": "hi"}],
+            provider="openrouter",
+            api_key="test-key",
+            model="test-model",
+            conversation_id=conversation_id,
+            context_chunks_payload=[],
+            db=mock_db,
+            training_log_context=self._training_context(conversation_id),
+        ):
+            events.append(event)
+
+        assert events[-1]["done"] is True
+        assert "message_id" in events[-1]
 
     async def test_stream_and_save_rate_limit(
         self, orchestrator, mock_chat, mock_db
