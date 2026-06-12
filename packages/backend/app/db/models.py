@@ -6,18 +6,22 @@ from app.schemas.types import ContextChunkDict
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Computed,
     Date,
     DateTime,
     ForeignKey,
+    Float,
+    Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from pgvector.sqlalchemy import HALFVEC
 
@@ -479,6 +483,166 @@ class ChatMessage(Base):
     )  # [{chunk_id, page_number, snippet}]
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
+    )
+
+
+class TrainingRagInteraction(Base):
+    __tablename__ = "rag_interactions"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('single_pdf', 'collection')",
+            name="ck_training_rag_interactions_scope_type",
+        ),
+        Index("idx_rag_interactions_user", "user_id"),
+        Index("idx_rag_interactions_created", "created_at"),
+        Index("idx_rag_interactions_pdf", "pdf_id"),
+        Index("idx_rag_interactions_conversation", "conversation_id"),
+        Index(
+            "idx_rag_interactions_assistant_message",
+            "assistant_message_id",
+            unique=True,
+        ),
+        {"schema": "training_data"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    user_message_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    assistant_message_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    query_embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(1024))
+    embedding_model: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_dimensions: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1024")
+    )
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    pdf_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("pdfs.id", ondelete="SET NULL")
+    )
+    collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("collections.id", ondelete="SET NULL")
+    )
+    retrieved_chunks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    retrieval_top_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    retrieval_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    prompt_context: Mapped[str] = mapped_column(Text, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    system_prompt_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_messages: Mapped[list[dict[str, str]]] = mapped_column(JSONB, nullable=False)
+    llm_model: Mapped[str] = mapped_column(Text, nullable=False)
+    llm_provider: Mapped[str] = mapped_column(Text, nullable=False)
+    generation_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    assistant_reply: Mapped[str] = mapped_column(Text, nullable=False)
+    cited_chunk_ids: Mapped[Optional[list[uuid.UUID]]] = mapped_column(
+        ARRAY(UUID(as_uuid=True))
+    )
+    cited_page_nums: Mapped[Optional[list[int]]] = mapped_column(ARRAY(Integer))
+    citation_events: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    citation_parse_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'parsed'")
+    )
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    token_count: Mapped[Optional[int]] = mapped_column(Integer)
+    training_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    consent_version: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )
+
+
+class TrainingChunkFeedback(Base):
+    __tablename__ = "chunk_feedback"
+    __table_args__ = (
+        UniqueConstraint(
+            "interaction_id",
+            "chunk_id",
+            name="uq_training_chunk_feedback_interaction_chunk",
+        ),
+        Index("idx_chunk_feedback_interaction", "interaction_id"),
+        Index("idx_chunk_feedback_chunk", "chunk_id"),
+        {"schema": "training_data"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    interaction_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("training_data.rag_interactions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chunk_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pdf_chunks.id", ondelete="CASCADE"), nullable=False
+    )
+    retrieval_rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    retrieval_score: Mapped[float] = mapped_column(Float, nullable=False)
+    included_in_prompt: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    prompt_rank: Mapped[Optional[int]] = mapped_column(Integer)
+    was_cited: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    citation_rank: Mapped[Optional[int]] = mapped_column(Integer)
+    citation_text: Mapped[Optional[str]] = mapped_column(Text)
+    user_rating: Mapped[Optional[int]] = mapped_column(SmallInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )
+
+
+class TrainingInteractionFeedback(Base):
+    __tablename__ = "interaction_feedback"
+    __table_args__ = (
+        UniqueConstraint(
+            "interaction_id",
+            name="uq_training_interaction_feedback_interaction",
+        ),
+        {"schema": "training_data"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    interaction_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("training_data.rag_interactions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    thumbs_up: Mapped[Optional[bool]] = mapped_column(Boolean)
+    feedback_text: Mapped[Optional[str]] = mapped_column(Text)
+    follow_up_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    copied_answer: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    expanded_citations: Mapped[Optional[list[str]]] = mapped_column(ARRAY(Text))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
     )
 
 

@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     HYBRID_SEMANTIC_WEIGHT: float = 0.7
     HYBRID_KEYWORD_WEIGHT: float = 0.3
 
+    # Training data logging
+    TRAINING_DATA_LOGGING_ENABLED: bool = False
+    TRAINING_DATA_DEFAULT_ELIGIBLE: bool = False
+    TRAINING_DATA_CONSENT_VERSION: str | None = None
+
     # HTTP Client Connection Pooling
     HTTP_CONNECTION_LIMIT: int = 100  # Max concurrent connections
     HTTP_TIMEOUT_CONNECT: float = 10.0  # Connection timeout in seconds
