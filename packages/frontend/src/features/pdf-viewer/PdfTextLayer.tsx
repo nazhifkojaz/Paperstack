@@ -22,7 +22,7 @@ export interface PdfTextLayerHandle {
   getContainer: () => HTMLDivElement | null;
   /** Resolves when the current render cycle completes. */
   renderReady: () => Promise<void>;
-  /** Raw text items from streamTextContent / getTextContent. */
+  /** Raw text items from getTextContent(). */
   getTextItems: () => PdfTextItemGeometry[];
   /** Map from rendered <span> elements to text‑item indices. */
   getSpanToItemMap: () => Map<Element, number>;
@@ -78,6 +78,7 @@ export const PdfTextLayer = forwardRef<PdfTextLayerHandle, PdfTextLayerProps>(
       if (!pageProxy || !textLayerRef.current) return;
 
       const container = textLayerRef.current;
+      let cancelled = false;
 
       // Cancel stale render
       if (textLayerInstanceRef.current) {
@@ -93,27 +94,33 @@ export const PdfTextLayer = forwardRef<PdfTextLayerHandle, PdfTextLayerProps>(
 
       const viewport = pageProxy.getViewport({ scale: zoom, rotation });
 
-      const instance = new PdfjsTextLayer({
-        textContentSource: pageProxy.streamTextContent(textContentParams),
-        container,
-        viewport,
-      });
-      textLayerInstanceRef.current = instance;
-      let cleanupSelectionHelper: (() => void) | null = null;
-
       // Create a fresh ready promise
       renderReadyPromiseRef.current = new Promise<void>((resolve) => {
         renderReadyResolveRef.current = resolve;
       });
 
-      instance
-        .render()
-        .then(async () => {
-          if (textLayerInstanceRef.current !== instance) return;
+      let cleanupSelectionHelper: (() => void) | null = null;
 
-          // Fetch full text content (includes items with transform data)
-          const content = await pageProxy.getTextContent(textContentParams);
+      // Fetch text content ONCE — shared between text-layer rendering and index
+      // building. Previously this used streamTextContent() for the text layer
+      // and a separate getTextContent() call for the index, which was a
+      // duplicate worker round-trip per render cycle.
+      pageProxy
+        .getTextContent(textContentParams)
+        .then(async (content) => {
+          if (cancelled) return;
 
+          const instance = new PdfjsTextLayer({
+            textContentSource: content,
+            container,
+            viewport,
+          });
+          textLayerInstanceRef.current = instance;
+
+          await instance.render();
+          if (cancelled || textLayerInstanceRef.current !== instance) return;
+
+          // Build items from the SAME content object — no second fetch.
           const items: PdfTextItemGeometry[] = [];
           for (const item of content.items) {
             if (
@@ -165,6 +172,7 @@ export const PdfTextLayer = forwardRef<PdfTextLayerHandle, PdfTextLayerProps>(
         });
 
       return () => {
+        cancelled = true;
         cleanupSelectionHelper?.();
         if (textLayerInstanceRef.current) {
           textLayerInstanceRef.current.cancel();
