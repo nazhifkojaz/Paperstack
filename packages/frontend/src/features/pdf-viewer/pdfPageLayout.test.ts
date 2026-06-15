@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPdfPageLayout,
-  getPageAtViewportCenter,
   getPdfPageWindow,
   getScrollTopForPage,
   PDF_PAGE_INITIAL_WINDOW_COUNT,
@@ -92,27 +91,6 @@ describe('pdfPageLayout', () => {
     });
 
     expect(windowedPages).toHaveLength(PDF_PAGE_INITIAL_WINDOW_COUNT);
-  });
-
-  it('finds the page at the viewport center from virtual offsets', () => {
-    const dimensions = new Map([
-      [1, { baseWidth: 100, baseHeight: 200 }],
-    ]);
-    const layout = buildPdfPageLayout({
-      totalPages: 20,
-      pageDimensions: dimensions,
-      zoom: 1,
-      rotation: 0,
-      pageGap: 10,
-    });
-
-    expect(
-      getPageAtViewportCenter({
-        pages: layout.pages,
-        scrollTop: layout.pages[9].top,
-        viewportHeight: 200,
-      }),
-    ).toBe(10);
   });
 
   it('calculates scroll offsets for unmounted target pages', () => {

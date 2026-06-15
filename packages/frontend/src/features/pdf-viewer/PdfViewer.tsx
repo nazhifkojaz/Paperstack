@@ -11,7 +11,6 @@ import {
   getBasePageWidthForRotation,
   getEstimatedPageDimensions,
   getPageDimensionsFromViewport,
-  getPageAtViewportCenter,
   getPdfPageWindow,
   getScrollTopForPage,
   hasSameDimensions,
@@ -32,6 +31,10 @@ const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5.0;
 const TARGET_PAGE_JUMP_CLEAR_DELAY = 250;
 
+function buildThresholdList(steps: number): number[] {
+  return Array.from({ length: steps + 1 }, (_, i) => i / steps);
+}
+
 export const PdfViewer = ({
   pdfId,
   pdfDocument: externalDoc,
@@ -44,6 +47,9 @@ export const PdfViewer = ({
     ratioY: number;
   } | null>(null);
   const isZoomingRef = useRef(false);
+  const pageObserverRef = useRef<IntersectionObserver | null>(null);
+  const pageVisibilityRatiosRef = useRef<Map<number, number>>(new Map());
+  const observedPageElsRef = useRef<Map<number, Element>>(new Map());
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
 
   // Internal document state (used only when no external doc provided)
@@ -193,6 +199,11 @@ export const PdfViewer = ({
     [pageLayout.pages, viewport.scrollTop, viewport.height],
   );
 
+  const observedPagesKey = useMemo(
+    () => visiblePageLayouts.map((page) => page.pageNumber).join(','),
+    [visiblePageLayouts],
+  );
+
   const firstVisibleLayout = visiblePageLayouts[0];
   const lastVisibleLayout =
     visiblePageLayouts[visiblePageLayouts.length - 1];
@@ -283,24 +294,82 @@ export const PdfViewer = ({
     return () => resizeObserver.disconnect();
   }, [zoomMode, visiblePage, rotation, pageDimensions, setZoom]);
 
-  // ---- Passive visible-page tracking ----
+  // ---- Visible-page tracking from actually rendered page elements ----
   useEffect(() => {
-    const nextVisiblePage = getPageAtViewportCenter({
-      pages: pageLayout.pages,
-      scrollTop: viewport.scrollTop,
-      viewportHeight: viewport.height,
+    const container = scrollRef.current;
+    if (!container) return;
+
+    const ratios = pageVisibilityRatiosRef.current;
+
+    const updateVisiblePage = () => {
+      let bestPage = 1;
+      let bestRatio = -1;
+      ratios.forEach((ratio, pageNumber) => {
+        if (ratio > bestRatio) {
+          bestRatio = ratio;
+          bestPage = pageNumber;
+        }
+      });
+
+      if (bestRatio <= 0) return;
+
+      const currentPage = useNewPdfViewerStore.getState().visiblePage;
+      if (bestPage !== currentPage) {
+        setVisiblePage(bestPage);
+      }
+    };
+
+    let observer = pageObserverRef.current;
+    if (!observer) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            const pageNumber = Number(
+              (entry.target as HTMLElement).dataset.pageNumber,
+            );
+            if (Number.isNaN(pageNumber)) continue;
+            ratios.set(pageNumber, entry.intersectionRatio);
+          }
+          updateVisiblePage();
+        },
+        {
+          root: container,
+          threshold: buildThresholdList(20),
+        },
+      );
+      pageObserverRef.current = observer;
+    }
+
+    const currentEls = new Map<number, Element>();
+    container.querySelectorAll('[data-page-number]').forEach((el) => {
+      const pageNumber = Number((el as HTMLElement).dataset.pageNumber);
+      if (Number.isNaN(pageNumber)) return;
+      currentEls.set(pageNumber, el);
+
+      const observedEl = observedPageElsRef.current.get(pageNumber);
+      if (observedEl !== el) {
+        if (observedEl) observer.unobserve(observedEl);
+        observer.observe(el);
+      }
     });
 
-    if (nextVisiblePage !== visiblePage) {
-      setVisiblePage(nextVisiblePage);
-    }
-  }, [
-    pageLayout.pages,
-    setVisiblePage,
-    viewport.scrollTop,
-    viewport.height,
-    visiblePage,
-  ]);
+    observedPageElsRef.current.forEach((el, pageNumber) => {
+      if (!currentEls.has(pageNumber)) {
+        observer.unobserve(el);
+        ratios.delete(pageNumber);
+      }
+    });
+    observedPageElsRef.current = currentEls;
+
+    updateVisiblePage();
+
+    return () => {
+      observer.disconnect();
+      pageObserverRef.current = null;
+      observedPageElsRef.current.clear();
+      ratios.clear();
+    };
+  }, [observedPagesKey, setVisiblePage]);
 
   // ---- Explicit page jumps ----
   useEffect(() => {

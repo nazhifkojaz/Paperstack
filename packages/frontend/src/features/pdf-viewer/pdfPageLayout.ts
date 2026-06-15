@@ -145,27 +145,6 @@ export function getPdfPageWindow({
   return pages.slice(startIndex, Math.max(endIndex, startIndex + 1));
 }
 
-export function getPageAtViewportCenter({
-  pages,
-  scrollTop,
-  viewportHeight,
-}: {
-  pages: PdfPageLayout[];
-  scrollTop: number;
-  viewportHeight: number;
-}): number {
-  if (pages.length === 0) return 1;
-
-  const center = scrollTop + Math.max(0, viewportHeight) / 2;
-  const centeredPage = pages.find(
-    (page) => center >= page.top && center < page.top + page.itemHeight,
-  );
-
-  if (centeredPage) return centeredPage.pageNumber;
-  if (center < pages[0].top) return pages[0].pageNumber;
-  return pages[pages.length - 1].pageNumber;
-}
-
 export function getScrollTopForPage(
   page: PdfPageLayout,
   viewportHeight: number,
