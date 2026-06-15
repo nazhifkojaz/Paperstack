@@ -18,8 +18,10 @@ from typing import Optional
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.models import Pdf, PdfChunk, PdfIndexStatus, User
 from app.services.chunking_service import chunk_text_with_pages
+from app.services.contextualizer import build_embed_inputs
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
     ChunkingError,
@@ -159,13 +161,21 @@ class IndexingService:
             if not chunks:
                 raise ChunkingError("No chunks produced from PDF text.")
 
-            texts = [c.content for c in chunks]
+            # Build the text that will actually be embedded. When contextual
+            # retrieval is enabled, each chunk is prefixed with paper/section
+            # context so the embedding vector encodes its source. The raw
+            # chunk content is still what we persist to `content` (for display
+            # and keyword search); only the embedding uses the contextualized
+            # text. See contextualizer.build_embed_inputs for details.
+            contextualize = settings.CONTEXTUAL_RETRIEVAL_ENABLED
+            embed_inputs = build_embed_inputs(chunks, pdf_row.title, contextualize)
+
             user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings(
                 user,
                 db,
             )
             embeddings = await self._embedding_service.embed_texts(
-                texts,
+                embed_inputs,
                 user_api_key=user_openrouter_key,
             )
 
@@ -177,7 +187,7 @@ class IndexingService:
                 )
             )
 
-            for chunk, embedding in zip(chunks, embeddings):
+            for chunk, embedding, embed_input in zip(chunks, embeddings, embed_inputs):
                 db.add(
                     PdfChunk(
                         pdf_id=pdf_row.id,
@@ -186,6 +196,7 @@ class IndexingService:
                         page_number=chunk.page_number,
                         end_page_number=chunk.end_page_number,
                         content=chunk.content.replace("\x00", ""),
+                        content_for_embedding=embed_input if contextualize else None,
                         embedding=embedding,
                         section_title=chunk.section_title,
                         section_level=chunk.section_level,

@@ -16,7 +16,7 @@ from app.services.exceptions import (
     TextExtractionError,
 )
 from app.services.pdf_download_service import PdfDownloadService
-from app.db.models import PdfIndexStatus
+from app.db.models import PdfChunk, PdfIndexStatus
 
 
 @pytest.fixture
@@ -280,6 +280,7 @@ class TestIndexPdf:
 
         pdf_row = MagicMock()
         pdf_row.id = uuid.uuid4()
+        pdf_row.title = "Test Paper Title"
         pdf_row.source_url = "https://example.com/test.pdf"
         pdf_row.github_sha = None
         pdf_row.drive_file_id = None
@@ -312,11 +313,11 @@ class TestIndexPdf:
                 return_value=[
                     MagicMock(
                         chunk_index=0, page_number=1, end_page_number=1,
-                        content="chunk 1 content", section_title=None, section_level=None,
+                        content="chunk 1 content", section_title="Introduction", section_level=1,
                     ),
                     MagicMock(
                         chunk_index=1, page_number=1, end_page_number=1,
-                        content="chunk 2 content", section_title=None, section_level=None,
+                        content="chunk 2 content", section_title="Introduction", section_level=1,
                     ),
                 ],
             ):
@@ -329,6 +330,135 @@ class TestIndexPdf:
         assert result.chunk_count == 2
         assert result.error_message is None
         assert result.indexed_at is not None
+
+    async def test_index_pdf_contextualizes_embedding_text(
+        self, indexing_service, mock_db, mock_embedding
+    ):
+        """When CONTEXTUAL_RETRIEVAL_ENABLED, embeds prefixed text and persists it."""
+        mock_embedding.embed_texts = AsyncMock(
+            return_value=[[0.1] * 384, [0.2] * 384]
+        )
+
+        pdf_row = MagicMock()
+        pdf_row.id = uuid.uuid4()
+        pdf_row.title = "Attention Is All You Need"
+        pdf_row.source_url = "https://example.com/test.pdf"
+        pdf_row.github_sha = None
+        pdf_row.drive_file_id = None
+        pdf_row.filename = "test.pdf"
+
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        status = PdfIndexStatus(pdf_id="pdf-1", user_id="user-1", status="not_indexed")
+        tmp_path = self._setup_tmp_download(indexing_service)
+
+        try:
+            with patch(
+                "app.services.indexing_service.extract_text_with_pages",
+                return_value=("page 1 text", 1, 1),
+            ), patch(
+                "app.services.indexing_service.validate_extraction",
+                return_value=MagicMock(is_usable=True, warnings=[]),
+            ), patch(
+                "app.services.indexing_service.chunk_text_with_pages",
+                return_value=[
+                    MagicMock(
+                        chunk_index=0, page_number=1, end_page_number=1,
+                        content="Self-attention uses scaled dot-product.",
+                        section_title="Methods",
+                        section_level=2,
+                    ),
+                    MagicMock(
+                        chunk_index=1, page_number=1, end_page_number=1,
+                        content="The model outperforms baselines.",
+                        section_title=None,
+                        section_level=None,
+                    ),
+                ],
+            ):
+                await indexing_service.index_pdf(pdf_row, user, status, mock_db)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        # embed_texts must be called with the prefixed inputs, not raw content
+        mock_embedding.embed_texts.assert_called_once()
+        embedded = mock_embedding.embed_texts.call_args.args[0]
+        assert embedded[0] == (
+            "Paper: Attention Is All You Need\n"
+            "Section: Methods\n\n"
+            "Self-attention uses scaled dot-product."
+        )
+        assert embedded[1] == (
+            "Paper: Attention Is All You Need\n"
+            "Section: (untitled)\n\n"
+            "The model outperforms baselines."
+        )
+
+        # PdfChunk rows must persist raw content + content_for_embedding
+        added = [c.args[0] for c in mock_db.add.call_args_list]
+        pdf_chunks = [c for c in added if isinstance(c, PdfChunk)]
+        assert len(pdf_chunks) == 2
+
+        assert pdf_chunks[0].content == "Self-attention uses scaled dot-product."
+        assert pdf_chunks[0].content_for_embedding == embedded[0]
+        assert pdf_chunks[1].content == "The model outperforms baselines."
+        assert pdf_chunks[1].content_for_embedding == embedded[1]
+
+    async def test_index_pdf_no_contextualization_when_disabled(
+        self, indexing_service, mock_db, mock_embedding
+    ):
+        """When CONTEXTUAL_RETRIEVAL_ENABLED=False, embeds raw content and stores None."""
+        mock_embedding.embed_texts = AsyncMock(
+            return_value=[[0.1] * 384]
+        )
+
+        pdf_row = MagicMock()
+        pdf_row.id = uuid.uuid4()
+        pdf_row.title = "Whatever Title"
+        pdf_row.source_url = "https://example.com/test.pdf"
+        pdf_row.github_sha = None
+        pdf_row.drive_file_id = None
+        pdf_row.filename = "test.pdf"
+
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        status = PdfIndexStatus(pdf_id="pdf-1", user_id="user-1", status="not_indexed")
+        tmp_path = self._setup_tmp_download(indexing_service)
+
+        try:
+            with patch(
+                "app.services.indexing_service.extract_text_with_pages",
+                return_value=("page 1 text", 1, 1),
+            ), patch(
+                "app.services.indexing_service.validate_extraction",
+                return_value=MagicMock(is_usable=True, warnings=[]),
+            ), patch(
+                "app.services.indexing_service.chunk_text_with_pages",
+                return_value=[
+                    MagicMock(
+                        chunk_index=0, page_number=1, end_page_number=1,
+                        content="Raw chunk body.",
+                        section_title="Methods",
+                        section_level=1,
+                    ),
+                ],
+            ), patch(
+                "app.services.indexing_service.settings.CONTEXTUAL_RETRIEVAL_ENABLED",
+                False,
+            ):
+                await indexing_service.index_pdf(pdf_row, user, status, mock_db)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        # embed_texts must be called with raw content (no prefix)
+        embedded = mock_embedding.embed_texts.call_args.args[0]
+        assert embedded == ["Raw chunk body."]
+
+        added = [c.args[0] for c in mock_db.add.call_args_list]
+        pdf_chunks = [c for c in added if isinstance(c, PdfChunk)]
+        assert len(pdf_chunks) == 1
+        assert pdf_chunks[0].content == "Raw chunk body."
+        assert pdf_chunks[0].content_for_embedding is None
 
     async def test_index_pdf_chunking_failure(self, indexing_service, mock_db):
         pdf_row = MagicMock()

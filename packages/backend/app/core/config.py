@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150
 
+    # Contextual retrieval: prepend "Paper: <title>\nSection: <section>" to
+    # each chunk's text before embedding. The raw `content` column is
+    # unaffected; only the embedding vector uses the contextualized text.
+    # Legacy chunks (pre-this-flag) and any chunk indexed while this is False
+    # embed the raw content directly.
+    CONTEXTUAL_RETRIEVAL_ENABLED: bool = True
+
     # Retrieval top_k values
     CHAT_TOP_K_SINGLE_PDF: int = 6
     CHAT_TOP_K_COLLECTION: int = 8
