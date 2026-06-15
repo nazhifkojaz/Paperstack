@@ -8,7 +8,7 @@ import re
 from time import perf_counter
 import unicodedata
 import uuid
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 import httpx
@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user, resolve_api_key_with_quota
 from app.services.exceptions import IndexingError, LLMProviderError, LLMRateLimitError
+from app.core.config import settings
 from app.core.http_client import HTTPClientState
 from app.db.engine import SessionLocal
 from app.db.models import (
@@ -47,7 +48,15 @@ router = APIRouter()
 
 _MAX_PAGES = 100
 _BATCH_SIZE_THOROUGH = 5
+# Hard cap on thorough-mode batch concurrency regardless of the configured
+# setting. Protects against exhausting provider rate limits or connections.
+_MAX_THOROUGH_CONCURRENCY = 4
 _LLM_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+# When a provider 429 is observed, serialize LLM calls (effective concurrency
+# drops to 1) for this long so concurrent batches stop arriving in a burst.
+# The window refreshes on every subsequent 429 and lets full concurrency
+# resume once it expires, so it self-heals without thrashing.
+_RATE_LIMIT_COOLDOWN_SECONDS = 15.0
 _TRANSIENT_LLM_STATUS_CODES = {0, 408, 409, 425, 429, 500, 502, 503, 504, 524}
 
 
@@ -453,9 +462,11 @@ async def _chunk_for_analysis(
     custom_queries: dict[str, str] | None = None,
 ) -> list:
     """Return candidate chunks for LLM analysis."""
-    user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings_by_id(
-        user_id,
-        db,
+    user_openrouter_key = (
+        await api_key_service.get_user_openrouter_key_for_embeddings_by_id(
+            user_id,
+            db,
+        )
     )
     return await highlight_shortlist_service.shortlist_chunks(
         pdf_id=str(pdf_id),
@@ -648,8 +659,14 @@ async def _run_llm_analysis(
     model: Optional[str],
     cache_id: uuid.UUID,
     label: str,
+    on_rate_limit: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> list[dict] | None:
-    """Run extraction for a passage batch and validate quotes against the source."""
+    """Run extraction for a passage batch and validate quotes against the source.
+
+    ``on_rate_limit`` (optional) is awaited when a provider rate-limit (429)
+    error is observed, so callers running concurrent batches can back off
+    before the retry lands.
+    """
     max_attempts = len(_LLM_RETRY_DELAYS_SECONDS) + 1
     started = perf_counter()
     highlights = None
@@ -716,6 +733,10 @@ async def _run_llm_analysis(
             break
         except Exception as exc:
             latency_ms = int((perf_counter() - attempt_started) * 1000)
+            if isinstance(exc, LLMRateLimitError) and on_rate_limit is not None:
+                # Signal the orchestrator before the retry so concurrent
+                # batches back off immediately, not after this call finishes.
+                await on_rate_limit()
             retryable = _is_transient_llm_error(exc)
             if retryable and attempt < max_attempts:
                 delay = _LLM_RETRY_DELAYS_SECONDS[attempt - 1]
@@ -881,43 +902,73 @@ async def _parse_and_store_results(
         return False
 
 
-async def _persist_thorough_batch(
+async def _ensure_thorough_annotation_set(
     cache_id: uuid.UUID,
     pdf_id: uuid.UUID,
     user_id: uuid.UUID,
     categories: list[str],
+) -> uuid.UUID | None:
+    """Pre-create the annotation set for thorough mode.
+
+    Creating the set up front avoids a race between concurrent batches that
+    would otherwise both try to lazily create it, and lets each batch simply
+    append annotations to a known set.
+    """
+    try:
+        async with SessionLocal() as db:
+            cache_row = await _get_cache_row(db, cache_id)
+            if cache_row.status == "cancelled":
+                return None
+            if cache_row.annotation_set_id:
+                return cache_row.annotation_set_id
+            annotation_set = _build_auto_highlight_annotation_set(
+                pdf_id,
+                user_id,
+                categories,
+            )
+            db.add(annotation_set)
+            await db.flush()
+            cache_row.annotation_set_id = annotation_set.id
+            await db.commit()
+            return annotation_set.id
+    except Exception:
+        logger.exception(
+            "Failed to pre-create annotation set: cache_id=%s",
+            cache_id,
+        )
+        await _mark_cache_failed(cache_id, "Persistence failed")
+        return None
+
+
+async def _persist_thorough_batch(
+    cache_id: uuid.UUID,
+    set_id: uuid.UUID,
     batch_highlights: list[dict],
-    batch_index: int,
+    completed_count: int,
     total_batches: int,
 ) -> bool:
+    """Append one batch's annotations and advance progress.
+
+    ``completed_count`` is a monotonically increasing ordinal (not the original
+    batch index) so that out-of-order completion under concurrency cannot make
+    progress jump backwards.
+    """
     try:
         async with SessionLocal() as db:
             cache_row = await _get_cache_row(db, cache_id)
             if cache_row.status == "cancelled":
                 return False
 
-            set_id = cache_row.annotation_set_id
-            if set_id is None and batch_highlights:
-                annotation_set = _build_auto_highlight_annotation_set(
-                    pdf_id,
-                    user_id,
-                    categories,
-                )
-                db.add(annotation_set)
-                await db.flush()
-                set_id = annotation_set.id
-                cache_row.annotation_set_id = set_id
-
             if set_id:
                 _add_highlight_annotations(db, set_id, batch_highlights)
 
-            cache_row.progress_pct = int(batch_index / total_batches * 100)
+            cache_row.progress_pct = int(completed_count / total_batches * 100)
             await db.commit()
             return True
     except Exception:
         logger.exception(
-            "Failed to persist batch %d/%d: cache_id=%s",
-            batch_index,
+            "Failed to persist thorough batch %d/%d: cache_id=%s",
+            completed_count,
             total_batches,
             cache_id,
         )
@@ -1000,7 +1051,7 @@ async def _run_thorough_analysis(
     provider: str,
     api_key: str,
     model: Optional[str],
-    llm_svc: LLMService,
+    llm_client,
     shortlist: list,
 ) -> bool:
     batches = [
@@ -1008,46 +1059,166 @@ async def _run_thorough_analysis(
         for i in range(0, len(shortlist), _BATCH_SIZE_THOROUGH)
     ]
     total = len(batches)
-    all_highlights = []
-    batch_reasoning_traces: list[tuple[int, int, str]] = []
 
-    for idx, batch in enumerate(batches, 1):
-        if await _stop_if_cancelled(cache_id, f"thorough_before_batch_{idx}"):
+    if total == 0:
+        # Nothing to analyze. Finalize handles the no-highlights failure path
+        # directly so we don't create an orphaned empty annotation set.
+        return await _finalize_thorough_results(cache_id, [], [])
+
+    # Pre-create the annotation set so concurrent batches never race on lazy
+    # creation and progress stays monotonic.
+    set_id = await _ensure_thorough_annotation_set(
+        cache_id,
+        pdf_id,
+        user_id,
+        categories,
+    )
+    if set_id is None:
+        return False
+
+    # Bounded concurrency: overlap slow LLM network calls across batches while
+    # respecting provider/rate-limit constraints. 1 preserves the historic
+    # sequential behavior; the cap protects against runaway parallelism.
+    concurrency = max(
+        1,
+        min(
+            _MAX_THOROUGH_CONCURRENCY,
+            settings.AUTO_HIGHLIGHT_THOROUGH_CONCURRENCY,
+        ),
+    )
+    semaphore = asyncio.Semaphore(concurrency)
+    # Persistence is serialized so the shared cache-row progress write stays
+    # monotonic and batches never contend on the same DB row. Persistence is a
+    # cheap local-DB operation; the expensive LLM calls still overlap.
+    persist_lock = asyncio.Lock()
+
+    # Adaptive rate-limit backoff. When a 429 is observed we set a cooldown
+    # deadline; any batch whose LLM call begins during the cooldown takes the
+    # rl_lock first, so effective LLM concurrency drops to 1 until the window
+    # expires. This stops concurrent batches from bursting into a provider that
+    # is already rejecting us, without permanently lowering the configured
+    # concurrency. Using a lock (rather than resizing the semaphore) avoids the
+    # deadlock of a permit holder trying to drain its own semaphore.
+    rate_limited_until = 0.0
+    rl_lock = asyncio.Lock()
+
+    async def _on_rate_limit() -> None:
+        nonlocal rate_limited_until
+        rate_limited_until = perf_counter() + _RATE_LIMIT_COOLDOWN_SECONDS
+        logger.info(
+            "Auto-highlight rate-limit backoff engaged: cache_id=%s "
+            "cooldown_seconds=%.1f effective_concurrency=1",
+            cache_id,
+            _RATE_LIMIT_COOLDOWN_SECONDS,
+            extra={
+                "cache_id": str(cache_id),
+                "auto_highlight_step": "rate_limit_backoff",
+                "cooldown_seconds": _RATE_LIMIT_COOLDOWN_SECONDS,
+            },
+        )
+
+    # Per-batch results, indexed by original batch position so the final
+    # highlight list and reasoning-trace order is independent of completion
+    # order.
+    results: list[list[dict] | None] = [None] * total
+    traces_by_index: dict[int, str] = {}
+    completed = 0
+    failed = False
+
+    async def _run_batch(idx: int, batch: list) -> bool:
+        nonlocal completed, failed
+        try:
+            async with semaphore:
+                if failed or await _stop_if_cancelled(
+                    cache_id, f"thorough_before_batch_{idx + 1}"
+                ):
+                    return False
+
+                # Each batch gets its own LLMService so the
+                # last_reasoning_trace attribute is never shared between
+                # in-flight calls. The shared httpx client is reused for
+                # connection pooling.
+                batch_llm_svc = LLMService(http_client=llm_client)
+
+                async def _extract() -> list[dict] | None:
+                    return await _run_llm_analysis(
+                        batch_llm_svc,
+                        batch,
+                        categories,
+                        provider,
+                        api_key,
+                        model,
+                        cache_id,
+                        f"thorough, batch {idx + 1}/{total}",
+                        on_rate_limit=_on_rate_limit,
+                    )
+
+                if perf_counter() < rate_limited_until:
+                    # Inside a cooldown: serialize LLM calls so we stop
+                    # arriving in a burst while the provider is 429-ing.
+                    async with rl_lock:
+                        batch_highlights = await _extract()
+                else:
+                    batch_highlights = await _extract()
+
+                if batch_highlights is None:
+                    failed = True
+                    return False
+                if await _stop_if_cancelled(
+                    cache_id, f"thorough_after_batch_{idx + 1}_llm"
+                ):
+                    failed = True
+                    return False
+
+                reasoning = batch_llm_svc.last_reasoning_trace
+                results[idx] = batch_highlights
+                if reasoning:
+                    traces_by_index[idx] = reasoning
+
+                async with persist_lock:
+                    if failed:
+                        return False
+                    completed += 1
+                    persisted = await _persist_thorough_batch(
+                        cache_id,
+                        set_id,
+                        batch_highlights,
+                        completed,
+                        total,
+                    )
+                    if not persisted:
+                        failed = True
+                        return False
+                return True
+        except Exception:
+            logger.exception(
+                "Unexpected error in thorough batch %d/%d: cache_id=%s",
+                idx + 1,
+                total,
+                cache_id,
+            )
+            await _mark_cache_failed(cache_id, "Unexpected batch failure")
+            failed = True
             return False
 
-        batch_highlights = await _run_llm_analysis(
-            llm_svc,
-            batch,
-            categories,
-            provider,
-            api_key,
-            model,
-            cache_id,
-            f"thorough, batch {idx}/{total}",
-        )
+    tasks = [
+        asyncio.create_task(_run_batch(idx, batch)) for idx, batch in enumerate(batches)
+    ]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    if failed or await _stop_if_cancelled(cache_id, "thorough_before_finalize"):
+        return False
+
+    all_highlights: list[dict] = []
+    batch_reasoning_traces: list[tuple[int, int, str]] = []
+    for idx in range(total):
+        batch_highlights = results[idx]
         if batch_highlights is None:
             return False
-        if await _stop_if_cancelled(cache_id, f"thorough_after_batch_{idx}_llm"):
-            return False
-
-        if llm_svc.last_reasoning_trace:
-            batch_reasoning_traces.append((idx, total, llm_svc.last_reasoning_trace))
-
         all_highlights.extend(batch_highlights)
-        persisted = await _persist_thorough_batch(
-            cache_id,
-            pdf_id,
-            user_id,
-            categories,
-            batch_highlights,
-            idx,
-            total,
-        )
-        if not persisted:
-            return False
-
-    if await _stop_if_cancelled(cache_id, "thorough_before_finalize"):
-        return False
+        if idx in traces_by_index:
+            batch_reasoning_traces.append((idx + 1, total, traces_by_index[idx]))
 
     return await _finalize_thorough_results(
         cache_id,
@@ -1244,7 +1415,7 @@ async def _run_analysis_background(
                     provider,
                     api_key,
                     model,
-                    llm_svc,
+                    llm_client,
                     shortlist,
                 ),
             )
@@ -1336,9 +1507,7 @@ async def analyze_paper(
             raise HTTPException(status_code=409, detail="Analysis already in progress.")
 
     feature = (
-        "auto_highlight_thorough"
-        if data.tier == "thorough"
-        else "auto_highlight_quick"
+        "auto_highlight_thorough" if data.tier == "thorough" else "auto_highlight_quick"
     )
     resolution, _quota_result = await resolve_api_key_with_quota(
         current_user,

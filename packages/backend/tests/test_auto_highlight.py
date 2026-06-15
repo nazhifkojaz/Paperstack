@@ -946,6 +946,280 @@ async def test_run_analysis_background_thorough_combines_non_empty_reasoning_tra
 
 
 @pytest.mark.asyncio
+async def test_run_thorough_analysis_concurrent_preserves_order(monkeypatch):
+    """Bounded concurrency must keep highlight + reasoning-trace order and
+    drive progress monotonically to 100, regardless of completion order."""
+    import asyncio as _asyncio
+
+    from app.api.routes import auto_highlight as ah
+
+    # Opt into concurrency for this test (default is 1 = sequential).
+    monkeypatch.setattr(ah.settings, "AUTO_HIGHLIGHT_THOROUGH_CONCURRENCY", 3)
+
+    cache_id = uuid.uuid4()
+    pdf_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    mock_cache = MagicMock()
+    mock_cache.id = cache_id
+    mock_cache.status = "pending"
+    mock_cache.annotation_set_id = None
+    mock_cache.progress_pct = 0
+    mock_cache.reasoning_trace = None
+
+    # 12 passages -> 3 batches of (5, 5, 2).
+    shortlist = []
+    for i in range(12):
+        passage = MagicMock()
+        passage.content = f"passage {i + 1} describes a key finding worth noting"
+        passage.page_number = i + 1
+        passage.end_page_number = None
+        shortlist.append(passage)
+
+    # Fresh LLMService per instantiation so each batch owns an isolated
+    # last_reasoning_trace (mirrors production, avoids shared-mock races).
+    def _make_llm_svc(http_client=None):
+        svc = MagicMock()
+        svc.last_reasoning_trace = None
+
+        async def _extract(batch, *args, **kwargs):
+            # Yield so the batches genuinely interleave through the loop.
+            await _asyncio.sleep(0)
+            head = batch[0].content.split()[1]
+            svc.last_reasoning_trace = f"reasoning for passage {head}"
+            return [
+                {
+                    "text": batch[0].content,
+                    "page": batch[0].page_number,
+                    "category": "findings",
+                    "reason": "Important result",
+                }
+            ]
+
+        svc.extract_highlights_from_passages = AsyncMock(side_effect=_extract)
+        return svc
+
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch(
+            "app.api.routes.auto_highlight.LLMService",
+            side_effect=_make_llm_svc,
+        ),
+    ):
+        mock_session = _mock_session()
+
+        def _execute(*args, **kwargs):
+            res = MagicMock()
+            res.scalar_one_or_none = MagicMock(return_value=mock_cache)
+            res.scalar_one = MagicMock(return_value=mock_cache)
+            res.scalars = MagicMock()
+            res.scalars.return_value.all = MagicMock(return_value=[])
+            return res
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        ok = await ah._run_thorough_analysis(
+            cache_id=cache_id,
+            pdf_id=pdf_id,
+            user_id=user_id,
+            categories=["findings"],
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            llm_client=MagicMock(),
+            shortlist=shortlist,
+        )
+
+    assert ok is True
+    assert mock_cache.status == "complete"
+    assert mock_cache.progress_pct == 100
+    # Order follows original batch positions (batches start at passages 1, 6, 11)
+    # even though they ran concurrently.
+    assert mock_cache.reasoning_trace == (
+        "## Batch 1/3\nreasoning for passage 1\n\n"
+        "## Batch 2/3\nreasoning for passage 6\n\n"
+        "## Batch 3/3\nreasoning for passage 11"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_llm_analysis_invokes_on_rate_limit_for_429():
+    """The on_rate_limit callback fires on a provider 429 so the caller can
+    back off concurrent batches before the retry lands."""
+    from app.api.routes.auto_highlight import _run_llm_analysis
+    from app.services.exceptions import LLMRateLimitError, LLMProviderError
+
+    cache_id = uuid.uuid4()
+    llm_svc = MagicMock()
+    llm_svc.last_reasoning_trace = None
+    llm_svc.extract_highlights_from_passages = AsyncMock(
+        side_effect=[
+            LLMRateLimitError("openrouter"),
+            [
+                {
+                    "text": "the model improves accuracy",
+                    "page": 1,
+                    "category": "findings",
+                    "reason": "Supported by the passage",
+                }
+            ],
+        ]
+    )
+    on_rate_limit = AsyncMock()
+
+    with patch("app.api.routes.auto_highlight.asyncio.sleep", new_callable=AsyncMock):
+        result = await _run_llm_analysis(
+            llm_svc,
+            [_Passage("The paper says the model improves accuracy")],
+            ["findings"],
+            "openrouter",
+            "test-key",
+            None,
+            cache_id,
+            "quick",
+            on_rate_limit=on_rate_limit,
+        )
+
+    assert result == [
+        {
+            "text": "the model improves accuracy",
+            "page": 1,
+            "category": "findings",
+            "reason": "Supported by the passage",
+        }
+    ]
+    on_rate_limit.assert_awaited_once()
+    assert llm_svc.extract_highlights_from_passages.await_count == 2
+
+    # Non-rate-limit transient errors must NOT trip the callback.
+    other_svc = MagicMock()
+    other_svc.last_reasoning_trace = None
+    other_svc.extract_highlights_from_passages = AsyncMock(
+        side_effect=[
+            LLMProviderError("openrouter", 503, "temporarily unavailable"),
+            [
+                {
+                    "text": "the model improves accuracy",
+                    "page": 1,
+                    "category": "findings",
+                    "reason": "Supported by the passage",
+                }
+            ],
+        ]
+    )
+    other_cb = AsyncMock()
+    with patch("app.api.routes.auto_highlight.asyncio.sleep", new_callable=AsyncMock):
+        await _run_llm_analysis(
+            other_svc,
+            [_Passage("The paper says the model improves accuracy")],
+            ["findings"],
+            "openrouter",
+            "test-key",
+            None,
+            cache_id,
+            "quick",
+            on_rate_limit=other_cb,
+        )
+    other_cb.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_thorough_analysis_survives_transient_rate_limit(monkeypatch):
+    """A provider 429 during a concurrent thorough run is retried (and the
+    rate-limit backoff engaged); the run still completes."""
+    from app.api.routes import auto_highlight as ah
+    from app.services.exceptions import LLMRateLimitError
+
+    monkeypatch.setattr(ah.settings, "AUTO_HIGHLIGHT_THOROUGH_CONCURRENCY", 2)
+
+    cache_id = uuid.uuid4()
+    pdf_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    mock_cache = MagicMock()
+    mock_cache.id = cache_id
+    mock_cache.status = "pending"
+    mock_cache.annotation_set_id = None
+    mock_cache.progress_pct = 0
+    mock_cache.reasoning_trace = None
+
+    # 7 passages -> 2 batches of (5, 2).
+    shortlist = []
+    for i in range(7):
+        passage = MagicMock()
+        passage.content = f"passage {i + 1} describes a key finding worth noting"
+        passage.page_number = i + 1
+        passage.end_page_number = None
+        shortlist.append(passage)
+
+    first_call_done = {"v": False}
+
+    def _make_llm_svc(http_client=None):
+        svc = MagicMock()
+        svc.last_reasoning_trace = None
+
+        async def _extract(batch, *args, **kwargs):
+            # The very first provider call returns a 429, then every call
+            # succeeds (mimicking retry recovery).
+            if not first_call_done["v"]:
+                first_call_done["v"] = True
+                raise LLMRateLimitError("openrouter")
+            head = batch[0].content.split()[1]
+            svc.last_reasoning_trace = f"reasoning for passage {head}"
+            return [
+                {
+                    "text": batch[0].content,
+                    "page": batch[0].page_number,
+                    "category": "findings",
+                    "reason": "Important result",
+                }
+            ]
+
+        svc.extract_highlights_from_passages = AsyncMock(side_effect=_extract)
+        return svc
+
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch(
+            "app.api.routes.auto_highlight.LLMService",
+            side_effect=_make_llm_svc,
+        ),
+        patch("app.api.routes.auto_highlight.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        mock_session = _mock_session()
+
+        def _execute(*args, **kwargs):
+            res = MagicMock()
+            res.scalar_one_or_none = MagicMock(return_value=mock_cache)
+            res.scalar_one = MagicMock(return_value=mock_cache)
+            res.scalars = MagicMock()
+            res.scalars.return_value.all = MagicMock(return_value=[])
+            return res
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        ok = await ah._run_thorough_analysis(
+            cache_id=cache_id,
+            pdf_id=pdf_id,
+            user_id=user_id,
+            categories=["findings"],
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            llm_client=MagicMock(),
+            shortlist=shortlist,
+        )
+
+    assert ok is True
+    assert mock_cache.status == "complete"
+    assert mock_cache.progress_pct == 100
+
+
+@pytest.mark.asyncio
 async def test_run_analysis_background_setup_failure_no_shortlist():
     from app.api.routes.auto_highlight import _run_analysis_background
 

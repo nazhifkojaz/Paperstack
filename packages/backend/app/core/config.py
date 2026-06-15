@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # Auto-highlight rate limits
     RATE_LIMIT_AUTO_HIGHLIGHT_QUOTA: str = "30/minute"
     RATE_LIMIT_AUTO_HIGHLIGHT_CACHE: str = "30/minute"
+
+    # Auto-highlight thorough-mode batch concurrency. 1 preserves the historic
+    # sequential behavior. Raising it overlaps LLM network calls across batches
+    # (bounded by _MAX_THOROUGH_CONCURRENCY in the route module).
+    AUTO_HIGHLIGHT_THOROUGH_CONCURRENCY: int = 1
     RATE_LIMIT_API_KEYS: str = "10/minute"
     RATE_LIMIT_PDF_CHECK_URL: str = "10/minute"
     RATE_LIMIT_REINDEX: str = "5/minute"
@@ -64,7 +69,9 @@ class Settings(BaseSettings):
     # OpenRouter reasoning (thinking) mode
     OPENROUTER_REASONING_ENABLED: bool = True
     OPENROUTER_REASONING_EFFORT: str = "medium"  # "low" | "medium" | "high"
-    OPENROUTER_REASONING_TIMEOUT_READ: float = 180.0  # Longer timeout for reasoning calls
+    OPENROUTER_REASONING_TIMEOUT_READ: float = (
+        180.0  # Longer timeout for reasoning calls
+    )
 
     # Chat rate limits
     RATE_LIMIT_CHAT_CONVERSATIONS: str = "30/minute"
