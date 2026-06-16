@@ -1,4 +1,5 @@
 """Structured RAG interaction logging for future model training datasets."""
+
 from __future__ import annotations
 
 import asyncio
@@ -112,7 +113,10 @@ def _find_matching_chunks(
 
 def _overlaps(span: tuple[int, int], spans: list[tuple[int, int]]) -> bool:
     start, end = span
-    return any(start < existing_end and end > existing_start for existing_start, existing_end in spans)
+    return any(
+        start < existing_end and end > existing_start
+        for existing_start, existing_end in spans
+    )
 
 
 def extract_citation_events(

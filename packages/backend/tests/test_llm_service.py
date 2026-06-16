@@ -4,13 +4,18 @@ import httpx
 from unittest.mock import AsyncMock, patch
 from app.constants.colors import CATEGORY_COLORS
 from app.services.llm_service import (
-    LLMService, _parse_highlights_json, strip_markdown_fences,
+    LLMService,
+    _parse_highlights_json,
+    strip_markdown_fences,
 )
 
 
 def test_strip_markdown_fences_json():
     raw = '```json\n[{"text": "hello", "page": 1, "category": "findings", "reason": "test"}]\n```'
-    assert strip_markdown_fences(raw) == '[{"text": "hello", "page": 1, "category": "findings", "reason": "test"}]'
+    assert (
+        strip_markdown_fences(raw)
+        == '[{"text": "hello", "page": 1, "category": "findings", "reason": "test"}]'
+    )
 
 
 def test_strip_markdown_fences_no_fence():
@@ -24,10 +29,22 @@ def test_strip_markdown_fences_plain_backticks():
 
 
 def test_parse_highlights_json_valid():
-    raw = json.dumps([
-        {"text": "Some finding", "page": 1, "category": "findings", "reason": "Important result"},
-        {"text": "A method", "page": 3, "category": "methods", "reason": "Core technique"},
-    ])
+    raw = json.dumps(
+        [
+            {
+                "text": "Some finding",
+                "page": 1,
+                "category": "findings",
+                "reason": "Important result",
+            },
+            {
+                "text": "A method",
+                "page": 3,
+                "category": "methods",
+                "reason": "Core technique",
+            },
+        ]
+    )
     highlights = _parse_highlights_json(raw)
     assert len(highlights) == 2
     assert highlights[0]["text"] == "Some finding"
@@ -77,13 +94,27 @@ def test_category_colors():
 @pytest.mark.asyncio
 async def test_extract_highlights_from_passages_openrouter():
     service = LLMService()
-    mock_response = json.dumps([
-        {"text": "Key result", "page": 1, "category": "findings", "reason": "Primary finding"},
-    ])
-    passage = type("P", (), {"content": "some text", "page_number": 1, "categories": ["findings"]})()
-    with patch.object(service, "call_openrouter", new=AsyncMock(return_value=mock_response)):
+    mock_response = json.dumps(
+        [
+            {
+                "text": "Key result",
+                "page": 1,
+                "category": "findings",
+                "reason": "Primary finding",
+            },
+        ]
+    )
+    passage = type(
+        "P", (), {"content": "some text", "page_number": 1, "categories": ["findings"]}
+    )()
+    with patch.object(
+        service, "call_openrouter", new=AsyncMock(return_value=mock_response)
+    ):
         highlights = await service.extract_highlights_from_passages(
-            [passage], ["findings"], "openrouter", "fake-key",
+            [passage],
+            ["findings"],
+            "openrouter",
+            "fake-key",
         )
     assert len(highlights) == 1
     assert highlights[0]["text"] == "Key result"
@@ -93,7 +124,10 @@ async def test_extract_highlights_from_passages_openrouter():
 async def test_extract_highlights_from_passages_empty():
     service = LLMService()
     result = await service.extract_highlights_from_passages(
-        [], ["findings"], "openrouter", "fake-key",
+        [],
+        ["findings"],
+        "openrouter",
+        "fake-key",
     )
     assert result == []
 
@@ -101,10 +135,15 @@ async def test_extract_highlights_from_passages_empty():
 @pytest.mark.asyncio
 async def test_extract_highlights_from_passages_unknown_provider():
     service = LLMService()
-    passage = type("P", (), {"content": "text", "page_number": 1, "categories": ["findings"]})()
+    passage = type(
+        "P", (), {"content": "text", "page_number": 1, "categories": ["findings"]}
+    )()
     with pytest.raises(ValueError, match="Unknown provider"):
         await service.extract_highlights_from_passages(
-            [passage], ["findings"], "unknown_provider", "key",
+            [passage],
+            ["findings"],
+            "unknown_provider",
+            "key",
         )
 
 
@@ -196,8 +235,8 @@ class TestStreamOpenRouter:
         from app.services.llm_service import OPENROUTER_BASE_URL
 
         sse_body = (
-            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"}}]}\n\n"
-            "data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n"
+            'data: {"choices":[{"delta":{"content":"Hello "}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":"world"}}]}\n\n'
             "data: [DONE]\n\n"
         )
 
@@ -225,8 +264,8 @@ class TestStreamOpenRouter:
         from app.services.llm_service import OPENROUTER_BASE_URL
 
         sse_body = (
-            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n"
-            "data: {\"choices\":[{\"delta\":{\"content\":\"token\"}}]}\n\n"
+            'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":"token"}}]}\n\n'
             "data: [DONE]\n\n"
         )
 

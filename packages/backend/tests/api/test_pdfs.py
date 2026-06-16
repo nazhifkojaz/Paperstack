@@ -99,7 +99,13 @@ class TestUploadPdf:
         assert response.status_code == 200
 
     async def test_upload_pdf_creates_default_annotation_set(
-        self, client: AsyncClient, auth_headers, db_session, test_user, mock_github_api, sample_pdf_bytes
+        self,
+        client: AsyncClient,
+        auth_headers,
+        db_session,
+        test_user,
+        mock_github_api,
+        sample_pdf_bytes,
     ) -> None:
         """Uploading a PDF should create a default annotation set."""
         files = {"file": ("test.pdf", BytesIO(sample_pdf_bytes), "application/pdf")}
@@ -121,7 +127,9 @@ class TestUploadPdf:
                 AnnotationSet.user_id == test_user.id,
             )
         )
-        _assert_default_annotation_set(result.scalar_one_or_none(), pdf_id, test_user.id)
+        _assert_default_annotation_set(
+            result.scalar_one_or_none(), pdf_id, test_user.id
+        )
 
 
 class TestListPdfs:
@@ -664,7 +672,9 @@ class TestLinkPdf:
                 AnnotationSet.user_id == test_user.id,
             )
         )
-        _assert_default_annotation_set(result.scalar_one_or_none(), pdf_id, test_user.id)
+        _assert_default_annotation_set(
+            result.scalar_one_or_none(), pdf_id, test_user.id
+        )
 
 
 class TestGetPdfCollections:

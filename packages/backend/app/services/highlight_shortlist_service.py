@@ -1,4 +1,5 @@
 """Shortlist candidate highlight chunks via vector search."""
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -71,7 +72,9 @@ class HighlightShortlistService:
                 query_text=query,
             )
             for r in results:
-                chunk_pages = set(range(r.page_number, (r.end_page_number or r.page_number) + 1))
+                chunk_pages = set(
+                    range(r.page_number, (r.end_page_number or r.page_number) + 1)
+                )
                 if pages_set and not chunk_pages & pages_set:
                     continue
                 cid = r.chunk_id or ""

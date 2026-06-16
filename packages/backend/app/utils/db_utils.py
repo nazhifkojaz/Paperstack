@@ -3,6 +3,7 @@
 Provides shared functions for consistent database error handling,
 logging, and transaction cleanup across route handlers.
 """
+
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional

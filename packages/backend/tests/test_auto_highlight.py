@@ -1444,7 +1444,9 @@ async def test_finalize_thorough_results_marks_complete():
     assert result is True
     assert cache_row.status == "complete"
     assert cache_row.progress_pct == 100
-    assert cache_row.llm_response == [{"text": "finding", "page": 1, "category": "findings"}]
+    assert cache_row.llm_response == [
+        {"text": "finding", "page": 1, "category": "findings"}
+    ]
     assert "## Batch 1/2" in cache_row.reasoning_trace
     assert "reasoning one" in cache_row.reasoning_trace
 

@@ -257,7 +257,9 @@ async def stream_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    resolution, quota_result = await resolve_api_key_with_quota(current_user, db, "chat")
+    resolution, quota_result = await resolve_api_key_with_quota(
+        current_user, db, "chat"
+    )
 
     user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings(
         current_user,
@@ -386,9 +388,11 @@ async def semantic_search(
 ):
     """Search across indexed PDFs using semantic similarity."""
     try:
-        user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings(
-            current_user,
-            db,
+        user_openrouter_key = (
+            await api_key_service.get_user_openrouter_key_for_embeddings(
+                current_user,
+                db,
+            )
         )
         embedding_svc = EmbeddingService(
             http_client=embedding_client,

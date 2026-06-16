@@ -15,9 +15,11 @@ reusable_oauth2 = OAuth2PasswordBearer(
     tokenUrl="/v1/auth/github/login"  # Used for OpenAPI docs; actual auth is OAuth flow
 )
 
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:
         yield session
+
 
 async def get_current_user(
     db: AsyncSession = Depends(get_db), token: str = Depends(reusable_oauth2)
@@ -28,11 +30,11 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
         )
-    
+
     stmt = select(User).where(User.id == uuid.UUID(user_id))
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -103,9 +105,7 @@ async def resolve_api_key_with_quota(
 
     pref_column = _PREFERENCE_MAP[feature]
     prefs_result = await db.execute(
-        select(UserLLMPreferences).where(
-            UserLLMPreferences.user_id == user.id
-        )
+        select(UserLLMPreferences).where(UserLLMPreferences.user_id == user.id)
     )
     prefs = prefs_result.scalar_one_or_none()
     preferred_model = getattr(prefs, pref_column) if prefs else None

@@ -1,4 +1,5 @@
 """Rate limiting middleware for Paperstack backend."""
+
 import logging
 
 from fastapi import Request
@@ -22,7 +23,9 @@ def get_identifier(request: Request) -> str:
 limiter = Limiter(key_func=get_identifier)
 
 
-async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+async def rate_limit_exceeded_handler(
+    request: Request, exc: RateLimitExceeded
+) -> JSONResponse:
     """Custom handler for rate limit exceeded errors.
 
     Returns a 429 response with JSON body including retry_after seconds.
@@ -59,12 +62,12 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         status_code=429,
         content={
             "detail": f"Rate limit exceeded. Try again in {retry_after} seconds.",
-            "retry_after": retry_after
+            "retry_after": retry_after,
         },
         headers={
             "X-RateLimit-Limit": str(limit),
             "X-RateLimit-Remaining": "0",
             "X-RateLimit-Reset": str(int(reset_in)),
-            "Retry-After": str(retry_after)
-        }
+            "Retry-After": str(retry_after),
+        },
     )

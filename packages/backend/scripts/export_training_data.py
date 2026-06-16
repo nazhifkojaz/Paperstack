@@ -1,4 +1,5 @@
 """Export structured RAG interaction logs for model training."""
+
 from __future__ import annotations
 
 import argparse
@@ -45,7 +46,8 @@ def _embedding_pair_records(
         negatives = [
             _scrub_chunk(chunk, anonymize=anonymize)
             for chunk in interaction.retrieved_chunks
-            if chunk.get("included_in_prompt") and str(chunk.get("chunk_id")) not in positive_ids
+            if chunk.get("included_in_prompt")
+            and str(chunk.get("chunk_id")) not in positive_ids
         ]
         for positive_id in positive_ids:
             positive = chunks_by_id.get(positive_id)

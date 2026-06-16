@@ -4,7 +4,11 @@ import uuid
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.chat_orchestrator import ChatOrchestrator, PreparedContext, PreparedMessages
+from app.services.chat_orchestrator import (
+    ChatOrchestrator,
+    PreparedContext,
+    PreparedMessages,
+)
 from app.services.chat_service import BuiltContext
 from app.services.exceptions import (
     EmbeddingError,
@@ -85,8 +89,8 @@ def mock_db():
 # prepare_context — PDF path
 # ---------------------------------------------------------------------------
 
-class TestPreparePdfContext:
 
+class TestPreparePdfContext:
     async def test_prepare_pdf_context_success(
         self, orchestrator, mock_user, mock_db, mock_indexing
     ):
@@ -225,8 +229,8 @@ class TestPreparePdfContext:
 # prepare_context — Collection path
 # ---------------------------------------------------------------------------
 
-class TestPrepareCollectionContext:
 
+class TestPrepareCollectionContext:
     async def test_prepare_collection_context_success(
         self, orchestrator, mock_user, mock_db
     ):
@@ -309,25 +313,28 @@ class TestPrepareCollectionContext:
 # build_messages
 # ---------------------------------------------------------------------------
 
-class TestBuildMessages:
 
+class TestBuildMessages:
     @pytest.mark.parametrize(
         "collection_id,expected_base_prompt,history,paper_metadata",
         [
             pytest.param(
-                None, None,
+                None,
+                None,
                 [{"role": "user", "content": "previous"}],
                 {"title": "Test Paper"},
                 id="pdf_context_with_history",
             ),
             pytest.param(
-                uuid.uuid4(), "COLLECTION",
+                uuid.uuid4(),
+                "COLLECTION",
                 [],
                 [{"title": "Paper A"}, {"title": "Paper B"}],
                 id="collection_context_no_history",
             ),
             pytest.param(
-                None, None,
+                None,
+                None,
                 [],
                 None,
                 id="no_history_no_metadata",
@@ -335,7 +342,13 @@ class TestBuildMessages:
         ],
     )
     async def test_build_messages_passes_base_prompt(
-        self, orchestrator, mock_chat, collection_id, expected_base_prompt, history, paper_metadata
+        self,
+        orchestrator,
+        mock_chat,
+        collection_id,
+        expected_base_prompt,
+        history,
+        paper_metadata,
     ):
         from app.services.chat_service import COLLECTION_SYSTEM_PROMPT
 
@@ -360,11 +373,9 @@ class TestBuildMessages:
 # persist_user_message
 # ---------------------------------------------------------------------------
 
-class TestPersistUserMessage:
 
-    async def test_persist_user_message_sets_title(
-        self, orchestrator, mock_db
-    ):
+class TestPersistUserMessage:
+    async def test_persist_user_message_sets_title(self, orchestrator, mock_db):
         conv = MagicMock()
         conv.title = None
 
@@ -419,6 +430,7 @@ class TestPersistUserMessage:
 # stream_and_save — success, rate limit, and error paths
 # ---------------------------------------------------------------------------
 
+
 class TestStreamAndSave:
     def _training_context(self, conversation_id: uuid.UUID) -> TrainingLogContext:
         return TrainingLogContext(
@@ -445,9 +457,7 @@ class TestStreamAndSave:
             consent_version="test",
         )
 
-    async def test_stream_and_save_success(
-        self, orchestrator, mock_chat, mock_db
-    ):
+    async def test_stream_and_save_success(self, orchestrator, mock_chat, mock_db):
         async def mock_stream(*args, **kwargs):
             yield "Hello"
             yield " world"
@@ -546,9 +556,7 @@ class TestStreamAndSave:
         assert events[-1]["done"] is True
         assert "message_id" in events[-1]
 
-    async def test_stream_and_save_rate_limit(
-        self, orchestrator, mock_chat, mock_db
-    ):
+    async def test_stream_and_save_rate_limit(self, orchestrator, mock_chat, mock_db):
         async def mock_stream(*args, **kwargs):
             raise LLMRateLimitError("openrouter")
             yield

@@ -1,4 +1,5 @@
 """Tests for EmbeddingService — OpenRouter /v1/embeddings wrapper."""
+
 import json
 
 import httpx
@@ -13,9 +14,7 @@ from app.services.exceptions import EmbeddingError
 def _make_embedding_response(n: int, dim: int = 1024) -> dict:
     """Build a fake OpenAI-compatible embedding response."""
     return {
-        "data": [
-            {"index": i, "embedding": [0.01 * (i + 1)] * dim} for i in range(n)
-        ],
+        "data": [{"index": i, "embedding": [0.01 * (i + 1)] * dim} for i in range(n)],
         "usage": {"prompt_tokens": n * 10, "total_tokens": n * 10},
     }
 
@@ -55,7 +54,10 @@ class TestEmbedTexts:
         assert body["model"] == "qwen/qwen3-embedding-8b"
         assert body["input"] == ["a", "b", "c"]
         assert body["dimensions"] == 1024
-        assert body["provider"] == {"order": ["nebius", "deepinfra"], "allow_fallbacks": True}
+        assert body["provider"] == {
+            "order": ["nebius", "deepinfra"],
+            "allow_fallbacks": True,
+        }
 
     @respx.mock
     async def test_user_key_is_primary_when_provided(self, svc):
@@ -82,7 +84,9 @@ class TestEmbedTexts:
         assert len(result) == 1
         assert route.call_count == 2
         assert route.calls[0].request.headers["authorization"] == "Bearer sk-user-key"
-        assert route.calls[1].request.headers["authorization"] == "Bearer sk-or-test-key"
+        assert (
+            route.calls[1].request.headers["authorization"] == "Bearer sk-or-test-key"
+        )
 
     @respx.mock
     async def test_user_key_auth_error_does_not_fallback(self, svc):

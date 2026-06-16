@@ -32,11 +32,7 @@ class TestBuildEmbeddingText:
             pdf_title="Some Paper",
             section_title=None,
         )
-        assert result == (
-            "Paper: Some Paper\n"
-            "Section: (untitled)\n\n"
-            "Body text."
-        )
+        assert result == ("Paper: Some Paper\nSection: (untitled)\n\nBody text.")
 
     def test_uses_untitled_when_section_blank(self):
         result = build_embedding_text(

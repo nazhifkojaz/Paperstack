@@ -1,4 +1,5 @@
 """Tests for the settings routes."""
+
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,7 +46,11 @@ class TestGetConnectedAccounts:
         assert data["accounts"] == []
 
     async def test_returns_multiple_providers(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_user: User,
     ) -> None:
         """Returns all linked providers when user has multiple OAuth accounts."""
         # test_user already has github; add google
@@ -65,7 +70,11 @@ class TestGetConnectedAccounts:
         assert "google" in provider_ids
 
     async def test_includes_display_name(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_user: User,
     ) -> None:
         """Each account includes a human-readable display_name."""
         # Add google to the existing github from fixture
@@ -95,7 +104,11 @@ class TestUpdateStorageProvider:
     """Tests for PATCH /settings/storage-provider"""
 
     async def test_switch_to_linked_provider(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_user: User,
     ) -> None:
         """Switches storage provider when user has a matching OAuth account."""
         # test_user already has github OAuth account from fixture
@@ -112,7 +125,11 @@ class TestUpdateStorageProvider:
         assert test_user.storage_provider == "github"
 
     async def test_rejects_unlinked_provider(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_user: User,
     ) -> None:
         """Returns 400 when switching to a provider with no OAuth account."""
         # test_user only has github linked, try to switch to google
@@ -146,7 +163,11 @@ class TestUpdateStorageProvider:
         assert resp.status_code == 401
 
     async def test_switch_between_linked_providers(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_user: User,
     ) -> None:
         """Switches from github to google when both are linked."""
         # test_user already has github from fixture; add google

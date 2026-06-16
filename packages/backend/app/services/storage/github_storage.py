@@ -16,7 +16,9 @@ class GitHubStorageBackend(StorageBackend):
     async def ensure_container(self) -> None:
         await github_repo.ensure_user_repo(self._token, self._login)
 
-    async def upload(self, filename: str, file_bytes: bytes, title: str) -> UploadResult:
+    async def upload(
+        self, filename: str, file_bytes: bytes, title: str
+    ) -> UploadResult:
         resp = await github_repo.upload_pdf_to_github(
             self._token,
             self._login,
@@ -28,10 +30,14 @@ class GitHubStorageBackend(StorageBackend):
         return UploadResult(file_id=github_sha, provider="github")
 
     async def download_bytes(self, file_id: str, filename: str) -> bytes:
-        return await github_repo.download_pdf_from_github(self._token, self._login, filename)
+        return await github_repo.download_pdf_from_github(
+            self._token, self._login, filename
+        )
 
     async def download_to_tempfile(self, file_id: str, filename: str) -> Path:
-        return await github_repo.download_pdf_to_tempfile(self._token, self._login, filename)
+        return await github_repo.download_pdf_to_tempfile(
+            self._token, self._login, filename
+        )
 
     async def delete(self, file_id: str, filename: str) -> None:
         await github_repo.delete_pdf_from_github(

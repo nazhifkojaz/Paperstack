@@ -4,6 +4,7 @@ Revision ID: e2a4c6f8b0d1
 Revises: c8f1e2d3a4b5
 Create Date: 2026-06-12
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -33,7 +34,9 @@ def upgrade() -> None:
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("conversation_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("user_message_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("assistant_message_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column(
+            "assistant_message_id", postgresql.UUID(as_uuid=True), nullable=False
+        ),
         sa.Column("query_text", sa.Text(), nullable=False),
         sa.Column("query_embedding", HALFVEC(1024), nullable=True),
         sa.Column("embedding_model", sa.Text(), nullable=False),
@@ -46,7 +49,9 @@ def upgrade() -> None:
         sa.Column("scope_type", sa.String(length=20), nullable=False),
         sa.Column("pdf_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("collection_id", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column("retrieved_chunks", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "retrieved_chunks", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("retrieval_top_k", sa.Integer(), nullable=False),
         sa.Column(
             "retrieval_config",
@@ -57,7 +62,9 @@ def upgrade() -> None:
         sa.Column("prompt_context", sa.Text(), nullable=False),
         sa.Column("system_prompt", sa.Text(), nullable=False),
         sa.Column("system_prompt_hash", sa.Text(), nullable=False),
-        sa.Column("prompt_messages", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "prompt_messages", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("llm_model", sa.Text(), nullable=False),
         sa.Column("llm_provider", sa.Text(), nullable=False),
         sa.Column(
@@ -104,12 +111,20 @@ def upgrade() -> None:
             "scope_type IN ('single_pdf', 'collection')",
             name="ck_training_rag_interactions_scope_type",
         ),
-        sa.ForeignKeyConstraint(["assistant_message_id"], ["chat_messages.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["collection_id"], ["collections.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["conversation_id"], ["chat_conversations.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["assistant_message_id"], ["chat_messages.id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["collection_id"], ["collections.id"], ondelete="SET NULL"
+        ),
+        sa.ForeignKeyConstraint(
+            ["conversation_id"], ["chat_conversations.id"], ondelete="CASCADE"
+        ),
         sa.ForeignKeyConstraint(["pdf_id"], ["pdfs.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["user_message_id"], ["chat_messages.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["user_message_id"], ["chat_messages.id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("id"),
         schema="training_data",
     )

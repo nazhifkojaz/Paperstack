@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 class ShareCreate(BaseModel):
     shared_with_github_login: Optional[str] = None  # None = public link
-    permission: str = 'view'  # 'view' | 'comment'
+    permission: str = "view"  # 'view' | 'comment'
 
 
 class ShareResponse(BaseModel):
@@ -42,6 +42,7 @@ class AnnotationSetData(BaseModel):
 
 class SharedAnnotationsResponse(BaseModel):
     """Public response for /shared/annotations/{token} — no auth required."""
+
     shared_by_login: str
     shared_by_avatar: Optional[str]
     permission: str

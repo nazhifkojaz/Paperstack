@@ -33,14 +33,19 @@ async def create_api_key(
     encrypted = encrypt_token(data.api_key)
 
     # Upsert: insert or update on conflict
-    stmt = insert(UserApiKey).values(
-        user_id=current_user.id,
-        provider=data.provider,
-        encrypted_key=encrypted,
-    ).on_conflict_do_update(
-        constraint="uq_user_api_keys_user_provider",
-        set_={"encrypted_key": encrypted},
-    ).returning(UserApiKey)
+    stmt = (
+        insert(UserApiKey)
+        .values(
+            user_id=current_user.id,
+            provider=data.provider,
+            encrypted_key=encrypted,
+        )
+        .on_conflict_do_update(
+            constraint="uq_user_api_keys_user_provider",
+            set_={"encrypted_key": encrypted},
+        )
+        .returning(UserApiKey)
+    )
 
     result = await db.execute(stmt)
     await db.commit()

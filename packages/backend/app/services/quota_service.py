@@ -1,4 +1,5 @@
 """Daily per-user quota management for in-house free-tier AI usage."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace

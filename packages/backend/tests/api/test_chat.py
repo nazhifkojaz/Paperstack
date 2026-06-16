@@ -19,7 +19,13 @@ from tests.fixtures import (
     create_test_collection,
 )
 
-from tests.helpers import make_resolve_result as _resolve_result, init_http_clients, override_get_llm_http_client, override_get_embedding_http_client, TEST_EMBEDDING
+from tests.helpers import (
+    make_resolve_result as _resolve_result,
+    init_http_clients,
+    override_get_llm_http_client,
+    override_get_embedding_http_client,
+    TEST_EMBEDDING,
+)
 
 
 def _make_chunk(**kwargs):
@@ -37,7 +43,9 @@ def _make_chunk(**kwargs):
     return chunk
 
 
-async def _create_pdf_conversation(client, auth_headers, db_session, test_user, title="Test PDF"):
+async def _create_pdf_conversation(
+    client, auth_headers, db_session, test_user, title="Test PDF"
+):
     """Create a PDF and a conversation scoped to it; return (pdf, conversation_id)."""
     pdf = await create_test_pdf(db_session, user_id=test_user.id, title=title)
     await db_session.commit()
@@ -908,9 +916,9 @@ class TestStreamMessage:
         )
 
         mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
-        mocks["chat"].build_context.return_value = (
-            "[Page 1]\nSource passage for training log."
-        )
+        mocks[
+            "chat"
+        ].build_context.return_value = "[Page 1]\nSource passage for training log."
         mocks["chat"].build_context_with_metadata.return_value = BuiltContext(
             context="[Page 1]\nSource passage for training log.",
             included_chunk_ids=["chunk-42"],
@@ -998,7 +1006,9 @@ class TestStreamMessage:
         """When TRAINING_DATA_LOGGING_ENABLED=False, no training interaction row is written."""
         _setup_stream_mocks()
 
-        _, conv_id = await _create_pdf_conversation(client, auth_headers, db_session, test_user)
+        _, conv_id = await _create_pdf_conversation(
+            client, auth_headers, db_session, test_user
+        )
 
         async def mock_stream_reply(*args, **kwargs):
             yield "No "
@@ -1057,7 +1067,9 @@ class TestStreamMessage:
         """Training-log scheduling failure must not abort the user-visible SSE stream."""
         _setup_stream_mocks()
 
-        _, conv_id = await _create_pdf_conversation(client, auth_headers, db_session, test_user)
+        _, conv_id = await _create_pdf_conversation(
+            client, auth_headers, db_session, test_user
+        )
 
         async def mock_stream_reply(*args, **kwargs):
             yield "Stream "

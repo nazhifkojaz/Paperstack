@@ -4,6 +4,7 @@ Revision ID: d4f5a6b7c8e9
 Revises: c3e7d8a1b2f4
 Create Date: 2026-04-23
 """
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -18,7 +19,9 @@ def upgrade() -> None:
     op.create_table(
         "openrouter_usage_cache",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("request_count_today", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column(
+            "request_count_today", sa.Integer(), nullable=False, server_default="0"
+        ),
         sa.Column(
             "day_started_at",
             sa.Date(),

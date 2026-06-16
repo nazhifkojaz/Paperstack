@@ -16,8 +16,6 @@ from app.middleware.rate_limit import limiter
 router = APIRouter()
 
 
-
-
 async def _upsert_oauth_user(
     db: AsyncSession,
     *,
@@ -129,8 +127,6 @@ def _redirect_with_tokens(user: User) -> RedirectResponse:
     return RedirectResponse(redirect_url)
 
 
-
-
 @router.get("/github/login")
 @limiter.limit(settings.RATE_LIMIT_AUTH_OAUTH)
 async def github_login(request: Request):
@@ -174,8 +170,6 @@ async def github_callback(
         extra_data={"github_login": github_user_data["login"]},
     )
     return _redirect_with_tokens(user)
-
-
 
 
 @router.get("/google/login")
@@ -229,8 +223,6 @@ async def google_callback(
         extra_data={},
     )
     return _redirect_with_tokens(user)
-
-
 
 
 @router.post("/refresh", response_model=Token)

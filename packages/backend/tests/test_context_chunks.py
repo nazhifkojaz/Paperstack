@@ -214,6 +214,9 @@ def test_deserialise_chunk_with_pdf_info():
     deserialised = _deserialise_chunks(stored)
     assert deserialised[0]["pdf_id"] == pdf_id
     assert deserialised[0]["pdf_title"] == "My Paper"
-    assert "pdf_id" not in _deserialise_chunks(
-        [{"chunk_id": "c", "page_number": 1, "snippet": "X"}]
-    )[0]
+    assert (
+        "pdf_id"
+        not in _deserialise_chunks(
+            [{"chunk_id": "c", "page_number": 1, "snippet": "X"}]
+        )[0]
+    )

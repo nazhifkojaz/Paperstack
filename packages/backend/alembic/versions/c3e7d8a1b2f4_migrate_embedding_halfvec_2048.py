@@ -4,6 +4,7 @@ Revision ID: c3e7d8a1b2f4
 Revises: b1c2d3e4f5a6
 Create Date: 2026-04-23
 """
+
 from alembic import op
 
 revision = "c3e7d8a1b2f4"

@@ -18,7 +18,6 @@ from app.core.google import (
 
 
 class TestRedirectUri:
-
     def test_redirect_uri_format(self):
         uri = _redirect_uri()
         assert "google/callback" in uri
@@ -26,7 +25,6 @@ class TestRedirectUri:
 
 
 class TestGetGoogleTokens:
-
     async def test_success(self):
         with respx.mock as mock:
             mock.post("https://oauth2.googleapis.com/token").mock(
@@ -60,7 +58,6 @@ class TestGetGoogleTokens:
 
 
 class TestGetGoogleUser:
-
     async def test_success(self):
         with respx.mock as mock:
             mock.get("https://openidconnect.googleapis.com/v1/userinfo").mock(
@@ -93,7 +90,6 @@ class TestGetGoogleUser:
 
 
 class TestRefreshGoogleToken:
-
     async def test_success(self):
         from app.core.google import refresh_google_token
 
@@ -140,13 +136,14 @@ class TestRefreshGoogleToken:
 
 
 class TestEnsureDriveFolder:
-
     async def test_existing_folder_returned(self):
         with respx.mock as mock:
             mock.get("https://www.googleapis.com/drive/v3/files").mock(
                 return_value=Response(
                     200,
-                    json={"files": [{"id": "existing-folder-id", "name": "Paperstack"}]},
+                    json={
+                        "files": [{"id": "existing-folder-id", "name": "Paperstack"}]
+                    },
                 )
             )
 
@@ -169,7 +166,6 @@ class TestEnsureDriveFolder:
 
 
 class TestUploadToDrive:
-
     async def test_upload_returns_file_id(self):
         test_bytes = b"fake pdf content"
 
@@ -186,7 +182,6 @@ class TestUploadToDrive:
 
 
 class TestDownloadFromDrive:
-
     async def test_download_returns_bytes(self):
         test_content = b"downloaded file content"
 
@@ -201,7 +196,6 @@ class TestDownloadFromDrive:
 
 
 class TestDownloadFromDriveToTempfile:
-
     async def test_download_streams_to_tempfile(self):
         test_content = b"streamed file content"
 
@@ -220,7 +214,6 @@ class TestDownloadFromDriveToTempfile:
 
 
 class TestDeleteFromDrive:
-
     async def test_delete_204_succeeds(self):
         with respx.mock as mock:
             mock.delete("https://www.googleapis.com/drive/v3/files/file-789").mock(

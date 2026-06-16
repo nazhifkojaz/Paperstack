@@ -15,6 +15,7 @@ Usage (from packages/backend):
 
 Exit code: 0 if all three pass, 1 otherwise.
 """
+
 import asyncio
 import sys
 from pathlib import Path
@@ -79,7 +80,9 @@ async def check_embeddings(client: httpx.AsyncClient, api_key: str) -> tuple[boo
     return True, f"dim={dim}, usage={usage}"
 
 
-async def check_batch_ceiling(client: httpx.AsyncClient, api_key: str) -> tuple[bool, str]:
+async def check_batch_ceiling(
+    client: httpx.AsyncClient, api_key: str
+) -> tuple[bool, str]:
     """Probe how large a single-request batch the embeddings endpoint accepts.
 
     Each trial spends 1 request of the daily quota, so we test a short sequence
@@ -125,7 +128,9 @@ async def check_batch_ceiling(client: httpx.AsyncClient, api_key: str) -> tuple[
                 max_passing = size
                 notes.append(f"size={size}: OK ({returned} embeddings)")
             else:
-                notes.append(f"size={size}: returned {returned} (expected {size}); stopping")
+                notes.append(
+                    f"size={size}: returned {returned} (expected {size}); stopping"
+                )
                 break
         else:
             body = resp.text[:200].replace("\n", " ")
@@ -190,8 +195,7 @@ async def check_key_limits(client: httpx.AsyncClient, api_key: str) -> tuple[boo
     usage_daily = payload.get("usage_daily")
 
     return True, (
-        f"limit={limit} | limit_remaining={limit_remaining} | "
-        f"usage_daily={usage_daily}"
+        f"limit={limit} | limit_remaining={limit_remaining} | usage_daily={usage_daily}"
     )
 
 
@@ -229,7 +233,10 @@ async def main() -> int:
     print("=" * 70)
 
     all_pass = all(ok for _, ok, _ in results)
-    print("OVERALL:", "PASS — proceed to Phase 1" if all_pass else "FAIL — halt, update plan")
+    print(
+        "OVERALL:",
+        "PASS — proceed to Phase 1" if all_pass else "FAIL — halt, update plan",
+    )
     return 0 if all_pass else 1
 
 

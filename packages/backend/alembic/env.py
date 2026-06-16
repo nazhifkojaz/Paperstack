@@ -24,7 +24,10 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Set the sqlalchemy.url from settings if not already set in config
-if not config.get_main_option("sqlalchemy.url") or config.get_main_option("sqlalchemy.url") == "driver://user:pass@localhost/dbname":
+if (
+    not config.get_main_option("sqlalchemy.url")
+    or config.get_main_option("sqlalchemy.url") == "driver://user:pass@localhost/dbname"
+):
     config.set_main_option("sqlalchemy.url", settings.effective_database_url)
 
 

@@ -170,9 +170,11 @@ class IndexingService:
             contextualize = settings.CONTEXTUAL_RETRIEVAL_ENABLED
             embed_inputs = build_embed_inputs(chunks, pdf_row.title, contextualize)
 
-            user_openrouter_key = await api_key_service.get_user_openrouter_key_for_embeddings(
-                user,
-                db,
+            user_openrouter_key = (
+                await api_key_service.get_user_openrouter_key_for_embeddings(
+                    user,
+                    db,
+                )
             )
             embeddings = await self._embedding_service.embed_texts(
                 embed_inputs,

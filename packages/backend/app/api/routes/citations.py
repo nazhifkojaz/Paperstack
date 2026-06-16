@@ -8,7 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
 from app.db.models import User, Pdf, Citation
-from app.schemas.citation import CitationResponse, CitationUpdate, BulkExportRequest, LookupRequest, LookupResponse, ValidateRequest
+from app.schemas.citation import (
+    CitationResponse,
+    CitationUpdate,
+    BulkExportRequest,
+    LookupRequest,
+    LookupResponse,
+    ValidateRequest,
+)
 from app.services import citation_extractor
 
 logger = logging.getLogger(__name__)
@@ -16,18 +23,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 global_router = APIRouter()
 
+
 @router.get("/{pdf_id}/citation", response_model=CitationResponse)
 async def get_citation(
     pdf_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stmt = select(Citation).where(Citation.pdf_id == pdf_id, Citation.user_id == current_user.id)
+    stmt = select(Citation).where(
+        Citation.pdf_id == pdf_id, Citation.user_id == current_user.id
+    )
     result = await db.execute(stmt)
     citation = result.scalar_one_or_none()
     if not citation:
         raise HTTPException(status_code=404, detail="Citation not found")
     return citation
+
 
 @router.put("/{pdf_id}/citation", response_model=CitationResponse)
 async def create_or_update_citation(
@@ -41,7 +52,9 @@ async def create_or_update_citation(
     if not (await db.execute(stmt_pdf)).scalar_one_or_none():
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    stmt = select(Citation).where(Citation.pdf_id == pdf_id, Citation.user_id == current_user.id)
+    stmt = select(Citation).where(
+        Citation.pdf_id == pdf_id, Citation.user_id == current_user.id
+    )
     result = await db.execute(stmt)
     citation = result.scalar_one_or_none()
 
@@ -57,19 +70,19 @@ async def create_or_update_citation(
             # Generate minimal bibtex if not provided
             title = update_data.get("title", "Unknown")
             authors = update_data.get("authors", "Unknown")
-            update_data["bibtex"] = f"@misc{{auto,\n  title = {{{title}}},\n  author = {{{authors}}},\n}}"
+            update_data["bibtex"] = (
+                f"@misc{{auto,\n  title = {{{title}}},\n  author = {{{authors}}},\n}}"
+            )
 
         citation = Citation(
-            id=uuid4(),
-            pdf_id=pdf_id,
-            user_id=current_user.id,
-            **update_data
+            id=uuid4(), pdf_id=pdf_id, user_id=current_user.id, **update_data
         )
         db.add(citation)
 
     await db.commit()
     await db.refresh(citation)
     return citation
+
 
 @router.post("/{pdf_id}/citation/auto", response_model=CitationResponse)
 async def auto_extract_citation(
@@ -91,13 +104,16 @@ async def auto_extract_citation(
                 pdf_bytes = response.content
         else:
             from app.services.storage.factory import get_storage_backend
+
             backend = await get_storage_backend(current_user, db)
             file_id = pdf.drive_file_id or pdf.github_sha
             pdf_bytes = await backend.download_bytes(file_id, pdf.filename)
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=502, detail=f"Could not fetch linked PDF: {e}")
     except Exception:
-        logger.exception("Failed to fetch PDF bytes for citation extraction, pdf_id=%s", pdf_id)
+        logger.exception(
+            "Failed to fetch PDF bytes for citation extraction, pdf_id=%s", pdf_id
+        )
         raise HTTPException(status_code=502, detail="Could not fetch PDF")
 
     extracted = await citation_extractor.auto_extract_citation(
@@ -105,7 +121,9 @@ async def auto_extract_citation(
         doi_hint=pdf.doi,
     )
 
-    stmt = select(Citation).where(Citation.pdf_id == pdf_id, Citation.user_id == current_user.id)
+    stmt = select(Citation).where(
+        Citation.pdf_id == pdf_id, Citation.user_id == current_user.id
+    )
     citation = (await db.execute(stmt)).scalar_one_or_none()
 
     if citation:
@@ -123,6 +141,7 @@ async def auto_extract_citation(
     await db.refresh(citation)
     return citation
 
+
 @global_router.post("/export")
 async def export_citations(
     export_req: BulkExportRequest,
@@ -130,21 +149,27 @@ async def export_citations(
     current_user: User = Depends(get_current_user),
 ):
     stmt = select(Citation).where(
-        Citation.pdf_id.in_(export_req.pdf_ids), 
-        Citation.user_id == current_user.id
+        Citation.pdf_id.in_(export_req.pdf_ids), Citation.user_id == current_user.id
     )
     result = await db.execute(stmt)
     citations = result.scalars().all()
-    
+
     if not citations:
-        raise HTTPException(status_code=404, detail="No citations found for the provided PDFs")
-        
+        raise HTTPException(
+            status_code=404, detail="No citations found for the provided PDFs"
+        )
+
     if export_req.format.lower() == "bibtex":
         export_text = "\n\n".join([c.bibtex for c in citations if c.bibtex])
-        return Response(content=export_text, media_type="text/plain", headers={"Content-Disposition": "attachment; filename=export.bib"})
-    
+        return Response(
+            content=export_text,
+            media_type="text/plain",
+            headers={"Content-Disposition": "attachment; filename=export.bib"},
+        )
+
     # Optional extensions for JSON etc.
     raise HTTPException(status_code=400, detail="Unsupported format")
+
 
 @global_router.post("/validate")
 async def validate_citations(
@@ -154,8 +179,7 @@ async def validate_citations(
 ):
     # Find all citations for the requested PDFs
     stmt = select(Citation).where(
-        Citation.pdf_id.in_(validate_req.pdf_ids),
-        Citation.user_id == current_user.id
+        Citation.pdf_id.in_(validate_req.pdf_ids), Citation.user_id == current_user.id
     )
     result = await db.execute(stmt)
     citations = result.scalars().all()
@@ -165,15 +189,12 @@ async def validate_citations(
     has_citation = [str(pid) for pid in validate_req.pdf_ids if pid in has_citation_ids]
     missing = [str(pid) for pid in validate_req.pdf_ids if pid not in has_citation_ids]
 
-    return {
-        "has_citation": has_citation,
-        "missing": missing
-    }
+    return {"has_citation": has_citation, "missing": missing}
+
 
 @global_router.post("/lookup", response_model=LookupResponse)
 async def lookup_citation(
-    lookup_req: LookupRequest,
-    current_user: User = Depends(get_current_user)
+    lookup_req: LookupRequest, current_user: User = Depends(get_current_user)
 ) -> LookupResponse:
     """Lookup citation by DOI or ISBN.
 
@@ -217,4 +238,6 @@ async def lookup_citation(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except httpx.HTTPStatusError:
-            raise HTTPException(status_code=502, detail="Open Library service unavailable")
+            raise HTTPException(
+                status_code=502, detail="Open Library service unavailable"
+            )

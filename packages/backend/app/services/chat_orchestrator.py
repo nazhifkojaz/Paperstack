@@ -19,7 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import ChatConversation, ChatMessage, Citation, Pdf, User
 from app.core.config import settings
 from app.schemas.types import ChatMessageDict, PaperMetadata
-from app.services.chat_service import ChatService, COLLECTION_SYSTEM_PROMPT, _count_tokens
+from app.services.chat_service import (
+    ChatService,
+    COLLECTION_SYSTEM_PROMPT,
+    _count_tokens,
+)
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
     EmbeddingError,
@@ -293,9 +297,7 @@ class ChatOrchestrator:
                 Citation.user_id == user.id,
             )
         )
-        citation_by_pdf = {
-            str(c.pdf_id): c for c in citation_rows.scalars().all()
-        }
+        citation_by_pdf = {str(c.pdf_id): c for c in citation_rows.scalars().all()}
 
         seen_titles = set()
         metadata_list: list[PaperMetadata] = []
@@ -450,7 +452,10 @@ class ChatOrchestrator:
         try:
             try:
                 async for token in self._chat_service.stream_reply(
-                    system_prompt, messages, provider, api_key,
+                    system_prompt,
+                    messages,
+                    provider,
+                    api_key,
                     model=model,
                 ):
                     full_reply.append(token)
@@ -517,4 +522,7 @@ class ChatOrchestrator:
 
         except Exception:
             logger.exception("Streaming error for conversation %s", conversation_id)
-            yield {"error": "Stream interrupted. Please try again.", "code": "stream_error"}
+            yield {
+                "error": "Stream interrupted. Please try again.",
+                "code": "stream_error",
+            }

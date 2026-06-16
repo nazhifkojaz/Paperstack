@@ -199,9 +199,7 @@ class TestExplainWithProvider:
         assert isinstance(result, ExplainResult)
         assert result.context_chunks == []
 
-    async def test_openrouter_forwards_model(
-        self, explain_service, mock_db, mock_llm
-    ):
+    async def test_openrouter_forwards_model(self, explain_service, mock_db, mock_llm):
         pdf_row = MagicMock()
         pdf_row.id = uuid.uuid4()
         user = MagicMock()

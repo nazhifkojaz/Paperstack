@@ -52,9 +52,7 @@ def test_embedding_pair_records_use_cited_chunks_as_positives():
     assert records[0]["query"] == "What is attention?"
     assert records[0]["positive"]["content"] == "positive chunk"
     assert "pdf_title" not in records[0]["positive"]
-    assert [chunk["content"] for chunk in records[0]["negatives"]] == [
-        "negative chunk"
-    ]
+    assert [chunk["content"] for chunk in records[0]["negatives"]] == ["negative chunk"]
 
 
 def test_sft_records_include_prompt_and_assistant_messages():
@@ -81,9 +79,7 @@ def test_eval_records_preserve_all_retrieved_chunks():
     records = _eval_records([interaction], anonymize=False)
 
     assert records[0]["query"] == "What is attention?"
-    assert records[0]["relevant_chunk_ids"] == [
-        str(interaction.cited_chunk_ids[0])
-    ]
+    assert records[0]["relevant_chunk_ids"] == [str(interaction.cited_chunk_ids[0])]
     assert [chunk["content"] for chunk in records[0]["all_retrieved"]] == [
         "positive chunk",
         "negative chunk",

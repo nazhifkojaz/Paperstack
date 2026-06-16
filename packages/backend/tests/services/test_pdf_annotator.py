@@ -47,7 +47,6 @@ startxref
 
 
 class TestExportAnnotatedPdf:
-
     def test_no_annotations_returns_original(self, minimal_pdf):
         result = export_annotated_pdf(minimal_pdf, [])
         assert result == minimal_pdf
@@ -75,28 +74,55 @@ class TestExportAnnotatedPdf:
         "annotations",
         [
             pytest.param(
-                [{"page_number": 1, "type": "highlight", "color": "#FFFF00", "rects": [
-                    {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.03},
-                    {"x": 0.5, "y": 0.3, "w": 0.4, "h": 0.04},
-                ]}],
+                [
+                    {
+                        "page_number": 1,
+                        "type": "highlight",
+                        "color": "#FFFF00",
+                        "rects": [
+                            {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.03},
+                            {"x": 0.5, "y": 0.3, "w": 0.4, "h": 0.04},
+                        ],
+                    }
+                ],
                 id="multiple_rects",
             ),
             pytest.param(
-                [{"page_number": 1, "type": "rect", "color": "#0000FF", "rects": [
-                    {"x": 0.2, "y": 0.1, "w": 0.4, "h": 0.1},
-                ]}],
+                [
+                    {
+                        "page_number": 1,
+                        "type": "rect",
+                        "color": "#0000FF",
+                        "rects": [
+                            {"x": 0.2, "y": 0.1, "w": 0.4, "h": 0.1},
+                        ],
+                    }
+                ],
                 id="rect_annotation",
             ),
             pytest.param(
-                [{"page_number": 1, "type": "highlight", "rects": [
-                    {"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.05},
-                ]}],
+                [
+                    {
+                        "page_number": 1,
+                        "type": "highlight",
+                        "rects": [
+                            {"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.05},
+                        ],
+                    }
+                ],
                 id="default_color",
             ),
             pytest.param(
-                [{"page_number": 1, "type": "highlight", "color": "#00FF00", "rects": [
-                    {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.03},
-                ]}],
+                [
+                    {
+                        "page_number": 1,
+                        "type": "highlight",
+                        "color": "#00FF00",
+                        "rects": [
+                            {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.03},
+                        ],
+                    }
+                ],
                 id="single_page",
             ),
         ],

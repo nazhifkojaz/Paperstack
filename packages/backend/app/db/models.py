@@ -300,9 +300,7 @@ class UserApiKey(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    provider: Mapped[str] = mapped_column(
-        String(20), nullable=False
-    )  # 'openrouter'
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)  # 'openrouter'
     encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
@@ -436,7 +434,9 @@ class PdfChunk(Base):
     embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(1024))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     section_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    search_vector = Column(TSVECTOR, Computed("to_tsvector('english', content)"), nullable=True)
+    search_vector = Column(
+        TSVECTOR, Computed("to_tsvector('english', content)"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )
@@ -534,7 +534,9 @@ class TrainingRagInteraction(Base):
     collection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("collections.id", ondelete="SET NULL")
     )
-    retrieved_chunks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    retrieved_chunks: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False
+    )
     retrieval_top_k: Mapped[int] = mapped_column(Integer, nullable=False)
     retrieval_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -656,7 +658,9 @@ class UserLLMPreferences(Base):
         primary_key=True,
     )
     chat_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    auto_highlight_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    auto_highlight_model: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
     explain_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     openrouter_key_mode: Mapped[str] = mapped_column(
         String(10), nullable=False, server_default="app", default="app"
@@ -674,4 +678,6 @@ class OpenrouterUsageCache(Base):
     day_started_at: Mapped[date] = mapped_column(Date, nullable=False)
     last_request_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_key_response: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)
-    last_key_fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_key_fetched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
