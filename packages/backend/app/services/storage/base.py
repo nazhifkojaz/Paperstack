@@ -13,6 +13,7 @@ class UploadResult:
         file_id: Opaque identifier stored in Pdf.github_sha (GitHub) or Pdf.drive_file_id (Google).
         provider: Storage provider name ('github' | 'google').
     """
+
     file_id: str
     provider: str
 
@@ -30,7 +31,9 @@ class StorageBackend(ABC):
         ...
 
     @abstractmethod
-    async def upload(self, filename: str, file_bytes: bytes, title: str) -> UploadResult:
+    async def upload(
+        self, filename: str, file_bytes: bytes, title: str
+    ) -> UploadResult:
         """Upload a PDF and return its opaque file identifier."""
         ...
 

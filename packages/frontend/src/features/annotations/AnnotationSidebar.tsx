@@ -157,7 +157,7 @@ export const AnnotationSidebar = () => {
                 </div>
 
                 {/* Auto-Highlight */}
-                {pdfId && <AutoHighlightButton pdfId={pdfId} />}
+                {pdfId && <div data-tour="auto-highlight"><AutoHighlightButton pdfId={pdfId} /></div>}
 
                 {/* Create New Set */}
                 <div className="px-4 pt-4 pb-3 border-b">

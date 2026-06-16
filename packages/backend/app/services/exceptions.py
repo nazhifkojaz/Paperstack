@@ -2,7 +2,6 @@
 
 
 class LLMRateLimitError(Exception):
-
     def __init__(self, provider: str):
         self.provider = provider
         super().__init__(
@@ -11,7 +10,6 @@ class LLMRateLimitError(Exception):
 
 
 class LLMProviderError(Exception):
-
     def __init__(self, provider: str, status_code: int, detail: str = ""):
         self.provider = provider
         self.status_code = status_code
@@ -23,14 +21,12 @@ class LLMProviderError(Exception):
 
 
 class EmbeddingError(Exception):
-
     def __init__(self, message: str):
         self.message = message
         super().__init__(message)
 
 
 class IndexingError(Exception):
-
     def __init__(self, message: str):
         self.message = message
         super().__init__(message)
@@ -38,8 +34,8 @@ class IndexingError(Exception):
 
 # API Key Service Exceptions
 
-class ApiKeyNotFoundError(Exception):
 
+class ApiKeyNotFoundError(Exception):
     def __init__(self, quota_type: str = "general"):
         self.quota_type = quota_type
         super().__init__(
@@ -49,7 +45,6 @@ class ApiKeyNotFoundError(Exception):
 
 
 class QuotaExhaustedError(Exception):
-
     def __init__(self, quota_type: str, remaining: int = 0):
         self.quota_type = quota_type
         self.remaining = remaining
@@ -61,12 +56,12 @@ class QuotaExhaustedError(Exception):
 
 # PDF Download Service Exceptions
 
+
 class PdfDownloadError(Exception):
     pass
 
 
 class GithubApiError(PdfDownloadError):
-
     def __init__(self, status_code: int, detail: str):
         self.status_code = status_code
         self.detail = detail
@@ -74,7 +69,6 @@ class GithubApiError(PdfDownloadError):
 
 
 class ExternalUrlError(PdfDownloadError):
-
     def __init__(self, url: str, status_code: int | None = None, detail: str = ""):
         self.url = url
         self.status_code = status_code
@@ -89,6 +83,7 @@ class InvalidPdfSourceError(PdfDownloadError):
 
 # Indexing Service Exceptions
 
+
 class TextExtractionError(IndexingError):
     pass
 
@@ -98,7 +93,6 @@ class ChunkingError(IndexingError):
 
 
 class IndexInProgressError(IndexingError):
-
     def __init__(self, pdf_id: str, updated_at):
         self.pdf_id = pdf_id
         self.updated_at = updated_at

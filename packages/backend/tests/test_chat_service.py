@@ -91,6 +91,19 @@ def test_build_context_fits_all_within_budget():
     assert "[Page 2]" in result
 
 
+def test_build_context_with_metadata_reports_included_chunk_ids():
+    service = ChatService()
+    chunks = [
+        {"chunk_id": "chunk-1", "page_number": 1, "content": "Short chunk."},
+        {"chunk_id": "chunk-2", "page_number": 2, "content": "Another short chunk."},
+    ]
+
+    result = service.build_context_with_metadata(chunks, max_tokens=4000)
+
+    assert "Short chunk." in result.context
+    assert result.included_chunk_ids == ["chunk-1", "chunk-2"]
+
+
 def test_build_context_truncation_marker():
     """When a chunk is truncated, it should contain [...truncated]."""
     service = ChatService()

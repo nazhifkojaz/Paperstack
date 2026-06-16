@@ -9,6 +9,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Input } from '@/components/ui/input'
 import { useAuthStore } from '@/stores/authStore'
+import { useOnboardingStore } from '@/stores/onboardingStore'
 import {
     updateStorageProvider, fetchConnectedAccounts,
     fetchLLMModels, fetchLLMPreferences, updateLLMPreferences,
@@ -16,6 +17,7 @@ import {
 import { useAutoHighlightQuota, useCreateApiKey, useDeleteApiKey } from '@/api/autoHighlight'
 import type { LLMModel, LLMPreferencesUpdate } from '@/api/settings'
 import { toast } from 'sonner'
+import { SettingsOnboardingModal } from '@/features/onboarding/SettingsOnboardingModal'
 
 interface Props {
     open: boolean
@@ -49,7 +51,16 @@ const FEATURE_LABELS: Record<FeatureKey, string> = {
 
 export function SettingsDialog({ open, onOpenChange }: Props) {
     const { user, setUser } = useAuthStore()
+    const { hasSeenSettingsOnboarding } = useOnboardingStore()
+    const [showOnboarding, setShowOnboarding] = useState(false)
     const [loading, setLoading] = useState(false)
+
+    // Show onboarding modal on first settings open
+    useEffect(() => {
+        if (open && !hasSeenSettingsOnboarding) {
+            setShowOnboarding(true)
+        }
+    }, [open, hasSeenSettingsOnboarding])
 
     // Storage state
     const [connectedProviders, setConnectedProviders] = useState<Set<string>>(new Set())
@@ -200,6 +211,7 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
     }
 
     return (
+        <>
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
                 <DialogHeader>
@@ -370,5 +382,13 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
                 </div>
             </DialogContent>
         </Dialog>
+
+        <SettingsOnboardingModal
+            open={showOnboarding}
+            onOpenChange={(open) => {
+                setShowOnboarding(open)
+            }}
+        />
+        </>
     )
 }

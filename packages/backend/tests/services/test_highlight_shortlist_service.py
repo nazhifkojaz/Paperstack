@@ -47,7 +47,6 @@ def sample_search_results():
 
 
 class TestShortlistChunks:
-
     async def test_shortlist_returns_deduplicated_results(
         self, shortlist_service, mock_db, sample_search_results
     ):
@@ -118,9 +117,7 @@ class TestShortlistChunks:
 
         assert len(results) == 3
 
-    async def test_shortlist_invalid_category_skipped(
-        self, shortlist_service, mock_db
-    ):
+    async def test_shortlist_invalid_category_skipped(self, shortlist_service, mock_db):
         with patch(
             "app.services.highlight_shortlist_service.vector_search_service.search_pdf",
             new_callable=AsyncMock,
@@ -170,7 +167,9 @@ class TestShortlistChunks:
         assert set(results[0].categories) == {"findings", "methods", "background"}
         assert results[0].best_score == 0.80
 
-    async def test_custom_queries_appended_to_canned_query(self, shortlist_service, mock_db, mock_embedding):
+    async def test_custom_queries_appended_to_canned_query(
+        self, shortlist_service, mock_db, mock_embedding
+    ):
         pdf_id = str(uuid.uuid4())
 
         with patch(

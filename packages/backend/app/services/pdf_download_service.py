@@ -33,6 +33,7 @@ CHUNK_SIZE = 8192  # 8KB chunks for streaming
 
 class PdfSource(Enum):
     """PDF source types."""
+
     GITHUB = "github"
     EXTERNAL_URL = "external_url"
 
@@ -46,6 +47,7 @@ class PdfDownloadResult:
         file_path: Path to the downloaded temp file (caller must clean up)
         file_size: Size of the downloaded file in bytes
     """
+
     source: PdfSource
     file_path: Path
     file_size: int
@@ -153,18 +155,24 @@ class PdfDownloadService:
         decrypted_token = decrypt_token(access_token)
 
         async with httpx.AsyncClient() as client:
-            client.headers.update({
-                "Authorization": f"Bearer {decrypted_token}",
-                "Accept": "application/vnd.github.v3.raw",
-                "X-GitHub-Api-Version": "2022-11-28",
-            })
+            client.headers.update(
+                {
+                    "Authorization": f"Bearer {decrypted_token}",
+                    "Accept": "application/vnd.github.v3.raw",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                }
+            )
 
-            url = f"{GITHUB_API_URL}/repos/{github_login}/{REPO_NAME}/contents/{filepath}"
+            url = (
+                f"{GITHUB_API_URL}/repos/{github_login}/{REPO_NAME}/contents/{filepath}"
+            )
             logger.info("Downloading PDF from GitHub: %s", url)
 
             async with client.stream("GET", url) as response:
                 if response.status_code != 200:
-                    error_body = (await response.aread()).decode("utf-8", errors="replace")
+                    error_body = (await response.aread()).decode(
+                        "utf-8", errors="replace"
+                    )
                     raise GithubApiError(
                         status_code=response.status_code,
                         detail=f"Failed to download from GitHub: {error_body}",
@@ -215,13 +223,17 @@ class PdfDownloadService:
         decrypted_token = decrypt_token(access_token)
 
         async with httpx.AsyncClient() as client:
-            client.headers.update({
-                "Authorization": f"Bearer {decrypted_token}",
-                "Accept": "application/vnd.github.v3.raw",
-                "X-GitHub-Api-Version": "2022-11-28",
-            })
+            client.headers.update(
+                {
+                    "Authorization": f"Bearer {decrypted_token}",
+                    "Accept": "application/vnd.github.v3.raw",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                }
+            )
 
-            url = f"{GITHUB_API_URL}/repos/{github_login}/{REPO_NAME}/contents/{filepath}"
+            url = (
+                f"{GITHUB_API_URL}/repos/{github_login}/{REPO_NAME}/contents/{filepath}"
+            )
             response = await client.get(url)
 
             if response.status_code != 200:

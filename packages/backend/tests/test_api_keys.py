@@ -51,7 +51,9 @@ async def test_delete_api_key(admin_client: AsyncClient, auth_headers):
         headers=auth_headers,
     )
     # Delete
-    resp = await admin_client.delete("/v1/settings/api-keys/openrouter", headers=auth_headers)
+    resp = await admin_client.delete(
+        "/v1/settings/api-keys/openrouter", headers=auth_headers
+    )
     assert resp.status_code == 204
 
 
@@ -74,7 +76,9 @@ async def test_delete_api_key_resets_byok_preferences(
     )
     assert prefs_resp.status_code == 200
 
-    resp = await admin_client.delete("/v1/settings/api-keys/openrouter", headers=auth_headers)
+    resp = await admin_client.delete(
+        "/v1/settings/api-keys/openrouter", headers=auth_headers
+    )
     assert resp.status_code == 204
 
     final_prefs = await admin_client.get(
@@ -89,5 +93,7 @@ async def test_delete_api_key_resets_byok_preferences(
 
 @pytest.mark.asyncio
 async def test_delete_api_key_not_found(admin_client: AsyncClient, auth_headers):
-    resp = await admin_client.delete("/v1/settings/api-keys/openrouter", headers=auth_headers)
+    resp = await admin_client.delete(
+        "/v1/settings/api-keys/openrouter", headers=auth_headers
+    )
     assert resp.status_code == 404

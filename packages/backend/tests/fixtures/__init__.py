@@ -1,7 +1,17 @@
 """Test data fixtures for Paperstack backend tests."""
+
 import uuid
 
-from app.db.models import Pdf, Tag, AnnotationSet, Annotation, Collection, Citation, Share, PdfCollection
+from app.db.models import (
+    Pdf,
+    Tag,
+    AnnotationSet,
+    Annotation,
+    Collection,
+    Citation,
+    Share,
+    PdfCollection,
+)
 
 
 async def create_test_pdf(

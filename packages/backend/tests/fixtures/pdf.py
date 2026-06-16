@@ -1,4 +1,5 @@
 """PDF-related test fixtures and helpers."""
+
 from datetime import datetime, timezone
 import uuid
 
@@ -121,7 +122,7 @@ endobj
 /Count {page_count}
 >>
 endobj
-{''.join(page_objects)}
+{"".join(page_objects)}
 xref
 0 {page_count + 3}
 0000000000 65535 f

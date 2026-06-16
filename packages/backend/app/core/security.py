@@ -30,6 +30,7 @@ def create_access_token(
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+
 def create_refresh_token(
     subject: Union[str, Any], expires_delta: Optional[timedelta] = None
 ) -> str:
@@ -42,6 +43,7 @@ def create_refresh_token(
     to_encode = {"exp": expire, "sub": str(subject), "type": "refresh"}
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
 
 def verify_access_token(token: str) -> Optional[str]:
     """Verify an access token and return the user ID if valid.
@@ -70,8 +72,10 @@ def verify_refresh_token(token: str) -> Optional[str]:
     except jwt.JWTError:
         return None
 
+
 def encrypt_token(token: str) -> str:
     return fernet.encrypt(token.encode()).decode()
+
 
 def decrypt_token(token: str) -> str:
     return fernet.decrypt(token.encode()).decode()

@@ -1,4 +1,5 @@
 """Tests for security module."""
+
 import pytest
 from datetime import datetime, timedelta, timezone
 from jose import jwt
@@ -122,7 +123,10 @@ class TestVerifyAccessToken:
 
     def test_verify_access_token_without_subject(self) -> None:
         """Test verifying token without subject claim."""
-        to_encode = {"exp": datetime.now(timezone.utc) + timedelta(minutes=30), "type": "access"}
+        to_encode = {
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+            "type": "access",
+        }
         token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
         result = verify_access_token(token)
@@ -174,7 +178,10 @@ class TestVerifyRefreshToken:
 
     def test_verify_refresh_token_without_subject(self) -> None:
         """Test verifying token without subject claim."""
-        to_encode = {"exp": datetime.now(timezone.utc) + timedelta(minutes=30), "type": "refresh"}
+        to_encode = {
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+            "type": "refresh",
+        }
         token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
         result = verify_refresh_token(token)
@@ -255,7 +262,10 @@ class TestSecurityHeadersMiddleware:
         assert response.status_code == 200
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
-        assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+        assert (
+            response.headers["Strict-Transport-Security"]
+            == "max-age=31536000; includeSubDomains"
+        )
 
     async def test_security_headers_on_api_endpoint(self, client):
         """Test that security headers are present on API endpoints."""
@@ -265,7 +275,10 @@ class TestSecurityHeadersMiddleware:
         assert "X-Content-Type-Options" in response.headers
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
-        assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+        assert (
+            response.headers["Strict-Transport-Security"]
+            == "max-age=31536000; includeSubDomains"
+        )
 
     async def test_security_headers_on_404(self, client):
         """Test that security headers are present on 404 responses."""
@@ -274,7 +287,10 @@ class TestSecurityHeadersMiddleware:
         assert response.status_code == 404
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
-        assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+        assert (
+            response.headers["Strict-Transport-Security"]
+            == "max-age=31536000; includeSubDomains"
+        )
 
     async def test_security_headers_on_500_error(self, client):
         """Test that security headers are present on 500 error responses."""

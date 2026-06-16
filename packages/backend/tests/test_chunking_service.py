@@ -483,10 +483,7 @@ def test_chunk_spans_three_pages():
     # Each page ~150 chars, 3 pages ~450 chars, well under CHUNK_SIZE=800.
     pages = []
     for i in range(1, 4):
-        page_text = " ".join(
-            f"Sentence {j} on page {i}."
-            for j in range(6)
-        )
+        page_text = " ".join(f"Sentence {j} on page {i}." for j in range(6))
         pages.append(f"--- PAGE {i} ---\n\n{page_text}")
     text = "\n\n".join(pages)
 
@@ -516,8 +513,7 @@ def test_chunk_spans_four_pages():
     pages = []
     for i in range(1, 5):
         page_text = " ".join(
-            f"Page {i} sentence {j} here with content."
-            for j in range(5)
+            f"Page {i} sentence {j} here with content." for j in range(5)
         )
         pages.append(f"--- PAGE {i} ---\n\n{page_text}")
     text = "\n\n".join(pages)
@@ -548,7 +544,9 @@ def test_empty_page_between_spanned_pages():
     page1 = " ".join(f"Sentence {i} on page one." for i in range(6))
     page3 = " ".join(f"Sentence {i} on page three." for i in range(6))
     # Page 2 is empty (no text after the marker)
-    text = f"--- PAGE 1 ---\n\n{page1}\n\n--- PAGE 2 ---\n\n\n\n--- PAGE 3 ---\n\n{page3}"
+    text = (
+        f"--- PAGE 1 ---\n\n{page1}\n\n--- PAGE 2 ---\n\n\n\n--- PAGE 3 ---\n\n{page3}"
+    )
 
     chunks = chunk_text_with_pages(text)
     assert len(chunks) >= 1
@@ -720,7 +718,9 @@ def test_list_preservation_mixed_content():
 def test_list_preservation_at_chunk_boundary():
     """When accumulated text is exactly at chunk_size, list items still extend."""
     # Build text that fills close to 800 chars, then add list items
-    prefix = "X" * 700 + ". This is a prefix paragraph that fills most of the chunk size."
+    prefix = (
+        "X" * 700 + ". This is a prefix paragraph that fills most of the chunk size."
+    )
     items = []
     for i in range(5):
         items.append(f"- List item {i} that provides additional details.")
@@ -732,7 +732,6 @@ def test_list_preservation_at_chunk_boundary():
     assert len(chunks) >= 1
     # List items should appear in the same chunk as the prefix
     list_in_prefix_chunk = any(
-        "List item" in c.content and "prefix paragraph" in c.content
-        for c in chunks
+        "List item" in c.content and "prefix paragraph" in c.content for c in chunks
     )
     assert list_in_prefix_chunk, "List items should extend the chunk past chunk_size"

@@ -1,4 +1,5 @@
 """GitHub API test fixtures and helpers."""
+
 from typing import Any
 
 

@@ -14,6 +14,7 @@ from app.utils.db_utils import handle_unique_violation
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 @router.post("", response_model=TagResponse)
 async def create_tag(
     tag_in: TagCreate,
@@ -21,11 +22,7 @@ async def create_tag(
     current_user: User = Depends(deps.get_current_user),
 ) -> TagResponse:
     """Create a new tag."""
-    tag = Tag(
-        user_id=current_user.id,
-        name=tag_in.name,
-        color=tag_in.color
-    )
+    tag = Tag(user_id=current_user.id, name=tag_in.name, color=tag_in.color)
     db.add(tag)
     async with handle_unique_violation(
         db,
@@ -38,6 +35,7 @@ async def create_tag(
         await db.commit()
     return tag
 
+
 @router.get("", response_model=List[TagResponse])
 async def list_tags(
     db: AsyncSession = Depends(deps.get_db),
@@ -47,6 +45,7 @@ async def list_tags(
     query = select(Tag).where(Tag.user_id == current_user.id).order_by(Tag.name)
     result = await db.execute(query)
     return result.scalars().all()
+
 
 @router.patch("/{tag_id}", response_model=TagResponse)
 async def update_tag(
@@ -59,7 +58,7 @@ async def update_tag(
     tag = await db.get(Tag, tag_id)
     if not tag or tag.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Tag not found")
-        
+
     update_data = tag_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(tag, field, value)
@@ -69,12 +68,17 @@ async def update_tag(
         db,
         "Tag with this name already exists",
         logger,
-        {"user_id": str(current_user.id), "tag_id": str(tag_id), "new_name": tag_in.name},
+        {
+            "user_id": str(current_user.id),
+            "tag_id": str(tag_id),
+            "new_name": tag_in.name,
+        },
     ):
         await db.flush()
         await db.refresh(tag)
         await db.commit()
     return tag
+
 
 @router.delete("/{tag_id}")
 async def delete_tag(
@@ -86,10 +90,11 @@ async def delete_tag(
     tag = await db.get(Tag, tag_id)
     if not tag or tag.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Tag not found")
-        
+
     await db.delete(tag)
     await db.commit()
     return {"message": "Tag successfully deleted"}
+
 
 @router.post("/pdfs/{pdf_id}/tags/{tag_id}")
 async def add_tag_to_pdf(
@@ -102,11 +107,11 @@ async def add_tag_to_pdf(
     tag = await db.get(Tag, tag_id)
     if not tag or tag.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Tag not found")
-        
+
     pdf = await db.get(Pdf, pdf_id)
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
-        
+
     pdf_tag = PdfTag(pdf_id=pdf_id, tag_id=tag_id)
     db.add(pdf_tag)
 
@@ -119,6 +124,7 @@ async def add_tag_to_pdf(
         await db.commit()
 
     return {"message": "Tag added to PDF"}
+
 
 @router.delete("/pdfs/{pdf_id}/tags/{tag_id}")
 async def remove_tag_from_pdf(

@@ -21,7 +21,7 @@ def _setup_sqlite_functions(dbapi_conn, connection_record):
     """
     # Only apply these patches for SQLite connections
     # Check if the connection is a SQLite connection
-    if not hasattr(dbapi_conn, 'create_function'):
+    if not hasattr(dbapi_conn, "create_function"):
         # Not a SQLite connection (likely PostgreSQL), skip the patches
         return
 

@@ -39,6 +39,7 @@ class ApiKeyResolution:
         is_in_house: True if using in-house key (quota applies), False if user's own key
         model: Specific OpenRouter model ID selected for the request
     """
+
     provider: str
     api_key: str
     is_in_house: bool
@@ -240,7 +241,9 @@ class ApiKeyService:
         if preferred_model:
             logger.info(
                 "User %s selected in-house OpenRouter model %s for %s",
-                user.id, preferred_model, feature_name,
+                user.id,
+                preferred_model,
+                feature_name,
             )
         else:
             logger.info("Using in-house OpenRouter key for user %s", user.id)
@@ -260,10 +263,7 @@ class ApiKeyService:
                     model=preferred_model,
                 )
 
-        raise ApiKeyNotFoundError(
-            f"server has no {provider} API key configured"
-        )
-
+        raise ApiKeyNotFoundError(f"server has no {provider} API key configured")
 
 
 # Singleton instance for use in routes

@@ -6,7 +6,10 @@ from httpx import AsyncClient
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.fixtures import create_test_pdf
-from tests.helpers import make_resolve_result as _make_resolve_result, setup_http_client_mocks
+from tests.helpers import (
+    make_resolve_result as _make_resolve_result,
+    setup_http_client_mocks,
+)
 
 
 def _make_create_task_stub(real_create_task):

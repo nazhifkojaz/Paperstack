@@ -2,6 +2,7 @@
 
 Model: qwen/qwen3-embedding-8b (1024-dim via Matryoshka, providers: nebius + deepinfra)
 """
+
 from typing import Optional
 
 import httpx
@@ -23,7 +24,6 @@ _PROVIDER_BLOCK = {
 
 
 class EmbeddingService:
-
     MODEL = "qwen/qwen3-embedding-8b"
     DIMENSIONS = 1024
     BATCH_SIZE = 128

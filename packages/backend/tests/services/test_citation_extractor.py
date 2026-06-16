@@ -1,4 +1,5 @@
 """Tests for citation extractor service."""
+
 import pytest
 
 
@@ -325,8 +326,7 @@ startxref
 """
 
         result = await auto_extract_citation(
-            pdf_bytes=pdf_bytes,
-            doi_hint="10.1234/test.doi.12345"
+            pdf_bytes=pdf_bytes, doi_hint="10.1234/test.doi.12345"
         )
 
         assert result["doi"] == "10.1234/test.doi.12345"
@@ -416,66 +416,77 @@ class TestIsbnValidation:
     def test_validate_isbn10_valid(self):
         """Test valid ISBN-10 passes validation."""
         from app.services.citation_extractor import validate_isbn
+
         result = validate_isbn("0262033844")
         assert result == "0262033844"
 
     def test_validate_isbn10_with_x_check_digit(self):
         """Test valid ISBN-10 with X check digit passes validation."""
         from app.services.citation_extractor import validate_isbn
+
         result = validate_isbn("080442957X")
         assert result == "080442957X"
 
     def test_validate_isbn10_with_x_and_hyphens(self):
         """Test ISBN-10 with X check digit and hyphens is handled correctly."""
         from app.services.citation_extractor import validate_isbn
+
         result = validate_isbn("0-8044-2957-X")
         assert result == "080442957X"
 
     def test_validate_isbn10_with_lowercase_x(self):
         """Test ISBN-10 with lowercase x check digit is converted to uppercase."""
         from app.services.citation_extractor import validate_isbn
+
         result = validate_isbn("080442957x")
         assert result == "080442957X"
 
     def test_validate_isbn10_with_hyphens(self):
         """Test ISBN-10 with hyphens is stripped and validated."""
         from app.services.citation_extractor import validate_isbn
+
         result = validate_isbn("0-262-03384-4")
         assert result == "0262033844"
 
     def test_validate_isbn13_valid(self):
         """Test valid ISBN-13 passes validation."""
         from app.services.citation_extractor import validate_isbn
+
         result = validate_isbn("9780262033848")
         assert result == "9780262033848"
 
     def test_validate_isbn13_with_hyphens(self):
         """Test ISBN-13 with hyphens is stripped and validated."""
         from app.services.citation_extractor import validate_isbn
+
         result = validate_isbn("978-0-262-03384-8")
         assert result == "9780262033848"
 
     def test_validate_isbn10_invalid_checksum(self):
         """Test ISBN-10 with invalid checksum raises ValueError."""
         from app.services.citation_extractor import validate_isbn
+
         with pytest.raises(ValueError, match="Invalid ISBN checksum"):
             validate_isbn("0262033845")
 
     def test_validate_isbn13_invalid_checksum(self):
         """Test ISBN-13 with invalid checksum raises ValueError."""
         from app.services.citation_extractor import validate_isbn
+
         with pytest.raises(ValueError, match="Invalid ISBN checksum"):
             validate_isbn("9780262033849")
 
     def test_validate_isbn_invalid_format(self):
         """Test invalid ISBN format raises ValueError."""
         from app.services.citation_extractor import validate_isbn
+
         with pytest.raises(ValueError, match="Invalid ISBN format"):
             validate_isbn("not-an-isbn")
 
     def test_validate_isbn_empty_string(self):
         """Test empty string raises ValueError."""
         from app.services.citation_extractor import validate_isbn
+
         with pytest.raises(ValueError, match="Invalid ISBN format"):
             validate_isbn("")
 
@@ -501,7 +512,10 @@ class TestLookupIsbnOpenlibrary:
     @pytest.mark.asyncio
     async def test_lookup_isbn_not_found(self, mock_openlibrary_api_not_found):
         """Test ISBN not found raises CitationNotFoundError."""
-        from app.services.citation_extractor import lookup_isbn_openlibrary, CitationNotFoundError
+        from app.services.citation_extractor import (
+            lookup_isbn_openlibrary,
+            CitationNotFoundError,
+        )
 
         with pytest.raises(CitationNotFoundError) as exc_info:
             await lookup_isbn_openlibrary("9999999999")

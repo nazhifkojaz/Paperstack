@@ -3,11 +3,13 @@ from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, HttpUrl, ConfigDict
 
+
 class PdfBase(BaseModel):
     title: str
     filename: str
     doi: Optional[str] = None
     isbn: Optional[str] = None
+
 
 class PdfLinkCreate(BaseModel):
     title: str
@@ -16,8 +18,10 @@ class PdfLinkCreate(BaseModel):
     doi: Optional[str] = None
     isbn: Optional[str] = None
 
+
 class PdfUrlCheckRequest(BaseModel):
     url: HttpUrl
+
 
 class PdfUrlCheckResponse(BaseModel):
     valid: bool
@@ -28,11 +32,13 @@ class PdfUrlCheckResponse(BaseModel):
     error: Optional[str] = None
     suggestions: Optional[List[str]] = None
 
+
 class PdfUpdate(BaseModel):
     title: Optional[str] = None
     source_url: Optional[str] = None
     doi: Optional[str] = None
     isbn: Optional[str] = None
+
 
 class PdfResponse(PdfBase):
     id: uuid.UUID
@@ -46,6 +52,7 @@ class PdfResponse(PdfBase):
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
+
 class PdfIndexStatusResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -53,6 +60,7 @@ class PdfIndexStatusResponse(BaseModel):
     chunk_count: Optional[int] = None
     error_message: Optional[str] = None
     indexed_at: Optional[datetime] = None
+
 
 class PdfListParams(BaseModel):
     collection_id: Optional[uuid.UUID] = None

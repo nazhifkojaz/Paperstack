@@ -1,4 +1,5 @@
 """Unit tests for API key resolution and quota management service."""
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -60,9 +61,7 @@ class TestResolveApiKeyOpenRouter:
         assert result.is_in_house is True
 
     @pytest.mark.asyncio
-    async def test_byok_mode_uses_user_openrouter_key(
-        self, svc, mock_user, mock_db
-    ):
+    async def test_byok_mode_uses_user_openrouter_key(self, svc, mock_user, mock_db):
         """BYOK mode uses the user's OpenRouter key for all models."""
         from app.core.security import encrypt_token
 
@@ -86,7 +85,9 @@ class TestResolveApiKeyOpenRouter:
         assert result.model == "openrouter/owl-alpha"
 
     @pytest.mark.asyncio
-    async def test_free_preferred_model_uses_in_house_key(self, svc, mock_user, mock_db):
+    async def test_free_preferred_model_uses_in_house_key(
+        self, svc, mock_user, mock_db
+    ):
         """Free/OpenRouter-owned model preferences do not require BYOK."""
         with patch("app.services.api_key_service.settings") as mock_settings:
             mock_settings.OPENROUTER_API_KEY = "openrouter-key"
@@ -141,9 +142,7 @@ class TestResolveApiKeyOpenRouter:
             )
 
     @pytest.mark.asyncio
-    async def test_byok_mode_without_user_key_raises(
-        self, svc, mock_user, mock_db
-    ):
+    async def test_byok_mode_without_user_key_raises(self, svc, mock_user, mock_db):
         """BYOK mode requires a stored OpenRouter key."""
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
@@ -166,7 +165,9 @@ class TestResolveApiKeyOpenRouter:
                 await svc.resolve_for_chat(mock_user, mock_db)
 
     @pytest.mark.asyncio
-    async def test_embedding_key_not_returned_in_app_mode(self, svc, mock_user, mock_db):
+    async def test_embedding_key_not_returned_in_app_mode(
+        self, svc, mock_user, mock_db
+    ):
         """Stored keys are not used for embeddings unless BYOK mode is active."""
         mode_result = MagicMock()
         mode_result.scalar_one_or_none.return_value = "app"

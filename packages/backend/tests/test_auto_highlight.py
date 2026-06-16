@@ -1,5 +1,6 @@
 import uuid
 from collections import namedtuple
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,17 @@ from tests.fixtures import (
 from tests.helpers import make_resolve_result as _make_resolve_result, init_http_clients
 
 _Passage = namedtuple("_Passage", ["content"])
+
+
+@contextmanager
+def _patched_session(cache_row=None, mock_session=None):
+    """Patch SessionLocal so auto-highlight helpers use a deterministic session."""
+    if mock_session is None:
+        mock_session = _mock_session(return_scalars=cache_row)
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+        yield mock_session
 
 
 @pytest.mark.asyncio
@@ -548,6 +560,7 @@ def _mock_session(return_scalars=None):
         scalar_result = MagicMock()
         scalar_result.scalars = MagicMock(return_value=MagicMock())
         scalar_result.scalar_one_or_none = MagicMock(return_value=return_scalars)
+        scalar_result.scalar_one = MagicMock(return_value=return_scalars)
         session.execute = AsyncMock(return_value=scalar_result)
     else:
         session.execute = AsyncMock()
@@ -946,6 +959,280 @@ async def test_run_analysis_background_thorough_combines_non_empty_reasoning_tra
 
 
 @pytest.mark.asyncio
+async def test_run_thorough_analysis_concurrent_preserves_order(monkeypatch):
+    """Bounded concurrency must keep highlight + reasoning-trace order and
+    drive progress monotonically to 100, regardless of completion order."""
+    import asyncio as _asyncio
+
+    from app.api.routes import auto_highlight as ah
+
+    # Opt into concurrency for this test (default is 1 = sequential).
+    monkeypatch.setattr(ah.settings, "AUTO_HIGHLIGHT_THOROUGH_CONCURRENCY", 3)
+
+    cache_id = uuid.uuid4()
+    pdf_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    mock_cache = MagicMock()
+    mock_cache.id = cache_id
+    mock_cache.status = "pending"
+    mock_cache.annotation_set_id = None
+    mock_cache.progress_pct = 0
+    mock_cache.reasoning_trace = None
+
+    # 12 passages -> 3 batches of (5, 5, 2).
+    shortlist = []
+    for i in range(12):
+        passage = MagicMock()
+        passage.content = f"passage {i + 1} describes a key finding worth noting"
+        passage.page_number = i + 1
+        passage.end_page_number = None
+        shortlist.append(passage)
+
+    # Fresh LLMService per instantiation so each batch owns an isolated
+    # last_reasoning_trace (mirrors production, avoids shared-mock races).
+    def _make_llm_svc(http_client=None):
+        svc = MagicMock()
+        svc.last_reasoning_trace = None
+
+        async def _extract(batch, *args, **kwargs):
+            # Yield so the batches genuinely interleave through the loop.
+            await _asyncio.sleep(0)
+            head = batch[0].content.split()[1]
+            svc.last_reasoning_trace = f"reasoning for passage {head}"
+            return [
+                {
+                    "text": batch[0].content,
+                    "page": batch[0].page_number,
+                    "category": "findings",
+                    "reason": "Important result",
+                }
+            ]
+
+        svc.extract_highlights_from_passages = AsyncMock(side_effect=_extract)
+        return svc
+
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch(
+            "app.api.routes.auto_highlight.LLMService",
+            side_effect=_make_llm_svc,
+        ),
+    ):
+        mock_session = _mock_session()
+
+        def _execute(*args, **kwargs):
+            res = MagicMock()
+            res.scalar_one_or_none = MagicMock(return_value=mock_cache)
+            res.scalar_one = MagicMock(return_value=mock_cache)
+            res.scalars = MagicMock()
+            res.scalars.return_value.all = MagicMock(return_value=[])
+            return res
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        ok = await ah._run_thorough_analysis(
+            cache_id=cache_id,
+            pdf_id=pdf_id,
+            user_id=user_id,
+            categories=["findings"],
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            llm_client=MagicMock(),
+            shortlist=shortlist,
+        )
+
+    assert ok is True
+    assert mock_cache.status == "complete"
+    assert mock_cache.progress_pct == 100
+    # Order follows original batch positions (batches start at passages 1, 6, 11)
+    # even though they ran concurrently.
+    assert mock_cache.reasoning_trace == (
+        "## Batch 1/3\nreasoning for passage 1\n\n"
+        "## Batch 2/3\nreasoning for passage 6\n\n"
+        "## Batch 3/3\nreasoning for passage 11"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_llm_analysis_invokes_on_rate_limit_for_429():
+    """The on_rate_limit callback fires on a provider 429 so the caller can
+    back off concurrent batches before the retry lands."""
+    from app.api.routes.auto_highlight import _run_llm_analysis
+    from app.services.exceptions import LLMRateLimitError, LLMProviderError
+
+    cache_id = uuid.uuid4()
+    llm_svc = MagicMock()
+    llm_svc.last_reasoning_trace = None
+    llm_svc.extract_highlights_from_passages = AsyncMock(
+        side_effect=[
+            LLMRateLimitError("openrouter"),
+            [
+                {
+                    "text": "the model improves accuracy",
+                    "page": 1,
+                    "category": "findings",
+                    "reason": "Supported by the passage",
+                }
+            ],
+        ]
+    )
+    on_rate_limit = AsyncMock()
+
+    with patch("app.api.routes.auto_highlight.asyncio.sleep", new_callable=AsyncMock):
+        result = await _run_llm_analysis(
+            llm_svc,
+            [_Passage("The paper says the model improves accuracy")],
+            ["findings"],
+            "openrouter",
+            "test-key",
+            None,
+            cache_id,
+            "quick",
+            on_rate_limit=on_rate_limit,
+        )
+
+    assert result == [
+        {
+            "text": "the model improves accuracy",
+            "page": 1,
+            "category": "findings",
+            "reason": "Supported by the passage",
+        }
+    ]
+    on_rate_limit.assert_awaited_once()
+    assert llm_svc.extract_highlights_from_passages.await_count == 2
+
+    # Non-rate-limit transient errors must NOT trip the callback.
+    other_svc = MagicMock()
+    other_svc.last_reasoning_trace = None
+    other_svc.extract_highlights_from_passages = AsyncMock(
+        side_effect=[
+            LLMProviderError("openrouter", 503, "temporarily unavailable"),
+            [
+                {
+                    "text": "the model improves accuracy",
+                    "page": 1,
+                    "category": "findings",
+                    "reason": "Supported by the passage",
+                }
+            ],
+        ]
+    )
+    other_cb = AsyncMock()
+    with patch("app.api.routes.auto_highlight.asyncio.sleep", new_callable=AsyncMock):
+        await _run_llm_analysis(
+            other_svc,
+            [_Passage("The paper says the model improves accuracy")],
+            ["findings"],
+            "openrouter",
+            "test-key",
+            None,
+            cache_id,
+            "quick",
+            on_rate_limit=other_cb,
+        )
+    other_cb.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_thorough_analysis_survives_transient_rate_limit(monkeypatch):
+    """A provider 429 during a concurrent thorough run is retried (and the
+    rate-limit backoff engaged); the run still completes."""
+    from app.api.routes import auto_highlight as ah
+    from app.services.exceptions import LLMRateLimitError
+
+    monkeypatch.setattr(ah.settings, "AUTO_HIGHLIGHT_THOROUGH_CONCURRENCY", 2)
+
+    cache_id = uuid.uuid4()
+    pdf_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    mock_cache = MagicMock()
+    mock_cache.id = cache_id
+    mock_cache.status = "pending"
+    mock_cache.annotation_set_id = None
+    mock_cache.progress_pct = 0
+    mock_cache.reasoning_trace = None
+
+    # 7 passages -> 2 batches of (5, 2).
+    shortlist = []
+    for i in range(7):
+        passage = MagicMock()
+        passage.content = f"passage {i + 1} describes a key finding worth noting"
+        passage.page_number = i + 1
+        passage.end_page_number = None
+        shortlist.append(passage)
+
+    first_call_done = {"v": False}
+
+    def _make_llm_svc(http_client=None):
+        svc = MagicMock()
+        svc.last_reasoning_trace = None
+
+        async def _extract(batch, *args, **kwargs):
+            # The very first provider call returns a 429, then every call
+            # succeeds (mimicking retry recovery).
+            if not first_call_done["v"]:
+                first_call_done["v"] = True
+                raise LLMRateLimitError("openrouter")
+            head = batch[0].content.split()[1]
+            svc.last_reasoning_trace = f"reasoning for passage {head}"
+            return [
+                {
+                    "text": batch[0].content,
+                    "page": batch[0].page_number,
+                    "category": "findings",
+                    "reason": "Important result",
+                }
+            ]
+
+        svc.extract_highlights_from_passages = AsyncMock(side_effect=_extract)
+        return svc
+
+    with (
+        patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl,
+        patch(
+            "app.api.routes.auto_highlight.LLMService",
+            side_effect=_make_llm_svc,
+        ),
+        patch("app.api.routes.auto_highlight.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        mock_session = _mock_session()
+
+        def _execute(*args, **kwargs):
+            res = MagicMock()
+            res.scalar_one_or_none = MagicMock(return_value=mock_cache)
+            res.scalar_one = MagicMock(return_value=mock_cache)
+            res.scalars = MagicMock()
+            res.scalars.return_value.all = MagicMock(return_value=[])
+            return res
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        ok = await ah._run_thorough_analysis(
+            cache_id=cache_id,
+            pdf_id=pdf_id,
+            user_id=user_id,
+            categories=["findings"],
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            llm_client=MagicMock(),
+            shortlist=shortlist,
+        )
+
+    assert ok is True
+    assert mock_cache.status == "complete"
+    assert mock_cache.progress_pct == 100
+
+
+@pytest.mark.asyncio
 async def test_run_analysis_background_setup_failure_no_shortlist():
     from app.api.routes.auto_highlight import _run_analysis_background
 
@@ -1036,3 +1323,208 @@ async def test_run_analysis_background_setup_failure_no_shortlist():
         )
 
         mock_mark_failed.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _persist_thorough_batch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_thorough_batch_adds_annotations_and_progress():
+    from app.api.routes.auto_highlight import _persist_thorough_batch
+    from app.db.models import Annotation
+
+    cache_id = uuid.uuid4()
+    set_id = uuid.uuid4()
+    cache_row = MagicMock()
+    cache_row.status = "running"
+    cache_row.progress_pct = 0
+
+    highlights = [
+        {"text": "finding one", "page": 1, "category": "findings", "reason": "r1"},
+        {"text": "finding two", "page": 2, "category": "findings", "reason": "r2"},
+    ]
+
+    with _patched_session(cache_row) as mock_session:
+        result = await _persist_thorough_batch(
+            cache_id=cache_id,
+            set_id=set_id,
+            batch_highlights=highlights,
+            completed_count=2,
+            total_batches=3,
+        )
+
+    assert result is True
+    assert cache_row.progress_pct == 66
+
+    added = [call.args[0] for call in mock_session.add.call_args_list]
+    annotations = [a for a in added if isinstance(a, Annotation)]
+    assert len(annotations) == 2
+    assert annotations[0].selected_text == "finding one"
+    assert annotations[0].page_number == 1
+    assert annotations[1].selected_text == "finding two"
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_persist_thorough_batch_returns_false_when_cancelled():
+    from app.api.routes.auto_highlight import _persist_thorough_batch
+
+    cache_row = MagicMock()
+    cache_row.status = "cancelled"
+
+    with _patched_session(cache_row) as mock_session:
+        result = await _persist_thorough_batch(
+            cache_id=uuid.uuid4(),
+            set_id=uuid.uuid4(),
+            batch_highlights=[],
+            completed_count=1,
+            total_batches=2,
+        )
+
+    assert result is False
+    mock_session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_persist_thorough_batch_returns_false_on_db_error():
+    from app.api.routes.auto_highlight import _persist_thorough_batch
+
+    cache_row = MagicMock()
+    cache_row.status = "running"
+
+    mock_session = _mock_session(return_scalars=cache_row)
+    mock_session.commit = AsyncMock(side_effect=RuntimeError("DB down"))
+
+    with (
+        _patched_session(mock_session=mock_session),
+        patch(
+            "app.api.routes.auto_highlight._mark_cache_failed",
+            new_callable=AsyncMock,
+        ) as mock_mark_failed,
+    ):
+        result = await _persist_thorough_batch(
+            cache_id=uuid.uuid4(),
+            set_id=uuid.uuid4(),
+            batch_highlights=[
+                {"text": "finding", "page": 1, "category": "findings", "reason": "r"},
+            ],
+            completed_count=1,
+            total_batches=1,
+        )
+
+    assert result is False
+    mock_mark_failed.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _finalize_thorough_results
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_finalize_thorough_results_marks_complete():
+    from app.api.routes.auto_highlight import _finalize_thorough_results
+
+    cache_id = uuid.uuid4()
+    cache_row = MagicMock()
+    cache_row.status = "running"
+    cache_row.progress_pct = 66
+    cache_row.llm_response = None
+    cache_row.reasoning_trace = None
+
+    with _patched_session(cache_row):
+        result = await _finalize_thorough_results(
+            cache_id=cache_id,
+            all_highlights=[{"text": "finding", "page": 1, "category": "findings"}],
+            batch_reasoning_traces=[(1, 2, "reasoning one"), (2, 2, "reasoning two")],
+        )
+
+    assert result is True
+    assert cache_row.status == "complete"
+    assert cache_row.progress_pct == 100
+    assert cache_row.llm_response == [
+        {"text": "finding", "page": 1, "category": "findings"}
+    ]
+    assert "## Batch 1/2" in cache_row.reasoning_trace
+    assert "reasoning one" in cache_row.reasoning_trace
+
+
+@pytest.mark.asyncio
+async def test_finalize_thorough_results_no_highlights_marks_failed():
+    from app.api.routes.auto_highlight import _finalize_thorough_results
+
+    cache_row = MagicMock()
+    cache_row.status = "running"
+    cache_row.progress_pct = 50
+
+    with _patched_session(cache_row):
+        result = await _finalize_thorough_results(
+            cache_id=uuid.uuid4(),
+            all_highlights=[],
+            batch_reasoning_traces=[],
+        )
+
+    assert result is False
+    assert cache_row.status == "failed"
+    assert cache_row.progress_pct == 100
+    assert "No highlight-worthy passages" in cache_row.llm_response["error"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_thorough_results_returns_false_when_cancelled():
+    from app.api.routes.auto_highlight import _finalize_thorough_results
+
+    cache_row = MagicMock()
+    cache_row.status = "cancelled"
+
+    with _patched_session(cache_row) as mock_session:
+        result = await _finalize_thorough_results(
+            cache_id=uuid.uuid4(),
+            all_highlights=[{"text": "finding", "page": 1, "category": "findings"}],
+            batch_reasoning_traces=[],
+        )
+
+    assert result is False
+    mock_session.commit.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# _run_analysis_background — cancellation checkpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_analysis_background_stops_when_cancelled_before_start():
+    from app.api.routes.auto_highlight import _run_analysis_background
+
+    cache_id = uuid.uuid4()
+    mock_cache = MagicMock()
+    mock_cache.id = cache_id
+    mock_cache.status = "cancelled"
+
+    with (
+        _patched_session(mock_cache),
+        patch(
+            "app.api.routes.auto_highlight._is_cache_cancelled",
+            new_callable=AsyncMock,
+        ) as mock_is_cancelled,
+    ):
+        mock_is_cancelled.return_value = True
+
+        await _run_analysis_background(
+            cache_id=cache_id,
+            pdf_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            categories=["findings"],
+            pages=[1],
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            tier="quick",
+            llm_client=MagicMock(),
+        )
+
+    # Should stop early without indexing/LLM work.
+    assert mock_cache.status == "cancelled"

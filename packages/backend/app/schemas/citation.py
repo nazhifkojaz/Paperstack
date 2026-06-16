@@ -3,6 +3,7 @@ from typing import Optional, Any, Literal
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
 
+
 class CitationBase(BaseModel):
     doi: Optional[str] = None
     title: Optional[str] = None
@@ -10,7 +11,8 @@ class CitationBase(BaseModel):
     year: Optional[int] = None
     bibtex: str
     csl_json: Optional[Any] = None
-    source: Optional[str] = 'manual'
+    source: Optional[str] = "manual"
+
 
 class CitationUpdate(BaseModel):
     doi: Optional[str] = None
@@ -21,6 +23,7 @@ class CitationUpdate(BaseModel):
     csl_json: Optional[Any] = None
     source: Optional[str] = None
 
+
 class CitationResponse(CitationBase):
     id: UUID
     pdf_id: UUID
@@ -29,13 +32,18 @@ class CitationResponse(CitationBase):
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
+
 class BulkExportRequest(BaseModel):
     pdf_ids: list[UUID]
-    format: str = Field(default="bibtex", description="Format to export, e.g. bibtex or json")
+    format: str = Field(
+        default="bibtex", description="Format to export, e.g. bibtex or json"
+    )
+
 
 class LookupRequest(BaseModel):
     doi: Optional[str] = None
     isbn: Optional[str] = None
+
 
 class LookupResponse(BaseModel):
     doi: Optional[str] = None
@@ -46,6 +54,7 @@ class LookupResponse(BaseModel):
     bibtex: str
     csl_json: Optional[dict] = None
     source: Literal["crossref", "openlibrary"]
+
 
 class ValidateRequest(BaseModel):
     pdf_ids: list[UUID]

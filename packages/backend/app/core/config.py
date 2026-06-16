@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # Auto-highlight rate limits
     RATE_LIMIT_AUTO_HIGHLIGHT_QUOTA: str = "30/minute"
     RATE_LIMIT_AUTO_HIGHLIGHT_CACHE: str = "30/minute"
+
+    # Auto-highlight thorough-mode batch concurrency. 1 preserves the historic
+    # sequential behavior. Raising it overlaps LLM network calls across batches
+    # (bounded by _MAX_THOROUGH_CONCURRENCY in the route module).
+    AUTO_HIGHLIGHT_THOROUGH_CONCURRENCY: int = 1
     RATE_LIMIT_API_KEYS: str = "10/minute"
     RATE_LIMIT_PDF_CHECK_URL: str = "10/minute"
     RATE_LIMIT_REINDEX: str = "5/minute"
@@ -64,7 +69,9 @@ class Settings(BaseSettings):
     # OpenRouter reasoning (thinking) mode
     OPENROUTER_REASONING_ENABLED: bool = True
     OPENROUTER_REASONING_EFFORT: str = "medium"  # "low" | "medium" | "high"
-    OPENROUTER_REASONING_TIMEOUT_READ: float = 180.0  # Longer timeout for reasoning calls
+    OPENROUTER_REASONING_TIMEOUT_READ: float = (
+        180.0  # Longer timeout for reasoning calls
+    )
 
     # Chat rate limits
     RATE_LIMIT_CHAT_CONVERSATIONS: str = "30/minute"
@@ -74,6 +81,13 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150
 
+    # Contextual retrieval: prepend "Paper: <title>\nSection: <section>" to
+    # each chunk's text before embedding. The raw `content` column is
+    # unaffected; only the embedding vector uses the contextualized text.
+    # Legacy chunks (pre-this-flag) and any chunk indexed while this is False
+    # embed the raw content directly.
+    CONTEXTUAL_RETRIEVAL_ENABLED: bool = True
+
     # Retrieval top_k values
     CHAT_TOP_K_SINGLE_PDF: int = 6
     CHAT_TOP_K_COLLECTION: int = 8
@@ -82,6 +96,11 @@ class Settings(BaseSettings):
     # Hybrid search weights
     HYBRID_SEMANTIC_WEIGHT: float = 0.7
     HYBRID_KEYWORD_WEIGHT: float = 0.3
+
+    # Training data logging
+    TRAINING_DATA_LOGGING_ENABLED: bool = False
+    TRAINING_DATA_DEFAULT_ELIGIBLE: bool = False
+    TRAINING_DATA_CONSENT_VERSION: str | None = None
 
     # HTTP Client Connection Pooling
     HTTP_CONNECTION_LIMIT: int = 100  # Max concurrent connections

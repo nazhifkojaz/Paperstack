@@ -1,4 +1,5 @@
 """Tests for OpenRouterUsageService — request counter and gating logic."""
+
 import pytest
 import respx
 from datetime import date
@@ -48,7 +49,9 @@ class TestRecordAndCheck:
         threshold = 90  # 90% of 100
         # Set counter to just below threshold
         await db_session.execute(
-            text("UPDATE openrouter_usage_cache SET request_count_today = :c WHERE id = 1"),
+            text(
+                "UPDATE openrouter_usage_cache SET request_count_today = :c WHERE id = 1"
+            ),
             {"c": threshold - 1},
         )
         await db_session.commit()
@@ -60,9 +63,7 @@ class TestRecordAndCheck:
         assert status.is_near_limit is True
         assert status.warning_message is not None
 
-    async def test_resets_on_new_day(
-        self, db_session, usage_service, monkeypatch
-    ):
+    async def test_resets_on_new_day(self, db_session, usage_service, monkeypatch):
         monkeypatch.setattr("app.core.config.settings.OPENROUTER_FREE_TIER_LIMIT", 1000)
         yesterday = date(2020, 1, 1)
         await db_session.execute(

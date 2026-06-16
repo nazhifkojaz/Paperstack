@@ -8,6 +8,7 @@ Revision ID: a1b2c3d4e5f7
 Revises: d9e2f3a8b1c4
 Create Date: 2026-06-09
 """
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
@@ -37,7 +38,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        sa.text("UPDATE annotations SET color = NULL WHERE color = '#FFFF00'")
-    )
+    op.execute(sa.text("UPDATE annotations SET color = NULL WHERE color = '#FFFF00'"))
     op.drop_column("users", "color_labels")

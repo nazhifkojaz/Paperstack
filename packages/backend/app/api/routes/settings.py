@@ -46,7 +46,10 @@ async def update_storage_provider(
     provider before updating the preference.
     """
     if data.storage_provider not in ("github", "google"):
-        raise HTTPException(status_code=400, detail="Invalid storage provider. Must be 'github' or 'google'.")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid storage provider. Must be 'github' or 'google'.",
+        )
 
     result = await db.execute(
         select(UserOAuthAccount).where(
@@ -89,8 +92,6 @@ async def get_connected_accounts(
             for p in providers
         ]
     )
-
-
 
 
 class LLMModelResponse(BaseModel):

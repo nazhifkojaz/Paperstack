@@ -32,9 +32,8 @@ class GoogleDriveStorageBackend(StorageBackend):
         now = datetime.now(timezone.utc)
         expires_at = self._account.token_expires_at
 
-        needs_refresh = (
-            expires_at is None
-            or expires_at <= now + timedelta(seconds=_REFRESH_BUFFER_SECONDS)
+        needs_refresh = expires_at is None or expires_at <= now + timedelta(
+            seconds=_REFRESH_BUFFER_SECONDS
         )
 
         if needs_refresh:
@@ -43,7 +42,9 @@ class GoogleDriveStorageBackend(StorageBackend):
                     status_code=401,
                     detail="Google session expired. Please reconnect your Google account.",
                 )
-            logger.info("Refreshing Google access token for account %s", self._account.id)
+            logger.info(
+                "Refreshing Google access token for account %s", self._account.id
+            )
             new_token, new_expires_at = await google.refresh_google_token(
                 self._account.encrypted_refresh_token
             )
@@ -73,7 +74,9 @@ class GoogleDriveStorageBackend(StorageBackend):
     async def ensure_container(self) -> None:
         await self._get_folder_id()
 
-    async def upload(self, filename: str, file_bytes: bytes, title: str) -> UploadResult:
+    async def upload(
+        self, filename: str, file_bytes: bytes, title: str
+    ) -> UploadResult:
         token = await self._get_valid_token()
         folder_id = await self._get_folder_id()
         file_id = await google.upload_to_drive(token, folder_id, filename, file_bytes)

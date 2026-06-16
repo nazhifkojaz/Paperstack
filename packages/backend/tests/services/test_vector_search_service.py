@@ -11,6 +11,7 @@ from app.services.vector_search_service import VectorSearchService
 # Module-level row factories (shared across test classes)
 # ---------------------------------------------------------------------------
 
+
 def _make_row(id_, page, content, score):
     row = MagicMock()
     row.id = id_
@@ -30,7 +31,9 @@ def _make_hybrid_row(id_, page, content, score, end_page_number=None):
     return row
 
 
-def _make_hybrid_collection_row(id_, pdf_id, pdf_title, page, content, score, end_page_number=None):
+def _make_hybrid_collection_row(
+    id_, pdf_id, pdf_title, page, content, score, end_page_number=None
+):
     row = MagicMock()
     row.id = id_
     row.pdf_id = pdf_id
@@ -75,10 +78,14 @@ def _execute_returning(mock_db, rows):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def sample_rows():
     """Mock DB rows for search results."""
-    return [_make_row(uuid4(), i + 1, f"Content on page {i + 1}", 0.8 - i * 0.05) for i in range(5)]
+    return [
+        _make_row(uuid4(), i + 1, f"Content on page {i + 1}", 0.8 - i * 0.05)
+        for i in range(5)
+    ]
 
 
 @pytest.fixture
@@ -234,11 +241,14 @@ class TestHybridSearchPdf:
     async def test_hybrid_search_uses_combined_score(self):
         """Hybrid search should use combined_score column from CTE query."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_row(uuid4(), 1, "BERT model content", 0.85),
-            _make_hybrid_row(uuid4(), 3, "Neural network content", 0.72),
-            _make_hybrid_row(uuid4(), 5, "Other content", 0.60),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_row(uuid4(), 1, "BERT model content", 0.85),
+                _make_hybrid_row(uuid4(), 3, "Neural network content", 0.72),
+                _make_hybrid_row(uuid4(), 5, "Other content", 0.60),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_pdf(
@@ -276,10 +286,13 @@ class TestHybridSearchPdf:
     async def test_hybrid_search_with_proximity_boost(self):
         """Hybrid search should still support proximity boosting."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_row(uuid4(), 1, "Page 1 content", 0.80),
-            _make_hybrid_row(uuid4(), 2, "Page 2 content", 0.60),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_row(uuid4(), 1, "Page 1 content", 0.80),
+                _make_hybrid_row(uuid4(), 2, "Page 2 content", 0.60),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_pdf(
@@ -303,10 +316,17 @@ class TestHybridSearchCollection:
     async def test_hybrid_collection_search_uses_combined_score(self):
         """Hybrid collection search should use combined_score column."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_collection_row(uuid4(), uuid4(), "Paper 1", 1, "BERT transformer content", 0.88),
-            _make_hybrid_collection_row(uuid4(), uuid4(), "Paper 2", 3, "Neural network content", 0.75),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_collection_row(
+                    uuid4(), uuid4(), "Paper 1", 1, "BERT transformer content", 0.88
+                ),
+                _make_hybrid_collection_row(
+                    uuid4(), uuid4(), "Paper 2", 3, "Neural network content", 0.75
+                ),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_collection(
@@ -323,7 +343,9 @@ class TestHybridSearchCollection:
         assert results[0].score == 0.88
         assert results[0].pdf_id is not None
 
-    async def test_hybrid_collection_falls_back_to_vector_only(self, sample_rows_collection):
+    async def test_hybrid_collection_falls_back_to_vector_only(
+        self, sample_rows_collection
+    ):
         """Without query_text, collection search should use pure vector."""
         mock_db = AsyncMock()
         _execute_returning(mock_db, sample_rows_collection)
@@ -349,10 +371,15 @@ class TestHybridSearchAll:
     async def test_hybrid_all_search_uses_combined_score(self):
         """Hybrid all-PDF search should use combined_score column."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_all_row(uuid4(), "Paper A", 5, "BERT model results", 0.90),
-            _make_hybrid_all_row(uuid4(), "Paper B", 2, "Transformer architecture", 0.82),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_all_row(uuid4(), "Paper A", 5, "BERT model results", 0.90),
+                _make_hybrid_all_row(
+                    uuid4(), "Paper B", 2, "Transformer architecture", 0.82
+                ),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_all(
@@ -372,11 +399,14 @@ class TestHybridSearchAll:
         mock_db = AsyncMock()
         pdf_a = uuid4()
         pdf_b = uuid4()
-        _execute_returning(mock_db, [
-            _make_hybrid_all_row(pdf_a, "Paper A", 1, "Content A1", 0.90),
-            _make_hybrid_all_row(pdf_a, "Paper A", 3, "Content A2", 0.85),
-            _make_hybrid_all_row(pdf_b, "Paper B", 2, "Content B1", 0.80),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_all_row(pdf_a, "Paper A", 1, "Content A1", 0.90),
+                _make_hybrid_all_row(pdf_a, "Paper A", 3, "Content A2", 0.85),
+                _make_hybrid_all_row(pdf_b, "Paper B", 2, "Content B1", 0.80),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_all(
@@ -396,11 +426,14 @@ class TestHybridSearchAll:
         """Without query_text, should use pure vector with dedup."""
         mock_db = AsyncMock()
         pdf_id = uuid4()
-        _execute_returning(mock_db, [
-            _make_row_all(pdf_id, "Paper A", 1, "Content A", 0.90),
-            _make_row_all(pdf_id, "Paper A", 3, "Content A2", 0.85),
-            _make_row_all(uuid4(), "Paper B", 2, "Content B", 0.80),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_row_all(pdf_id, "Paper A", 1, "Content A", 0.90),
+                _make_row_all(pdf_id, "Paper A", 3, "Content A2", 0.85),
+                _make_row_all(uuid4(), "Paper B", 2, "Content B", 0.80),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_all(
@@ -418,11 +451,17 @@ class TestHybridSearchAll:
 class TestHybridSearchWeights:
     """Tests for configurable hybrid search weights (CQ-3)."""
 
-    @pytest.mark.parametrize("method_name,method_kwargs", [
-        ("search_pdf", {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 3}),
-        ("search_collection", {"collection_id": "uuid4", "user_id": "uuid4", "top_k": 3}),
-        ("search_all", {"user_id": "uuid4", "limit": 3}),
-    ])
+    @pytest.mark.parametrize(
+        "method_name,method_kwargs",
+        [
+            ("search_pdf", {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 3}),
+            (
+                "search_collection",
+                {"collection_id": "uuid4", "user_id": "uuid4", "top_k": 3},
+            ),
+            ("search_all", {"user_id": "uuid4", "limit": 3}),
+        ],
+    )
     async def test_hybrid_passes_weight_params(self, method_name, method_kwargs):
         """All hybrid search methods should pass sem_weight and kw_weight to SQL."""
         mock_db = AsyncMock()
@@ -434,7 +473,11 @@ class TestHybridSearchWeights:
         method = getattr(service, method_name)
 
         # Build kwargs dynamically, using uuid4() where needed
-        kwargs = {"query_vector": [0.1] * 384, "db": mock_db, "query_text": "test query"}
+        kwargs = {
+            "query_vector": [0.1] * 384,
+            "db": mock_db,
+            "query_text": "test query",
+        }
         for k, v in method_kwargs.items():
             kwargs[k] = uuid4() if v == "uuid4" else v
 
@@ -477,11 +520,22 @@ class TestErrorHandling:
 
     # --- Database errors propagate -------------------------------------------------
 
-    @pytest.mark.parametrize("method_name,method_kwargs,error_msg", [
-        ("search_pdf", {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 3}, "connection lost"),
-        ("search_collection", {"collection_id": "uuid4", "user_id": "uuid4", "top_k": 3}, "timeout"),
-        ("search_all", {"user_id": "uuid4", "limit": 3}, "deadlock"),
-    ])
+    @pytest.mark.parametrize(
+        "method_name,method_kwargs,error_msg",
+        [
+            (
+                "search_pdf",
+                {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 3},
+                "connection lost",
+            ),
+            (
+                "search_collection",
+                {"collection_id": "uuid4", "user_id": "uuid4", "top_k": 3},
+                "timeout",
+            ),
+            ("search_all", {"user_id": "uuid4", "limit": 3}, "deadlock"),
+        ],
+    )
     async def test_db_error_propagates(self, method_name, method_kwargs, error_msg):
         """DB errors should propagate from all search methods (not be swallowed)."""
         mock_db = AsyncMock()
@@ -507,7 +561,11 @@ class TestErrorHandling:
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[], pdf_id=uuid4(), user_id=uuid4(), top_k=3, db=mock_db,
+            query_vector=[],
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
         )
 
         assert results == []
@@ -524,7 +582,11 @@ class TestErrorHandling:
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id="not-a-uuid", top_k=3, db=mock_db,
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id="not-a-uuid",
+            top_k=3,
+            db=mock_db,
         )
 
         assert results == []
@@ -539,7 +601,11 @@ class TestErrorHandling:
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id="invalid-pdf-id", user_id=uuid4(), top_k=3, db=mock_db,
+            query_vector=[0.1] * 384,
+            pdf_id="invalid-pdf-id",
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
         )
 
         assert results == []
@@ -556,8 +622,12 @@ class TestErrorHandling:
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text="",
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="",
         )
 
         params = mock_db.execute.call_args[0][1]
@@ -574,8 +644,12 @@ class TestErrorHandling:
         service = VectorSearchService()
         malicious = "'; DROP TABLE pdf_chunks; --"
         await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text=malicious,
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text=malicious,
         )
 
         assert mock_db.execute.call_args[0][1]["query"] == malicious
@@ -590,8 +664,12 @@ class TestErrorHandling:
         service = VectorSearchService()
         unicode_query = "données de recherche 日本語"
         await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text=unicode_query,
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text=unicode_query,
         )
 
         assert mock_db.execute.call_args[0][1]["query"] == unicode_query
@@ -607,7 +685,11 @@ class TestErrorHandling:
 
         service = VectorSearchService()
         await service.search_pdf(
-            query_vector=[0.5], pdf_id=uuid4(), user_id=uuid4(), top_k=3, db=mock_db,
+            query_vector=[0.5],
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
         )
 
         assert mock_db.execute.call_args[0][1]["vec"] == "[0.5]"
@@ -621,18 +703,28 @@ class TestErrorHandling:
 
         service = VectorSearchService()
         await service.search_pdf(
-            query_vector=[-0.3, 0.1, -0.9], pdf_id=uuid4(), user_id=uuid4(), top_k=3, db=mock_db,
+            query_vector=[-0.3, 0.1, -0.9],
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
         )
 
         assert mock_db.execute.call_args[0][1]["vec"] == "[-0.3,0.1,-0.9]"
 
     # --- Empty result sets ---------------------------------------------------------
 
-    @pytest.mark.parametrize("method_name,method_kwargs", [
-        ("search_pdf", {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 5}),
-        ("search_collection", {"collection_id": "uuid4", "user_id": "uuid4", "top_k": 5}),
-        ("search_all", {"user_id": "uuid4", "limit": 5}),
-    ])
+    @pytest.mark.parametrize(
+        "method_name,method_kwargs",
+        [
+            ("search_pdf", {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 5}),
+            (
+                "search_collection",
+                {"collection_id": "uuid4", "user_id": "uuid4", "top_k": 5},
+            ),
+            ("search_all", {"user_id": "uuid4", "limit": 5}),
+        ],
+    )
     async def test_empty_results(self, method_name, method_kwargs):
         """All search methods should return [] when DB returns no rows."""
         mock_db = AsyncMock()
@@ -658,12 +750,18 @@ class TestHybridSearchEdgeCases:
     async def test_search_pdf_vector_only_no_keyword_match(self):
         """Row from vector CTE only — keyword CTE had no match for this chunk."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [_make_hybrid_row(uuid4(), 5, "vector-only content", 0.56)])
+        _execute_returning(
+            mock_db, [_make_hybrid_row(uuid4(), 5, "vector-only content", 0.56)]
+        )
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text="obscure term not in any chunk",
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="obscure term not in any chunk",
         )
 
         assert len(results) == 1
@@ -673,12 +771,18 @@ class TestHybridSearchEdgeCases:
     async def test_search_pdf_keyword_only_no_vector_match(self):
         """Row from keyword CTE only — vector CTE had no match for this chunk."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [_make_hybrid_row(uuid4(), 3, "keyword-only content", 0.15)])
+        _execute_returning(
+            mock_db, [_make_hybrid_row(uuid4(), 3, "keyword-only content", 0.15)]
+        )
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text="exact keyword match",
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="exact keyword match",
         )
 
         assert len(results) == 1
@@ -688,16 +792,23 @@ class TestHybridSearchEdgeCases:
     async def test_search_pdf_mixed_vector_and_keyword_only(self):
         """Mixed results from vector-only, keyword-only, and both CTEs."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_row(uuid4(), 1, "both match (highest)", 0.88),
-            _make_hybrid_row(uuid4(), 5, "vector-only match", 0.56),
-            _make_hybrid_row(uuid4(), 8, "keyword-only match", 0.12),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_row(uuid4(), 1, "both match (highest)", 0.88),
+                _make_hybrid_row(uuid4(), 5, "vector-only match", 0.56),
+                _make_hybrid_row(uuid4(), 8, "keyword-only match", 0.12),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text="mixed query",
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="mixed query",
         )
 
         assert len(results) == 3
@@ -708,12 +819,18 @@ class TestHybridSearchEdgeCases:
     async def test_search_pdf_hybrid_zero_combined_score(self):
         """Row with combined_score of 0.0 should still produce a SearchResult."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [_make_hybrid_row(uuid4(), 1, "zero score content", 0.0)])
+        _execute_returning(
+            mock_db, [_make_hybrid_row(uuid4(), 1, "zero score content", 0.0)]
+        )
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text="no match at all",
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="no match at all",
         )
 
         assert len(results) == 1
@@ -722,14 +839,19 @@ class TestHybridSearchEdgeCases:
     async def test_search_pdf_hybrid_preserves_end_page_number(self):
         """Hybrid search results should include end_page_number from DB rows."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_row(uuid4(), 2, "spanning content", 0.75, end_page_number=4)
-        ])
+        _execute_returning(
+            mock_db,
+            [_make_hybrid_row(uuid4(), 2, "spanning content", 0.75, end_page_number=4)],
+        )
 
         service = VectorSearchService()
         results = await service.search_pdf(
-            query_vector=[0.1] * 384, pdf_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text="spanning",
+            query_vector=[0.1] * 384,
+            pdf_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="spanning",
         )
 
         assert len(results) == 1
@@ -740,14 +862,28 @@ class TestHybridSearchEdgeCases:
     async def test_search_collection_keyword_only_results(self):
         """Collection search returning only keyword-matched results."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_collection_row(uuid4(), uuid4(), "Paper with exact term", 2, "keyword matched", 0.21),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_collection_row(
+                    uuid4(),
+                    uuid4(),
+                    "Paper with exact term",
+                    2,
+                    "keyword matched",
+                    0.21,
+                ),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_collection(
-            query_vector=[0.1] * 384, collection_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text="exact term",
+            query_vector=[0.1] * 384,
+            collection_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="exact term",
         )
 
         assert len(results) == 1
@@ -757,14 +893,23 @@ class TestHybridSearchEdgeCases:
     async def test_search_collection_hybrid_preserves_end_page_number(self):
         """Hybrid collection search results should include end_page_number."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_collection_row(uuid4(), uuid4(), "Paper", 3, "content", 0.8, end_page_number=5)
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_collection_row(
+                    uuid4(), uuid4(), "Paper", 3, "content", 0.8, end_page_number=5
+                )
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_collection(
-            query_vector=[0.1] * 384, collection_id=uuid4(), user_id=uuid4(), top_k=3,
-            db=mock_db, query_text="test",
+            query_vector=[0.1] * 384,
+            collection_id=uuid4(),
+            user_id=uuid4(),
+            top_k=3,
+            db=mock_db,
+            query_text="test",
         )
 
         assert len(results) == 1
@@ -776,15 +921,21 @@ class TestHybridSearchEdgeCases:
         """search_all with keyword-only matches across multiple PDFs."""
         mock_db = AsyncMock()
         pdf_a, pdf_b = uuid4(), uuid4()
-        _execute_returning(mock_db, [
-            _make_hybrid_all_row(pdf_a, "Paper A", 3, "exact match in A", 0.18),
-            _make_hybrid_all_row(pdf_b, "Paper B", 1, "exact match in B", 0.09),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_all_row(pdf_a, "Paper A", 3, "exact match in A", 0.18),
+                _make_hybrid_all_row(pdf_b, "Paper B", 1, "exact match in B", 0.09),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_all(
-            query_vector=[0.1] * 384, user_id=uuid4(), limit=5,
-            db=mock_db, query_text="exact match",
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=5,
+            db=mock_db,
+            query_text="exact match",
         )
 
         assert len(results) == 2
@@ -798,15 +949,21 @@ class TestHybridSearchEdgeCases:
         """When same PDF appears from both CTEs, dedup keeps first (highest score)."""
         mock_db = AsyncMock()
         pdf_a = uuid4()
-        _execute_returning(mock_db, [
-            _make_hybrid_all_row(pdf_a, "Paper A", 2, "high score", 0.90),
-            _make_hybrid_all_row(pdf_a, "Paper A", 7, "low score", 0.45),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_all_row(pdf_a, "Paper A", 2, "high score", 0.90),
+                _make_hybrid_all_row(pdf_a, "Paper A", 7, "low score", 0.45),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_all(
-            query_vector=[0.1] * 384, user_id=uuid4(), limit=5,
-            db=mock_db, query_text="test",
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=5,
+            db=mock_db,
+            query_text="test",
         )
 
         assert len(results) == 1
@@ -816,15 +973,23 @@ class TestHybridSearchEdgeCases:
     async def test_search_all_hybrid_respects_limit(self):
         """Hybrid search_all should stop after collecting `limit` unique PDFs."""
         mock_db = AsyncMock()
-        _execute_returning(mock_db, [
-            _make_hybrid_all_row(uuid4(), f"Paper {i}", 1, f"Content {i}", 0.9 - i * 0.1)
-            for i in range(10)
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_all_row(
+                    uuid4(), f"Paper {i}", 1, f"Content {i}", 0.9 - i * 0.1
+                )
+                for i in range(10)
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_all(
-            query_vector=[0.1] * 384, user_id=uuid4(), limit=3,
-            db=mock_db, query_text="test",
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=3,
+            db=mock_db,
+            query_text="test",
         )
 
         assert len(results) == 3
@@ -833,14 +998,20 @@ class TestHybridSearchEdgeCases:
         """In hybrid path, full content is returned (not truncated to 300 chars)."""
         mock_db = AsyncMock()
         long_content = "x" * 500
-        _execute_returning(mock_db, [
-            _make_hybrid_all_row(uuid4(), "Paper", 1, long_content, 0.8),
-        ])
+        _execute_returning(
+            mock_db,
+            [
+                _make_hybrid_all_row(uuid4(), "Paper", 1, long_content, 0.8),
+            ],
+        )
 
         service = VectorSearchService()
         results = await service.search_all(
-            query_vector=[0.1] * 384, user_id=uuid4(), limit=5,
-            db=mock_db, query_text="test",
+            query_vector=[0.1] * 384,
+            user_id=uuid4(),
+            limit=5,
+            db=mock_db,
+            query_text="test",
         )
 
         assert len(results) == 1

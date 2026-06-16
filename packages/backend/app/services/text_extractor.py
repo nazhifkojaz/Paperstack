@@ -55,7 +55,9 @@ def extract_text_with_pages(
             if count <= 5:
                 pages_note = f"{count} pages ({', '.join(str(p) for p in page_nums)} of {total_pages})"
             else:
-                pages_note = f"{count} pages ({page_nums[0]}–{page_nums[-1]} of {total_pages})"
+                pages_note = (
+                    f"{count} pages ({page_nums[0]}–{page_nums[-1]} of {total_pages})"
+                )
         else:
             truncated_text, pages_note = _truncate_text(
                 full_text, MAX_TEXT_LENGTH, total_pages

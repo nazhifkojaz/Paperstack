@@ -10,13 +10,15 @@ from app.db.models import User, Share, AnnotationSet, Annotation, Pdf, UserOAuth
 from app.services.pdf_download_service import pdf_download_service, PdfSource
 from app.services.storage.factory import get_storage_backend
 from app.schemas.sharing import (
-    ShareCreate, ShareResponse, SharedAnnotationsResponse,
-    AnnotationSetData, AnnotationData,
+    ShareCreate,
+    ShareResponse,
+    SharedAnnotationsResponse,
+    AnnotationSetData,
+    AnnotationData,
 )
 
 router = APIRouter(tags=["sharing"])
 public_router = APIRouter(tags=["sharing"])
-
 
 
 @router.post("/annotation-sets/{set_id}/share", response_model=ShareResponse)
@@ -44,7 +46,8 @@ async def create_share(
             .join(UserOAuthAccount)
             .where(
                 UserOAuthAccount.provider == "github",
-                UserOAuthAccount.extra_data["github_login"].astext == share_in.shared_with_github_login,
+                UserOAuthAccount.extra_data["github_login"].astext
+                == share_in.shared_with_github_login,
             )
         )
         target_user = (await db.execute(stmt_user)).scalar_one_or_none()
@@ -72,7 +75,9 @@ async def create_share(
         annotation_set_id=share.annotation_set_id,
         shared_by=share.shared_by,
         shared_with=share.shared_with,
-        shared_with_github_login=share_in.shared_with_github_login if target_user else None,
+        shared_with_github_login=share_in.shared_with_github_login
+        if target_user
+        else None,
         share_token=share.share_token,
         permission=share.permission,
         created_at=share.created_at,
@@ -98,7 +103,8 @@ async def get_shares_for_set(
         .outerjoin(User, User.id == Share.shared_with)
         .outerjoin(
             UserOAuthAccount,
-            (UserOAuthAccount.user_id == User.id) & (UserOAuthAccount.provider == "github"),
+            (UserOAuthAccount.user_id == User.id)
+            & (UserOAuthAccount.provider == "github"),
         )
         .where(Share.annotation_set_id == set_id)
         .order_by(Share.created_at.desc())
@@ -145,8 +151,9 @@ async def revoke_share(
     await db.commit()
 
 
-
-def _filter_annotations_by_permission(annotations: List[Annotation], permission: str) -> List[AnnotationData]:
+def _filter_annotations_by_permission(
+    annotations: List[Annotation], permission: str
+) -> List[AnnotationData]:
     return [
         AnnotationData(
             id=str(a.id),
@@ -162,8 +169,9 @@ def _filter_annotations_by_permission(annotations: List[Annotation], permission:
     ]
 
 
-
-@public_router.get("/shared/annotations/{token}", response_model=SharedAnnotationsResponse)
+@public_router.get(
+    "/shared/annotations/{token}", response_model=SharedAnnotationsResponse
+)
 async def get_shared_annotations(token: str, db: AsyncSession = Depends(get_db)):
     """Public endpoint: returns the annotation set and PDF data for a share token."""
     stmt = (
@@ -200,10 +208,16 @@ async def get_shared_annotations(token: str, db: AsyncSession = Depends(get_db))
         row_minimal = (await db.execute(stmt_minimal)).first()
         pdf, sharer = row_minimal if row_minimal else (None, None)
 
-    filtered_annotations = _filter_annotations_by_permission(annotations, share.permission)
+    filtered_annotations = _filter_annotations_by_permission(
+        annotations, share.permission
+    )
 
     # Use display_name preferentially; fall back to github_login for GitHub users
-    shared_by_login = (sharer.display_name or sharer.github_login or "Unknown") if sharer else "Unknown"
+    shared_by_login = (
+        (sharer.display_name or sharer.github_login or "Unknown")
+        if sharer
+        else "Unknown"
+    )
 
     return SharedAnnotationsResponse(
         shared_by_login=shared_by_login,

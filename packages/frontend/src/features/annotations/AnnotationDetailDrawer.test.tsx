@@ -148,4 +148,40 @@ describe('AnnotationDetailDrawer', () => {
       expect(screen.getByRole('tab', { name: /paraphrase/i })).toHaveAttribute('data-state', 'active');
     });
   });
+
+  it('shows a copy button on the paraphrase tab and copies content to clipboard', async () => {
+    const annotation = createMockAnnotation({
+      selected_text: 'selected text',
+      note_content: 'user note',
+      metadata: {
+        ai_paraphrase: { content: 'Paraphrased text.', level: 'simpler' },
+      },
+    });
+
+    renderDrawer(annotation);
+    selectTab(/paraphrase/i);
+
+    const copyButton = screen.getByTitle('Copy to clipboard');
+    fireEvent.click(copyButton);
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Paraphrased text.');
+    await waitFor(() => {
+      expect(screen.getByText('Copied!')).toBeInTheDocument();
+    });
+  });
+
+  it('does not show a copy button on the explanation tab', () => {
+    const annotation = createMockAnnotation({
+      selected_text: 'selected text',
+      note_content: 'user note',
+      metadata: {
+        ai_explanation: { content: 'Generated explanation.' },
+      },
+    });
+
+    renderDrawer(annotation);
+    selectTab(/explanation/i);
+
+    expect(screen.queryByTitle('Copy to clipboard')).not.toBeInTheDocument();
+  });
 });

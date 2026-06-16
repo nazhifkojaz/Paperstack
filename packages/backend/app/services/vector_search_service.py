@@ -40,6 +40,7 @@ class SearchResult:
 @dataclass
 class _SearchScope:
     """Configuration for a vector search scope."""
+
     extra_joins: str
     where_extra: str
     select_pdf_cols: str

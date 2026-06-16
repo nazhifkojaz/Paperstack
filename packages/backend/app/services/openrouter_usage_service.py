@@ -3,6 +3,7 @@
 Self-tracked request counter with daily UTC rollover.
 Warning threshold: GLOBAL_QUOTA_WARNING_PCT of OPENROUTER_FREE_TIER_LIMIT.
 """
+
 import json
 import logging
 from dataclasses import dataclass
@@ -29,7 +30,6 @@ class GlobalQuotaStatus:
 
 
 class OpenRouterUsageService:
-
     async def record_and_check(self, db: AsyncSession) -> GlobalQuotaStatus:
         """Atomically roll over the usage day if needed and increment the counter."""
         stmt = text("""

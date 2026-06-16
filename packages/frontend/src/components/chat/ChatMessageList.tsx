@@ -10,7 +10,7 @@
  * />
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Loader2, User, Bot, Copy, Check, RefreshCw, X, AlertCircle } from 'lucide-react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +21,7 @@ import { CitationPreview } from './CitationPreview';
 import { InlineCitationLink } from './InlineCitationLink';
 import { createPageRefPlugin } from '@/lib/remarkPageRefs';
 import { createInlineCitationPlugin } from '@/lib/remarkInlineCitations';
+import { useClipboard } from '@/hooks/useClipboard';
 
 export interface ChatMessageProps {
     id: string;
@@ -101,17 +102,7 @@ function formatTime(iso: string): string {
 
 function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, onPageClick, onRetryFailed, onDismissFailed }: MessageBubbleProps) {
     const isUser = message.role === 'user';
-    const [copied, setCopied] = useState(false);
-
-    const handleCopy = async () => {
-        try {
-            await navigator.clipboard.writeText(message.content);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        } catch {
-            // ignore
-        }
-    };
+    const { copied, copyToClipboard } = useClipboard();
 
     const remarkPlugins = useMemo(
         () => onPageClick ? [createPageRefPlugin(), createInlineCitationPlugin()] : [createInlineCitationPlugin()],
@@ -239,7 +230,7 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
                     {/* Copy button for assistant messages */}
                     {!isUser && message.content && !message.isStreaming && !message.error && (
                         <button
-                            onClick={handleCopy}
+                            onClick={() => copyToClipboard(message.content)}
                             className="absolute -top-2 -right-2 p-1 rounded-md bg-background border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                             title="Copy to clipboard"
                         >

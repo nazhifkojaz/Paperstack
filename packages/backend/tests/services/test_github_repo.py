@@ -1,4 +1,5 @@
 """Tests for GitHub repo service."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,6 +32,7 @@ class TestEnsureUserRepo:
         async def mock_get(url, **kwargs):
             class MockResponse:
                 status_code = 200
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
@@ -46,11 +48,13 @@ class TestEnsureUserRepo:
         async def mock_get(url, **kwargs):
             class MockResponse:
                 status_code = 404
+
             return MockResponse()
 
         async def mock_post(url, **kwargs):
             class MockResponse:
                 status_code = 201
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
@@ -68,6 +72,7 @@ class TestEnsureUserRepo:
             class MockResponse:
                 status_code = 500
                 text = "Server error"
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
@@ -89,8 +94,10 @@ class TestUploadPdfToGitHub:
         async def mock_put(url, **kwargs):
             class MockResponse:
                 status_code = 201
+
                 def json(self):
                     return {"content": {"sha": "abc123"}}
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
@@ -101,7 +108,7 @@ class TestUploadPdfToGitHub:
                 "testuser",
                 "pdfs/test.pdf",
                 b"%PDF-1.4 test content",
-                "Add PDF"
+                "Add PDF",
             )
 
             assert result["content"]["sha"] == "abc123"
@@ -114,6 +121,7 @@ class TestUploadPdfToGitHub:
             class MockResponse:
                 status_code = 500
                 text = "Upload failed"
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
@@ -124,7 +132,7 @@ class TestUploadPdfToGitHub:
                     "encrypted_token",
                     "testuser",
                     "pdfs/test.pdf",
-                    b"%PDF-1.4 test content"
+                    b"%PDF-1.4 test content",
                 )
 
             assert exc.value.status_code == 500
@@ -141,6 +149,7 @@ class TestDownloadPdfFromGitHub:
             class MockResponse:
                 status_code = 200
                 content = b"%PDF-1.4 test content"
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
@@ -148,9 +157,7 @@ class TestDownloadPdfFromGitHub:
             mock_client.return_value.__aenter__.return_value = fake_client
 
             result = await download_pdf_from_github(
-                "encrypted_token",
-                "testuser",
-                "pdfs/test.pdf"
+                "encrypted_token", "testuser", "pdfs/test.pdf"
             )
 
             assert result == b"%PDF-1.4 test content"
@@ -163,6 +170,7 @@ class TestDownloadPdfFromGitHub:
             class MockResponse:
                 status_code = 404
                 text = "Not found"
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
@@ -171,9 +179,7 @@ class TestDownloadPdfFromGitHub:
 
             with pytest.raises(HTTPException) as exc:
                 await download_pdf_from_github(
-                    "encrypted_token",
-                    "testuser",
-                    "pdfs/nonexistent.pdf"
+                    "encrypted_token", "testuser", "pdfs/nonexistent.pdf"
                 )
 
             assert exc.value.status_code == 404
@@ -189,17 +195,14 @@ class TestDeletePdfFromGitHub:
         async def mock_request(method, url, **kwargs):
             class MockResponse:
                 status_code = 200
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
             mock_client.return_value.__aenter__.return_value.request = mock_request
 
             result = await delete_pdf_from_github(
-                "encrypted_token",
-                "testuser",
-                "pdfs/test.pdf",
-                "abc123",
-                "Delete PDF"
+                "encrypted_token", "testuser", "pdfs/test.pdf", "abc123", "Delete PDF"
             )
 
             assert result is True
@@ -212,6 +215,7 @@ class TestDeletePdfFromGitHub:
             class MockResponse:
                 status_code = 500
                 text = "Delete failed"
+
             return MockResponse()
 
         with patch("app.services.github_repo.get_github_client") as mock_client:
@@ -219,10 +223,7 @@ class TestDeletePdfFromGitHub:
 
             with pytest.raises(HTTPException) as exc:
                 await delete_pdf_from_github(
-                    "encrypted_token",
-                    "testuser",
-                    "pdfs/test.pdf",
-                    "abc123"
+                    "encrypted_token", "testuser", "pdfs/test.pdf", "abc123"
                 )
 
             assert exc.value.status_code == 500

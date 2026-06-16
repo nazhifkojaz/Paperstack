@@ -7,6 +7,7 @@ Pipeline:
 3. lookup_doi_crossref() — fetch BibTeX + CSL-JSON from CrossRef via DOI
 4. auto_extract_citation() — orchestrate the full pipeline and return a dict
 """
+
 import logging
 import re
 from io import BytesIO
@@ -20,8 +21,10 @@ logger = logging.getLogger(__name__)
 
 # Exceptions
 
+
 class CitationNotFoundError(Exception):
     """Raised when a citation (DOI/ISBN) is not found in external services."""
+
     pass
 
 
@@ -76,7 +79,11 @@ def validate_isbn(isbn: str) -> str:
 
     # Check if it's valid format (digits only, or digits + X at end for ISBN-10)
     # X is only valid as check digit in ISBN-10 (position 10)
-    if not clean.replace("X", "").isdigit() or clean.count("X") > 1 or (clean.endswith("X") and len(clean) != 10):
+    if (
+        not clean.replace("X", "").isdigit()
+        or clean.count("X") > 1
+        or (clean.endswith("X") and len(clean) != 10)
+    ):
         raise ValueError(f"Invalid ISBN format: {isbn}")
 
     # ISBN-10: 10 digits
@@ -188,10 +195,13 @@ async def lookup_doi_crossref(doi: str) -> dict:
             title = title[0] if title else None
 
         author_list = csl_json.get("author", [])
-        authors = ", ".join(
-            f"{a.get('given', '')} {a.get('family', '')}".strip()
-            for a in author_list
-        ) or None
+        authors = (
+            ", ".join(
+                f"{a.get('given', '')} {a.get('family', '')}".strip()
+                for a in author_list
+            )
+            or None
+        )
 
         issued = csl_json.get("issued", {})
         date_parts = issued.get("date-parts", [[]])
@@ -246,7 +256,9 @@ async def lookup_isbn_openlibrary(isbn: str) -> dict:
         # Extract fields
         title = book_data.get("title")
         authors_list = book_data.get("authors", [])
-        authors = ", ".join(a.get("name", "") for a in authors_list) if authors_list else None
+        authors = (
+            ", ".join(a.get("name", "") for a in authors_list) if authors_list else None
+        )
 
         # Parse year from publish_date
         year = None
@@ -258,7 +270,9 @@ async def lookup_isbn_openlibrary(isbn: str) -> dict:
                 year = int(year_match.group(0))
 
         # Generate BibTeX as @book entry
-        first_author_last = authors_list[0].get("name", "").split()[-1] if authors_list else "unknown"
+        first_author_last = (
+            authors_list[0].get("name", "").split()[-1] if authors_list else "unknown"
+        )
         citation_key_base = re.sub(r"[^a-zA-Z0-9]", "", first_author_last)
         citation_key = f"{citation_key_base}{year}" if year else citation_key_base
         bibtex = f"@book{{{citation_key},\n"
@@ -268,7 +282,11 @@ async def lookup_isbn_openlibrary(isbn: str) -> dict:
             bibtex += f"  author = {{{authors}}},\n"
         if year:
             bibtex += f"  year = {{{year}}},\n"
-        publisher = book_data.get("publishers", [{}])[0].get("name") if book_data.get("publishers") else None
+        publisher = (
+            book_data.get("publishers", [{}])[0].get("name")
+            if book_data.get("publishers")
+            else None
+        )
         if publisher:
             bibtex += f"  publisher = {{{publisher}}},\n"
         bibtex += f"  isbn = {{{validated_isbn}}},\n"
@@ -278,7 +296,9 @@ async def lookup_isbn_openlibrary(isbn: str) -> dict:
         csl_json = {
             "type": "book",
             "title": title,
-            "author": [{"name": a.get("name")} for a in authors_list] if authors_list else [],
+            "author": [{"name": a.get("name")} for a in authors_list]
+            if authors_list
+            else [],
             "issued": {"date-parts": [[year]]} if year else None,
             "publisher": publisher,
             "ISBN": validated_isbn,
@@ -296,7 +316,9 @@ async def lookup_isbn_openlibrary(isbn: str) -> dict:
         }
 
 
-async def search_semantic_scholar(title: str, authors: Optional[str] = None) -> Optional[dict]:
+async def search_semantic_scholar(
+    title: str, authors: Optional[str] = None
+) -> Optional[dict]:
     """
     Search Semantic Scholar for a paper by title.
     Returns a dict with doi, title, authors, year if a match is found, else None.
@@ -332,8 +354,16 @@ async def search_semantic_scholar(title: str, authors: Optional[str] = None) -> 
         # Verify author overlap if we have local authors
         if authors:
             s2_authors = paper.get("authors", [])
-            s2_names = {a.get("name", "").split()[-1].lower() for a in s2_authors if a.get("name")}
-            local_names = {name.strip().split()[-1].lower() for name in authors.split(",") if name.strip()}
+            s2_names = {
+                a.get("name", "").split()[-1].lower()
+                for a in s2_authors
+                if a.get("name")
+            }
+            local_names = {
+                name.strip().split()[-1].lower()
+                for name in authors.split(",")
+                if name.strip()
+            }
             if not (s2_names & local_names):
                 return None
 
@@ -345,9 +375,9 @@ async def search_semantic_scholar(title: str, authors: Optional[str] = None) -> 
         if not doi and arxiv_id:
             doi = f"10.48550/arXiv.{arxiv_id}"
 
-        s2_authors_str = ", ".join(
-            a.get("name", "") for a in paper.get("authors", [])
-        ) or None
+        s2_authors_str = (
+            ", ".join(a.get("name", "") for a in paper.get("authors", [])) or None
+        )
 
         return {
             "doi": doi,
@@ -374,7 +404,9 @@ async def search_semantic_scholar(title: str, authors: Optional[str] = None) -> 
         return None
 
 
-async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None) -> dict:
+async def auto_extract_citation(
+    pdf_bytes: bytes, doi_hint: Optional[str] = None
+) -> dict:
     """
     Full pipeline: try to find a DOI, fall back to embedded metadata,
     then look up CrossRef and return a complete citation dict.
@@ -426,10 +458,17 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
                     crossref = await lookup_doi_crossref(s2_doi)
                     return {
                         "doi": s2_doi,
-                        "title": crossref.get("title") or s2_result.get("title") or meta.get("title"),
-                        "authors": crossref.get("authors") or s2_result.get("authors") or meta.get("authors"),
-                        "year": crossref.get("year") or s2_result.get("year") or meta.get("year"),
-                        "bibtex": crossref.get("bibtex") or _generate_minimal_bibtex(s2_doi),
+                        "title": crossref.get("title")
+                        or s2_result.get("title")
+                        or meta.get("title"),
+                        "authors": crossref.get("authors")
+                        or s2_result.get("authors")
+                        or meta.get("authors"),
+                        "year": crossref.get("year")
+                        or s2_result.get("year")
+                        or meta.get("year"),
+                        "bibtex": crossref.get("bibtex")
+                        or _generate_minimal_bibtex(s2_doi),
                         "csl_json": crossref.get("csl_json"),
                         "source": "semantic_scholar+crossref",
                     }
@@ -451,14 +490,18 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
 
             # Return Semantic Scholar data with generated BibTeX
             s2_title = s2_result.get("title") or meta.get("title") or "Unknown Title"
-            s2_authors = s2_result.get("authors") or meta.get("authors") or "Unknown Author"
+            s2_authors = (
+                s2_result.get("authors") or meta.get("authors") or "Unknown Author"
+            )
             s2_year = s2_result.get("year") or meta.get("year")
             return {
                 "doi": s2_doi,
                 "title": s2_title,
                 "authors": s2_authors,
                 "year": s2_year,
-                "bibtex": _generate_minimal_bibtex_from_meta(s2_title, s2_authors, s2_year),
+                "bibtex": _generate_minimal_bibtex_from_meta(
+                    s2_title, s2_authors, s2_year
+                ),
                 "csl_json": None,
                 "source": "semantic_scholar",
             }
@@ -481,17 +524,18 @@ async def auto_extract_citation(pdf_bytes: bytes, doi_hint: Optional[str] = None
 
 # BibTeX helpers
 
+
 def _generate_minimal_bibtex(doi: str) -> str:
     """Fallback BibTeX when CrossRef is unreachable."""
     key = re.sub(r"[^a-zA-Z0-9]", "", doi)[:16]
     return f"@misc{{{key},\n  doi = {{{doi}}},\n}}"
 
 
-def _generate_minimal_bibtex_from_meta(title: str, authors: str, year: Optional[int] = None) -> str:
+def _generate_minimal_bibtex_from_meta(
+    title: str, authors: str, year: Optional[int] = None
+) -> str:
     """Construct a skeleton BibTeX entry from embedded PDF metadata."""
-    first_author_last = (
-        authors.split(",")[0].split()[-1] if authors else "unknown"
-    )
+    first_author_last = authors.split(",")[0].split()[-1] if authors else "unknown"
     key = re.sub(r"[^a-zA-Z0-9]", "", first_author_last)
     if year:
         key = f"{key}{year}"

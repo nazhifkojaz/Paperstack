@@ -7,7 +7,6 @@ from app.core.github import get_github_access_token, get_github_user, get_github
 
 
 class TestGetGithubAccessToken:
-
     async def test_success(self):
         with respx.mock as mock:
             mock.post("https://github.com/login/oauth/access_token").mock(
@@ -37,7 +36,6 @@ class TestGetGithubAccessToken:
 
 
 class TestGetGithubUser:
-
     async def test_success(self):
         with respx.mock as mock:
             mock.get("https://api.github.com/user").mock(
@@ -70,15 +68,22 @@ class TestGetGithubUser:
 
 
 class TestGetGithubEmails:
-
     async def test_returns_primary_verified_email(self):
         with respx.mock as mock:
             mock.get("https://api.github.com/user/emails").mock(
                 return_value=Response(
                     200,
                     json=[
-                        {"email": "test@example.com", "primary": True, "verified": True},
-                        {"email": "old@example.com", "primary": False, "verified": True},
+                        {
+                            "email": "test@example.com",
+                            "primary": True,
+                            "verified": True,
+                        },
+                        {
+                            "email": "old@example.com",
+                            "primary": False,
+                            "verified": True,
+                        },
                     ],
                 )
             )
@@ -93,7 +98,11 @@ class TestGetGithubEmails:
                 return_value=Response(
                     200,
                     json=[
-                        {"email": "test@example.com", "primary": False, "verified": True},
+                        {
+                            "email": "test@example.com",
+                            "primary": False,
+                            "verified": True,
+                        },
                     ],
                 )
             )

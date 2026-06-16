@@ -1,4 +1,5 @@
 """Tests for LLM service: call_openrouter, _parse_highlights_json."""
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 import httpx
@@ -16,7 +17,9 @@ from app.services.exceptions import LLMProviderError, LLMRateLimitError
 
 class TestParseHighlightsJson:
     def test_valid_json_array(self):
-        raw = '[{"text": "finding", "page": 1, "category": "findings", "reason": "test"}]'
+        raw = (
+            '[{"text": "finding", "page": 1, "category": "findings", "reason": "test"}]'
+        )
         result = _parse_highlights_json(raw)
         assert len(result) == 1
         assert result[0]["text"] == "finding"

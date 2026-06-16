@@ -5,16 +5,42 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.config import settings
 from app.db.engine import SessionLocal
-from app.db.models import Annotation, AnnotationSet, Collection, Pdf, PdfCollection, PdfTag, PdfIndexStatus, User
+from app.db.models import (
+    Annotation,
+    AnnotationSet,
+    Collection,
+    Pdf,
+    PdfCollection,
+    PdfTag,
+    PdfIndexStatus,
+    User,
+)
 from app.middleware.rate_limit import limiter
-from app.schemas.pdf import PdfIndexStatusResponse, PdfLinkCreate, PdfListParams, PdfResponse, PdfUpdate, PdfUrlCheckRequest, PdfUrlCheckResponse
+from app.schemas.pdf import (
+    PdfIndexStatusResponse,
+    PdfLinkCreate,
+    PdfListParams,
+    PdfResponse,
+    PdfUpdate,
+    PdfUrlCheckRequest,
+    PdfUrlCheckResponse,
+)
 from app.services import pdf_metadata
 from app.services.pdf_download_service import pdf_download_service
 from app.services.indexing_service import IndexingService
@@ -57,7 +83,9 @@ async def _run_index_background(pdf_id: uuid.UUID, user_id: uuid.UUID) -> None:
                     row.updated_at = datetime.now(timezone.utc)
                     await db.commit()
             except Exception:
-                logger.exception("Failed to mark indexing status=failed for pdf %s", pdf_id)
+                logger.exception(
+                    "Failed to mark indexing status=failed for pdf %s", pdf_id
+                )
 
 
 def _has_stored_content(pdf: Pdf) -> bool:
@@ -72,6 +100,65 @@ def _storage_file_id(pdf: Pdf) -> Optional[str]:
 
 def _etag(pdf: Pdf) -> str:
     return f'"{_storage_file_id(pdf)}"'
+
+
+def _create_default_set(pdf_id: uuid.UUID, user_id: uuid.UUID) -> AnnotationSet:
+    return AnnotationSet(
+        pdf_id=pdf_id,
+        user_id=user_id,
+        name="Default",
+        color="#FFFF00",
+        source="manual",
+    )
+
+
+async def _attach_pdf_to_collections(
+    db: AsyncSession,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    collection_ids: list[uuid.UUID],
+) -> None:
+    """Attach a PDF to the user's collections that actually exist."""
+    if not collection_ids:
+        return
+    stmt = select(Collection).where(
+        Collection.id.in_(collection_ids),
+        Collection.user_id == user_id,
+    )
+    valid_collections = (await db.execute(stmt)).scalars().all()
+    for collection in valid_collections:
+        db.add(PdfCollection(pdf_id=pdf_id, collection_id=collection.id))
+
+
+def _parse_project_ids(project_ids: str | None) -> list[uuid.UUID]:
+    """Parse a comma-separated project_id string from a form upload."""
+    if not project_ids:
+        return []
+    try:
+        return [uuid.UUID(pid.strip()) for pid in project_ids.split(",") if pid.strip()]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail="Invalid project_id format"
+        ) from exc
+
+
+async def _persist_pdf_with_defaults(
+    db: AsyncSession,
+    pdf: Pdf,
+    user_id: uuid.UUID,
+    collection_ids: list[uuid.UUID],
+) -> Pdf:
+    """Persist a Pdf row, create its default annotation set, attach collections,
+    commit, and start background indexing.
+    """
+    db.add(pdf)
+    await db.flush()
+    db.add(_create_default_set(pdf.id, user_id))
+    await _attach_pdf_to_collections(db, pdf.id, user_id, collection_ids)
+    await db.commit()
+    await db.refresh(pdf)
+    asyncio.create_task(_run_index_background(pdf.id, user_id))
+    return pdf
 
 
 @router.post("/upload", response_model=PdfResponse)
@@ -109,26 +196,9 @@ async def upload_pdf(
         doi=doi,
         isbn=isbn,
     )
-    db.add(pdf)
-
-    if project_ids:
-        try:
-            parsed_ids = [uuid.UUID(pid.strip()) for pid in project_ids.split(",") if pid.strip()]
-        except ValueError:
-            raise HTTPException(status_code=422, detail="Invalid project_id format")
-        if parsed_ids:
-            stmt = select(Collection).where(
-                Collection.id.in_(parsed_ids),
-                Collection.user_id == current_user.id,
-            )
-            valid_collections = (await db.execute(stmt)).scalars().all()
-            for collection in valid_collections:
-                db.add(PdfCollection(pdf_id=pdf.id, collection_id=collection.id))
-
-    await db.commit()
-    await db.refresh(pdf)
-    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
-    return pdf
+    return await _persist_pdf_with_defaults(
+        db, pdf, current_user.id, _parse_project_ids(project_ids)
+    )
 
 
 @router.post("/check-url", response_model=PdfUrlCheckResponse)
@@ -146,17 +216,29 @@ async def check_pdf_url(
         try:
             head_resp = await client.head(url_str)
         except httpx.TimeoutException:
-            return PdfUrlCheckResponse(valid=False, error="Server took too long to respond (timed out after 30 seconds).")
+            return PdfUrlCheckResponse(
+                valid=False,
+                error="Server took too long to respond (timed out after 30 seconds).",
+            )
         except httpx.ConnectError:
-            return PdfUrlCheckResponse(valid=False, error="Could not reach the server. Check the URL and try again.")
+            return PdfUrlCheckResponse(
+                valid=False,
+                error="Could not reach the server. Check the URL and try again.",
+            )
         except httpx.HTTPError as exc:
             return PdfUrlCheckResponse(valid=False, error=f"Failed to connect: {exc}")
 
         if head_resp.status_code != 200:
-            return PdfUrlCheckResponse(valid=False, error=f"Server returned HTTP {head_resp.status_code}. The file may not exist at this URL.")
+            return PdfUrlCheckResponse(
+                valid=False,
+                error=f"Server returned HTTP {head_resp.status_code}. The file may not exist at this URL.",
+            )
 
         content_type = head_resp.headers.get("content-type", "").lower()
-        if "application/pdf" not in content_type and "application/x-pdf" not in content_type:
+        if (
+            "application/pdf" not in content_type
+            and "application/x-pdf" not in content_type
+        ):
             return PdfUrlCheckResponse(
                 valid=False,
                 error=f"URL does not point to a PDF file (Content-Type: {content_type or 'unknown'})",
@@ -166,11 +248,15 @@ async def check_pdf_url(
         try:
             get_resp = await client.get(url_str)
         except httpx.HTTPError:
-            return PdfUrlCheckResponse(valid=False, error="Failed to download the PDF content.")
+            return PdfUrlCheckResponse(
+                valid=False, error="Failed to download the PDF content."
+            )
 
         file_bytes = get_resp.content
         if not file_bytes.startswith(b"%PDF-"):
-            return PdfUrlCheckResponse(valid=False, error="Content is not a valid PDF file.")
+            return PdfUrlCheckResponse(
+                valid=False, error="Content is not a valid PDF file."
+            )
 
         # CORS check
         acao = get_resp.headers.get("access-control-allow-origin", "")
@@ -223,21 +309,9 @@ async def link_pdf(
         doi=data.doi,
         isbn=data.isbn,
     )
-    db.add(pdf)
-
-    if data.project_ids:
-        stmt = select(Collection).where(
-            Collection.id.in_(data.project_ids),
-            Collection.user_id == current_user.id,
-        )
-        valid_collections = (await db.execute(stmt)).scalars().all()
-        for collection in valid_collections:
-            db.add(PdfCollection(pdf_id=pdf_id, collection_id=collection.id))
-
-    await db.commit()
-    await db.refresh(pdf)
-    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
-    return pdf
+    return await _persist_pdf_with_defaults(
+        db, pdf, current_user.id, data.project_ids or []
+    )
 
 
 @router.get("", response_model=List[PdfResponse])
@@ -250,7 +324,9 @@ async def list_pdfs(
     query = select(Pdf).where(Pdf.user_id == current_user.id)
 
     if params.collection_id:
-        query = query.join(PdfCollection).where(PdfCollection.collection_id == params.collection_id)
+        query = query.join(PdfCollection).where(
+            PdfCollection.collection_id == params.collection_id
+        )
 
     if params.tag_id:
         query = query.join(PdfTag).where(PdfTag.tag_id == params.tag_id)
@@ -259,11 +335,15 @@ async def list_pdfs(
         search = f"%{params.q}%"
         query = query.where(Pdf.title.ilike(search))
 
-    sortable_cols = {'uploaded_at', 'updated_at', 'title', 'file_size', 'page_count'}
-    col_name = params.sort.lstrip('-')
+    sortable_cols = {"uploaded_at", "updated_at", "title", "file_size", "page_count"}
+    col_name = params.sort.lstrip("-")
     if col_name not in sortable_cols:
         raise HTTPException(status_code=400, detail=f"Invalid sort field: {col_name}")
-    order_col = desc(getattr(Pdf, col_name)) if params.sort.startswith("-") else asc(getattr(Pdf, col_name))
+    order_col = (
+        desc(getattr(Pdf, col_name))
+        if params.sort.startswith("-")
+        else asc(getattr(Pdf, col_name))
+    )
 
     query = query.order_by(order_col)
     offset = (params.page - 1) * params.per_page
@@ -385,7 +465,9 @@ async def get_pdf_content(
         raise HTTPException(status_code=404, detail="PDF not found")
 
     if not _has_stored_content(pdf):
-        raise HTTPException(status_code=400, detail="This PDF is URL-linked and has no stored content")
+        raise HTTPException(
+            status_code=400, detail="This PDF is URL-linked and has no stored content"
+        )
 
     etag = _etag(pdf)
     if request.headers.get("if-none-match") == etag:
@@ -430,17 +512,31 @@ async def export_annotated_pdf(
         raise HTTPException(status_code=404, detail="PDF not found")
 
     if not _has_stored_content(pdf):
-        raise HTTPException(status_code=400, detail="Cannot export annotated PDF for URL-linked documents")
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot export annotated PDF for URL-linked documents",
+        )
 
     result = await db.execute(
-        select(Annotation.page_number, Annotation.type, Annotation.rects, Annotation.color, AnnotationSet.color.label('set_color'))
+        select(
+            Annotation.page_number,
+            Annotation.type,
+            Annotation.rects,
+            Annotation.color,
+            AnnotationSet.color.label("set_color"),
+        )
         .join(AnnotationSet)
         .where(AnnotationSet.pdf_id == pdf_id, AnnotationSet.user_id == current_user.id)
     )
     db_annotations = result.fetchall()
 
     annotations_list = [
-        {'page_number': ann.page_number, 'type': ann.type, 'rects': ann.rects, 'color': ann.color or ann.set_color}
+        {
+            "page_number": ann.page_number,
+            "type": ann.type,
+            "rects": ann.rects,
+            "color": ann.color or ann.set_color,
+        }
         for ann in db_annotations
     ]
 
@@ -451,12 +547,17 @@ async def export_annotated_pdf(
         return Response(content=pdf_bytes, media_type="application/pdf")
 
     from app.services import pdf_annotator
+
     try:
-        annotated_bytes = pdf_annotator.export_annotated_pdf(pdf_bytes, annotations_list)
+        annotated_bytes = pdf_annotator.export_annotated_pdf(
+            pdf_bytes, annotations_list
+        )
         return Response(
             content=annotated_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="annotated_{pdf.filename.split("/")[-1]}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="annotated_{pdf.filename.split("/")[-1]}"'
+            },
         )
     except Exception:
         logger.exception("Failed to export annotated PDF for pdf_id=%s", pdf_id)

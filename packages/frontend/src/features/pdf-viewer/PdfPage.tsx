@@ -7,11 +7,19 @@ import type { PdfTextLayerHandle } from './PdfTextLayer';
 import { PdfSelectionLayer } from './PdfSelectionLayer';
 import { PdfAnnotationLayer } from './PdfAnnotationLayer';
 import { PdfChatHighlightLayer } from './PdfChatHighlightLayer';
+import {
+  DEFAULT_PAGE_DIMENSIONS,
+  getPageDimensionsFromViewport,
+  getScaledPageSize,
+  hasSameDimensions,
+  type PageDimensions,
+} from './pdfPageLayout';
 
 interface PdfPageProps {
   pdfDocument: PDFDocumentProxy;
   pageNumber: number;
   pdfId: string;
+  estimatedDimensions?: PageDimensions;
 }
 
 /**
@@ -30,6 +38,7 @@ export const PdfPage = ({
   pdfDocument,
   pageNumber,
   pdfId,
+  estimatedDimensions,
 }: PdfPageProps) => {
   const ref = useRef<HTMLDivElement>(null);
   const textLayerHandleRef = useRef<PdfTextLayerHandle>(null);
@@ -42,6 +51,7 @@ export const PdfPage = ({
   const dimensions = useNewPdfViewerStore((s) =>
     s.pageDimensions.get(pageNumber),
   );
+  const setPageDimensions = useNewPdfViewerStore((s) => s.setPageDimensions);
 
   // ---- Load page proxy (shared between canvas and text layer) ----
   useEffect(() => {
@@ -50,7 +60,18 @@ export const PdfPage = ({
     (async () => {
       try {
         const page = await pdfDocument.getPage(pageNumber);
-        if (!cancelled) setPageProxy(page);
+        if (!cancelled) {
+          const nextDimensions = getPageDimensionsFromViewport(
+            page.getViewport({ scale: 1.0 }),
+          );
+          const currentDimensions =
+            useNewPdfViewerStore.getState().pageDimensions.get(pageNumber);
+
+          setPageProxy(page);
+          if (!hasSameDimensions(currentDimensions, nextDimensions)) {
+            setPageDimensions(pageNumber, nextDimensions);
+          }
+        }
       } catch (error) {
         console.error(`Failed to load page ${pageNumber}`, error);
       }
@@ -59,7 +80,7 @@ export const PdfPage = ({
     return () => {
       cancelled = true;
     };
-  }, [pdfDocument, pageNumber]);
+  }, [pdfDocument, pageNumber, setPageDimensions]);
 
   // ---- IntersectionObserver for canvas virtualisation ----
   useEffect(() => {
@@ -85,11 +106,13 @@ export const PdfPage = ({
   }, [pageNumber]);
 
   // Scaled placeholder size
-  const isQuarterTurn = rotation === 90 || rotation === 270;
-  const baseWidth = dimensions ? dimensions.baseWidth : 612;
-  const baseHeight = dimensions ? dimensions.baseHeight : 792;
-  const w = (isQuarterTurn ? baseHeight : baseWidth) * zoom;
-  const h = (isQuarterTurn ? baseWidth : baseHeight) * zoom;
+  const activeDimensions =
+    dimensions ?? estimatedDimensions ?? DEFAULT_PAGE_DIMENSIONS;
+  const { width: w, height: h } = getScaledPageSize(
+    activeDimensions,
+    zoom,
+    rotation,
+  );
 
   return (
     <div

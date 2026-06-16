@@ -33,19 +33,16 @@ def sample_pdf():
 # download_to_tempfile — GitHub
 # ---------------------------------------------------------------------------
 
-class TestDownloadGitHub:
 
+class TestDownloadGitHub:
     async def test_download_from_github_success(self, download_service, sample_pdf):
         with respx.mock as mock:
             login = "testuser"
             filename = "paper.pdf"
             url = (
-                "https://api.github.com/repos/"
-                f"{login}/{REPO_NAME}/contents/{filename}"
+                f"https://api.github.com/repos/{login}/{REPO_NAME}/contents/{filename}"
             )
-            mock.get(url).mock(
-                return_value=Response(200, content=sample_pdf)
-            )
+            mock.get(url).mock(return_value=Response(200, content=sample_pdf))
 
             with patch(
                 "app.services.pdf_download_service.decrypt_token",
@@ -69,10 +66,7 @@ class TestDownloadGitHub:
     async def test_download_from_github_api_error(self, download_service):
         with respx.mock as mock:
             login = "testuser"
-            url = (
-                "https://api.github.com/repos/"
-                f"{login}/{REPO_NAME}/contents/paper.pdf"
-            )
+            url = f"https://api.github.com/repos/{login}/{REPO_NAME}/contents/paper.pdf"
             mock.get(url).mock(
                 return_value=Response(404, json={"message": "Not Found"})
             )
@@ -105,14 +99,12 @@ class TestDownloadGitHub:
 # download_to_tempfile — External URL
 # ---------------------------------------------------------------------------
 
-class TestDownloadExternalUrl:
 
+class TestDownloadExternalUrl:
     async def test_download_from_url_success(self, download_service, sample_pdf):
         url = "https://example.com/paper.pdf"
         with respx.mock as mock:
-            mock.get(url).mock(
-                return_value=Response(200, content=sample_pdf)
-            )
+            mock.get(url).mock(return_value=Response(200, content=sample_pdf))
 
             result = await download_service.download_to_tempfile(
                 source=PdfSource.EXTERNAL_URL,
@@ -151,19 +143,16 @@ class TestDownloadExternalUrl:
 # download_to_bytes
 # ---------------------------------------------------------------------------
 
-class TestDownloadToBytes:
 
+class TestDownloadToBytes:
     async def test_download_github_bytes(self, download_service, sample_pdf):
         with respx.mock as mock:
             login = "testuser"
             filename = "paper.pdf"
             url = (
-                "https://api.github.com/repos/"
-                f"{login}/{REPO_NAME}/contents/{filename}"
+                f"https://api.github.com/repos/{login}/{REPO_NAME}/contents/{filename}"
             )
-            mock.get(url).mock(
-                return_value=Response(200, content=sample_pdf)
-            )
+            mock.get(url).mock(return_value=Response(200, content=sample_pdf))
 
             with patch(
                 "app.services.pdf_download_service.decrypt_token",
@@ -181,9 +170,7 @@ class TestDownloadToBytes:
     async def test_download_url_bytes(self, download_service, sample_pdf):
         url = "https://example.com/paper.pdf"
         with respx.mock as mock:
-            mock.get(url).mock(
-                return_value=Response(200, content=sample_pdf)
-            )
+            mock.get(url).mock(return_value=Response(200, content=sample_pdf))
 
             result = await download_service.download_to_bytes(
                 source=PdfSource.EXTERNAL_URL,
@@ -206,8 +193,8 @@ class TestDownloadToBytes:
 # Invalid source
 # ---------------------------------------------------------------------------
 
-class TestInvalidSource:
 
+class TestInvalidSource:
     async def test_invalid_source_download_to_tempfile(self, download_service):
         # Pass a valid source name but missing required params
         with pytest.raises(InvalidPdfSourceError):

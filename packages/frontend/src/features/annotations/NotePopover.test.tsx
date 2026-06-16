@@ -146,6 +146,32 @@ describe('NotePopover', () => {
         expect(mockOnClose).toHaveBeenCalled()
     })
 
+    it('does not close when clicking inside a Radix portal (e.g. Select dropdown)', () => {
+        const annotation = createMockAnnotation({ type: 'note' })
+
+        render(
+            <NotePopover
+                annotation={annotation}
+                containerDims={mockContainerDims}
+                onClose={mockOnClose}
+            />
+        )
+
+        // Simulate a Radix Select portal rendered to document.body
+        const portal = document.createElement('div')
+        portal.setAttribute('data-radix-popper-content-wrapper', '')
+        const option = document.createElement('div')
+        option.textContent = 'Simpler'
+        portal.appendChild(option)
+        document.body.appendChild(portal)
+
+        fireEvent.mouseDown(option)
+
+        expect(mockOnClose).not.toHaveBeenCalled()
+
+        document.body.removeChild(portal)
+    })
+
     it('renders AI badge and strips header for AI-generated explanations', () => {
         const annotation = createMockAnnotation({
             type: 'highlight',
@@ -232,6 +258,36 @@ describe('NotePopover', () => {
         expect(screen.getByText('AI Paraphrase')).toBeInTheDocument()
         expect(screen.getByText('Simpler')).toBeInTheDocument()
         expect(screen.getByText('Generated paraphrase body.')).toBeInTheDocument()
+    })
+
+    it('shows a copy button on the paraphrase tab and copies content to clipboard', async () => {
+        const annotation = createMockAnnotation({
+            type: 'highlight',
+            note_content: null,
+            metadata: {
+                ai_paraphrase: {
+                    content: 'Generated paraphrase body.',
+                    generated_at: '2026-04-25 13:20 UTC',
+                    level: 'simpler',
+                },
+            },
+        })
+
+        render(
+            <NotePopover
+                annotation={annotation}
+                containerDims={mockContainerDims}
+                onClose={mockOnClose}
+            />
+        )
+
+        const copyButton = screen.getByTitle('Copy to clipboard')
+        fireEvent.click(copyButton)
+
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Generated paraphrase body.')
+        await waitFor(() => {
+            expect(screen.getByText('Copied!')).toBeInTheDocument()
+        })
     })
 
     it('renders the explain action on the explanation tab', () => {

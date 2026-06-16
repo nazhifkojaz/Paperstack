@@ -35,6 +35,7 @@ export const TopBar = () => {
                         size="icon"
                         className="h-9 w-9"
                         onClick={() => setSettingsOpen(true)}
+                        data-tour="topbar-settings"
                     >
                         <Settings className="h-5 w-5" />
                         <span className="sr-only">Settings</span>

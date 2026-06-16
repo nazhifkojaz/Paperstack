@@ -45,4 +45,6 @@ async def get_storage_backend(user: User, db: AsyncSession) -> StorageBackend:
     if user.storage_provider == "google":
         return GoogleDriveStorageBackend(oauth_account=oauth_account, db=db)
 
-    raise HTTPException(status_code=400, detail=f"Unknown storage provider: {user.storage_provider}")
+    raise HTTPException(
+        status_code=400, detail=f"Unknown storage provider: {user.storage_provider}"
+    )

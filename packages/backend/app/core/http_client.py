@@ -4,6 +4,7 @@ Provides shared httpx.AsyncClient instances with connection pooling
 for LLM and embedding services. Reduces TCP handshake overhead
 and improves performance under load.
 """
+
 import httpx
 from fastapi import FastAPI
 from app.core.config import settings

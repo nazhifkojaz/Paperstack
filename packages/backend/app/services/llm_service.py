@@ -1,4 +1,5 @@
 """LLM service for auto-highlight paper analysis and chat streaming."""
+
 from __future__ import annotations
 
 import json
@@ -37,19 +38,9 @@ def _openrouter_model(
 
 OPENROUTER_MODELS = [
     _openrouter_model(
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "Nemotron 3 Super 120B",
-        "NVIDIA's large model, good general-purpose quality",
-    ),
-    _openrouter_model(
         "openai/gpt-oss-120b:free",
         "GPT-OSS 120B",
         "OpenAI's open-source 120B model",
-    ),
-    _openrouter_model(
-        "inclusionai/ring-2.6-1t:free",
-        "Ring 2.6 1T",
-        "InclusionAI's large 1T parameter model",
     ),
     _openrouter_model(
         "z-ai/glm-4.5-air:free",
@@ -62,11 +53,6 @@ OPENROUTER_MODELS = [
         "MiniMax's efficient long-context model",
     ),
     _openrouter_model(
-        "anthropic/claude-fable-5",
-        "Claude Fable 5",
-        "Anthropic's Claude Fable model through OpenRouter",
-    ),
-    _openrouter_model(
         "nex-agi/nex-n2-pro:free",
         "Nex N2 Pro",
         "Nex AGI's N2 Pro model",
@@ -75,6 +61,16 @@ OPENROUTER_MODELS = [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "Nemotron 3 Ultra 550B",
         "NVIDIA's ultra-scale Nemotron 3 model",
+    ),
+    _openrouter_model(
+        "moonshotai/kimi-k2.6:free",
+        "Kimi K2.6",
+        "Moonshot AI's Kimi K2.6 model",
+    ),
+    _openrouter_model(
+        "anthropic/claude-fable-5",
+        "Claude Fable 5",
+        "Anthropic's Claude Fable model through OpenRouter",
     ),
     _openrouter_model(
         "qwen/qwen3.7-plus",
@@ -121,11 +117,6 @@ OPENROUTER_MODELS = [
         "Qwen3.6 Plus",
         "Qwen's plus model through OpenRouter",
     ),
-    _openrouter_model(
-        "moonshotai/kimi-k2.6:free",
-        "Kimi K2.6",
-        "Moonshot AI's Kimi K2.6 model",
-    ),
 ]
 
 FREE_MODELS = [m for m in OPENROUTER_MODELS if not m["requires_byok"]]
@@ -168,7 +159,7 @@ def _parse_highlights_json(raw_response: str | None) -> list[HighlightDict]:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', ' ', cleaned)
+        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', " ", cleaned)
         try:
             data = json.loads(sanitized)
         except json.JSONDecodeError as e:
@@ -179,12 +170,14 @@ def _parse_highlights_json(raw_response: str | None) -> list[HighlightDict]:
 
     highlights = []
     for item in data:
-        highlights.append({
-            "text": item.get("text", ""),
-            "page": item.get("page", 0),
-            "category": item.get("category", "unknown"),
-            "reason": item.get("reason", ""),
-        })
+        highlights.append(
+            {
+                "text": item.get("text", ""),
+                "page": item.get("page", 0),
+                "category": item.get("category", "unknown"),
+                "reason": item.get("reason", ""),
+            }
+        )
 
     return highlights
 
@@ -201,7 +194,9 @@ def _check_openrouter_error(data: dict) -> None:
         raise LLMProviderError("openrouter", 0, error_msg)
 
 
-def _parse_queries_json(raw_response: str | None, categories: list[str]) -> dict[str, str]:
+def _parse_queries_json(
+    raw_response: str | None, categories: list[str]
+) -> dict[str, str]:
     """Parse LLM response into a {category: query} dict."""
     if not raw_response:
         logger.warning("Empty LLM response in query generation")
@@ -210,7 +205,7 @@ def _parse_queries_json(raw_response: str | None, categories: list[str]) -> dict
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', ' ', cleaned)
+        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', " ", cleaned)
         try:
             data = json.loads(sanitized)
         except json.JSONDecodeError as e:
@@ -265,7 +260,9 @@ class LLMService:
     ) -> str:
         client = self._require_client()
         try:
-            resp = await client.post(url, headers=headers, json=json_body, timeout=timeout)
+            resp = await client.post(
+                url, headers=headers, json=json_body, timeout=timeout
+            )
         except httpx.TimeoutException:
             raise LLMProviderError(provider_name, 0, timeout_msg)
         try:
@@ -279,7 +276,14 @@ class LLMService:
             on_response(data)
         return extract_fn(data)
 
-    async def call_openrouter(self, system_prompt: str, user_prompt: str, api_key: str, model: str = DEFAULT_FREE_MODEL, reasoning_effort: str | None = None) -> str:
+    async def call_openrouter(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        api_key: str,
+        model: str = DEFAULT_FREE_MODEL,
+        reasoning_effort: str | None = None,
+    ) -> str:
         """Call OpenRouter API (OpenAI-compatible) and return text content.
 
         When reasoning_effort is set (e.g. "medium"), OpenRouter will enable
@@ -292,7 +296,9 @@ class LLMService:
         """
         logger.info(
             "Calling OpenRouter %s (prompt: %d chars, reasoning: %s)",
-            model, len(user_prompt), reasoning_effort or "off",
+            model,
+            len(user_prompt),
+            reasoning_effort or "off",
         )
 
         json_body: dict[str, Any] = {
@@ -316,12 +322,16 @@ class LLMService:
 
         # Use a longer read timeout for reasoning calls to avoid
         # httpx-side timeouts while the model is thinking
-        call_timeout = httpx.Timeout(
-            connect=10.0,
-            read=settings.OPENROUTER_REASONING_TIMEOUT_READ,
-            write=10.0,
-            pool=10.0,
-        ) if reasoning_effort else None
+        call_timeout = (
+            httpx.Timeout(
+                connect=10.0,
+                read=settings.OPENROUTER_REASONING_TIMEOUT_READ,
+                write=10.0,
+                pool=10.0,
+            )
+            if reasoning_effort
+            else None
+        )
 
         try:
             result = await self._call_provider(
@@ -343,7 +353,8 @@ class LLMService:
                 raise
             logger.warning(
                 "OpenRouter reasoning call failed (status=%d), retrying without reasoning: %s",
-                e.status_code, e,
+                e.status_code,
+                e,
             )
             self.last_reasoning_trace = None
             del json_body["reasoning"]
@@ -355,7 +366,9 @@ class LLMService:
                 provider_name="openrouter",
                 pre_check_fn=_check_openrouter_error,
             )
-            logger.info("OpenRouter responded successfully (fallback without reasoning)")
+            logger.info(
+                "OpenRouter responded successfully (fallback without reasoning)"
+            )
             return result
 
     # --- Streaming methods for chat ---
@@ -385,7 +398,11 @@ class LLMService:
                         continue
 
     async def stream_openrouter(
-        self, system_prompt: str, messages: list[ChatMessageDict], api_key: str, model: str = DEFAULT_FREE_MODEL
+        self,
+        system_prompt: str,
+        messages: list[ChatMessageDict],
+        api_key: str,
+        model: str = DEFAULT_FREE_MODEL,
     ) -> AsyncIterator[str]:
         """Stream tokens from OpenRouter (OpenAI-compatible SSE)."""
         async for token in self._stream_openai_compatible(
@@ -418,7 +435,9 @@ class LLMService:
             return []
 
         cat_defs = "\n".join(
-            f"- {k}: {CATEGORY_DEFINITIONS[k]}" for k in categories if k in CATEGORY_DEFINITIONS
+            f"- {k}: {CATEGORY_DEFINITIONS[k]}"
+            for k in categories
+            if k in CATEGORY_DEFINITIONS
         )
 
         numbered = []
@@ -466,8 +485,18 @@ CRITICAL:
 {passages_block}"""
 
         if provider == "openrouter":
-            reasoning_effort = settings.OPENROUTER_REASONING_EFFORT if settings.OPENROUTER_REASONING_ENABLED else None
-            raw = await self.call_openrouter(system_prompt, user_prompt, api_key, model=model or DEFAULT_FREE_MODEL, reasoning_effort=reasoning_effort)
+            reasoning_effort = (
+                settings.OPENROUTER_REASONING_EFFORT
+                if settings.OPENROUTER_REASONING_ENABLED
+                else None
+            )
+            raw = await self.call_openrouter(
+                system_prompt,
+                user_prompt,
+                api_key,
+                model=model or DEFAULT_FREE_MODEL,
+                reasoning_effort=reasoning_effort,
+            )
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -514,9 +543,15 @@ CRITICAL:
 
         try:
             if provider == "openrouter":
-                reasoning_effort = settings.OPENROUTER_REASONING_EFFORT if settings.OPENROUTER_REASONING_ENABLED else None
+                reasoning_effort = (
+                    settings.OPENROUTER_REASONING_EFFORT
+                    if settings.OPENROUTER_REASONING_ENABLED
+                    else None
+                )
                 raw = await self.call_openrouter(
-                    system_prompt, user_prompt, api_key,
+                    system_prompt,
+                    user_prompt,
+                    api_key,
                     model=model or DEFAULT_FREE_MODEL,
                     reasoning_effort=reasoning_effort,
                 )

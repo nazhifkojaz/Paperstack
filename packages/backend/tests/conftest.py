@@ -2,6 +2,7 @@
 
 Uses PostgreSQL via testcontainers to match production behavior.
 """
+
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator, Generator
 
@@ -19,6 +20,7 @@ def pytest_configure(config):
     from slowapi import Limiter
     from app.middleware.rate_limit import get_identifier
     from app.main import app
+
     app.state.limiter = Limiter(
         key_func=get_identifier, default_limits=["1000000/minute"]
     )
@@ -50,7 +52,9 @@ def test_engine(postgres_container: PostgresContainer):
 
     connection_url = postgres_container.get_connection_url()
     # Convert postgresql+psycopg2:// to postgresql+asyncpg:// for async SQLAlchemy
-    async_url = connection_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    async_url = connection_url.replace(
+        "postgresql+psycopg2://", "postgresql+asyncpg://"
+    )
     async_url = async_url.replace("postgresql://", "postgresql+asyncpg://")
 
     # Use NullPool to avoid connection sharing issues across tests
@@ -76,6 +80,7 @@ async def _db_tables(test_engine):
     """
     async with test_engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS training_data"))
         await conn.run_sync(Base.metadata.create_all)
     yield
     async with test_engine.begin() as conn:
@@ -244,11 +249,7 @@ def expired_token(test_user: User) -> str:
     from app.core.security import SECRET_KEY, ALGORITHM
 
     expire = datetime.now(timezone.utc) - timedelta(hours=1)
-    to_encode = {
-        "exp": expire,
-        "sub": str(test_user.id),
-        "type": "access"
-    }
+    to_encode = {"exp": expire, "sub": str(test_user.id), "type": "access"}
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -310,23 +311,25 @@ def mock_github_api() -> Generator[respx.MockRouter, None, None]:
                 json={"content": {"sha": "abc123def456", "name": "test.pdf"}},
             )
 
-    respx.get(host__regex=r"api\.github\.com", path__regex=r"/repos/.*contents/.*").mock(side_effect=side_effect_get_pdf)
+    respx.get(
+        host__regex=r"api\.github\.com", path__regex=r"/repos/.*contents/.*"
+    ).mock(side_effect=side_effect_get_pdf)
 
     # Mock PUT requests for uploading PDFs
-    respx.put(host__regex=r"api\.github\.com", path__regex=r"/repos/.*contents/.*").mock(
+    respx.put(
+        host__regex=r"api\.github\.com", path__regex=r"/repos/.*contents/.*"
+    ).mock(
         return_value=Response(
             201,
             json={"content": {"sha": "abc123def456", "name": "test.pdf"}},
         )
     )
 
-    respx.route(host__regex=r"raw\.githubusercontent\.com", path__regex=r"/.*\.pdf").mock(
-        return_value=Response(200, content=MINIMAL_PDF)
-    )
+    respx.route(
+        host__regex=r"raw\.githubusercontent\.com", path__regex=r"/.*\.pdf"
+    ).mock(return_value=Response(200, content=MINIMAL_PDF))
 
-    respx.delete(host__regex=r"api\.github\.com").mock(
-        return_value=Response(200)
-    )
+    respx.delete(host__regex=r"api\.github\.com").mock(return_value=Response(200))
 
     yield respx
     respx.stop()
@@ -345,7 +348,7 @@ def mock_crossref_api() -> Generator[respx.MockRouter, None, None]:
             if "application/x-bibtex" in accept_header:
                 return Response(
                     200,
-                    text='@article{test2024,\n  title = {Test Paper Title},\n  author = {Doe, John and Smith, Jane},\n  year = {2024}\n}'
+                    text="@article{test2024,\n  title = {Test Paper Title},\n  author = {Doe, John and Smith, Jane},\n  year = {2024}\n}",
                 )
             # CSL-JSON content negotiation (default)
             return Response(
@@ -358,7 +361,7 @@ def mock_crossref_api() -> Generator[respx.MockRouter, None, None]:
                     ],
                     "issued": {"date-parts": [[2024, 1, 1]]},
                     "type": "journal-article",
-                }
+                },
             )
         # Not found for other DOIs
         return Response(404, text="Not Found")
@@ -383,7 +386,7 @@ def mock_openlibrary_api() -> Generator[respx.MockRouter, None, None]:
                     "title": "Introduction to Algorithms",
                     "authors": [{"name": "Thomas H. Cormen"}],
                     "publish_date": "2009",
-                    "publishers": [{"name": "MIT Press"}]
+                    "publishers": [{"name": "MIT Press"}],
                 }
             },
         )
@@ -430,7 +433,7 @@ def sample_pdf_bytes() -> bytes:
 @pytest.fixture
 def sample_bibtex() -> str:
     """Return a sample BibTeX citation string."""
-    return '@article{test2024, title={Test Paper Title}, author={Doe, John}, journal={Journal of Tests}, year={2024}}'
+    return "@article{test2024, title={Test Paper Title}, author={Doe, John}, journal={Journal of Tests}, year={2024}}"
 
 
 @pytest.fixture(autouse=True)
@@ -449,4 +452,5 @@ def set_test_env_vars(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     # Also patch the settings object directly since pydantic-settings may cache values
     from app.core.config import settings
+
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)

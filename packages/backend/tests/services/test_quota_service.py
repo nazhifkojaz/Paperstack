@@ -1,4 +1,5 @@
 """Tests for daily per-user quota management."""
+
 from datetime import date
 
 import pytest
@@ -89,9 +90,15 @@ class TestQuotaService:
         self, db_session, test_user, quota_service, monkeypatch
     ):
         monkeypatch.setattr("app.core.config.settings.QUOTA_CHAT_DAILY", 50)
-        monkeypatch.setattr("app.core.config.settings.QUOTA_EXPLAIN_PARAPHRASE_DAILY", 30)
-        monkeypatch.setattr("app.core.config.settings.QUOTA_AUTO_HIGHLIGHT_QUICK_DAILY", 5)
-        monkeypatch.setattr("app.core.config.settings.QUOTA_AUTO_HIGHLIGHT_THOROUGH_DAILY", 3)
+        monkeypatch.setattr(
+            "app.core.config.settings.QUOTA_EXPLAIN_PARAPHRASE_DAILY", 30
+        )
+        monkeypatch.setattr(
+            "app.core.config.settings.QUOTA_AUTO_HIGHLIGHT_QUICK_DAILY", 5
+        )
+        monkeypatch.setattr(
+            "app.core.config.settings.QUOTA_AUTO_HIGHLIGHT_THOROUGH_DAILY", 3
+        )
 
         db_session.add(
             UserUsageQuota(
