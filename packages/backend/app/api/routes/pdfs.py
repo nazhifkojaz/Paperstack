@@ -84,6 +84,53 @@ def _create_default_set(pdf_id: uuid.UUID, user_id: uuid.UUID) -> AnnotationSet:
     )
 
 
+async def _attach_pdf_to_collections(
+    db: AsyncSession,
+    pdf_id: uuid.UUID,
+    user_id: uuid.UUID,
+    collection_ids: list[uuid.UUID],
+) -> None:
+    """Attach a PDF to the user's collections that actually exist."""
+    if not collection_ids:
+        return
+    stmt = select(Collection).where(
+        Collection.id.in_(collection_ids),
+        Collection.user_id == user_id,
+    )
+    valid_collections = (await db.execute(stmt)).scalars().all()
+    for collection in valid_collections:
+        db.add(PdfCollection(pdf_id=pdf_id, collection_id=collection.id))
+
+
+def _parse_project_ids(project_ids: str | None) -> list[uuid.UUID]:
+    """Parse a comma-separated project_id string from a form upload."""
+    if not project_ids:
+        return []
+    try:
+        return [uuid.UUID(pid.strip()) for pid in project_ids.split(",") if pid.strip()]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid project_id format") from exc
+
+
+async def _persist_pdf_with_defaults(
+    db: AsyncSession,
+    pdf: Pdf,
+    user_id: uuid.UUID,
+    collection_ids: list[uuid.UUID],
+) -> Pdf:
+    """Persist a Pdf row, create its default annotation set, attach collections,
+    commit, and start background indexing.
+    """
+    db.add(pdf)
+    await db.flush()
+    db.add(_create_default_set(pdf.id, user_id))
+    await _attach_pdf_to_collections(db, pdf.id, user_id, collection_ids)
+    await db.commit()
+    await db.refresh(pdf)
+    asyncio.create_task(_run_index_background(pdf.id, user_id))
+    return pdf
+
+
 @router.post("/upload", response_model=PdfResponse)
 async def upload_pdf(
     file: UploadFile = File(...),
@@ -119,29 +166,9 @@ async def upload_pdf(
         doi=doi,
         isbn=isbn,
     )
-    db.add(pdf)
-    await db.flush()
-
-    db.add(_create_default_set(pdf.id, current_user.id))
-
-    if project_ids:
-        try:
-            parsed_ids = [uuid.UUID(pid.strip()) for pid in project_ids.split(",") if pid.strip()]
-        except ValueError:
-            raise HTTPException(status_code=422, detail="Invalid project_id format")
-        if parsed_ids:
-            stmt = select(Collection).where(
-                Collection.id.in_(parsed_ids),
-                Collection.user_id == current_user.id,
-            )
-            valid_collections = (await db.execute(stmt)).scalars().all()
-            for collection in valid_collections:
-                db.add(PdfCollection(pdf_id=pdf.id, collection_id=collection.id))
-
-    await db.commit()
-    await db.refresh(pdf)
-    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
-    return pdf
+    return await _persist_pdf_with_defaults(
+        db, pdf, current_user.id, _parse_project_ids(project_ids)
+    )
 
 
 @router.post("/check-url", response_model=PdfUrlCheckResponse)
@@ -236,23 +263,9 @@ async def link_pdf(
         doi=data.doi,
         isbn=data.isbn,
     )
-    db.add(pdf)
-    await db.flush()
-    db.add(_create_default_set(pdf_id, current_user.id))
-
-    if data.project_ids:
-        stmt = select(Collection).where(
-            Collection.id.in_(data.project_ids),
-            Collection.user_id == current_user.id,
-        )
-        valid_collections = (await db.execute(stmt)).scalars().all()
-        for collection in valid_collections:
-            db.add(PdfCollection(pdf_id=pdf_id, collection_id=collection.id))
-
-    await db.commit()
-    await db.refresh(pdf)
-    asyncio.create_task(_run_index_background(pdf.id, current_user.id))
-    return pdf
+    return await _persist_pdf_with_defaults(
+        db, pdf, current_user.id, data.project_ids or []
+    )
 
 
 @router.get("", response_model=List[PdfResponse])
