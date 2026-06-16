@@ -2,7 +2,11 @@
 
 import uuid
 from io import BytesIO
+
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from app.db.models import AnnotationSet
 from tests.fixtures import (
     create_test_pdf,
     create_test_annotation_set,
@@ -10,6 +14,16 @@ from tests.fixtures import (
     create_test_collection,
     create_test_pdf_collection,
 )
+
+
+def _assert_default_annotation_set(default_set, pdf_id, user_id):
+    """Shared assertions for the auto-created default annotation set."""
+    assert default_set is not None
+    assert default_set.pdf_id == pdf_id
+    assert default_set.user_id == user_id
+    assert default_set.name == "Default"
+    assert default_set.color == "#FFFF00"
+    assert default_set.source == "manual"
 
 
 class TestUploadPdf:
@@ -83,6 +97,31 @@ class TestUploadPdf:
         )
 
         assert response.status_code == 200
+
+    async def test_upload_pdf_creates_default_annotation_set(
+        self, client: AsyncClient, auth_headers, db_session, test_user, mock_github_api, sample_pdf_bytes
+    ) -> None:
+        """Uploading a PDF should create a default annotation set."""
+        files = {"file": ("test.pdf", BytesIO(sample_pdf_bytes), "application/pdf")}
+        data = {"title": "Default Set Test"}
+
+        response = await client.post(
+            "/v1/pdfs/upload",
+            files=files,
+            data=data,
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        pdf_id = uuid.UUID(response.json()["id"])
+
+        result = await db_session.execute(
+            select(AnnotationSet).where(
+                AnnotationSet.pdf_id == pdf_id,
+                AnnotationSet.user_id == test_user.id,
+            )
+        )
+        _assert_default_annotation_set(result.scalar_one_or_none(), pdf_id, test_user.id)
 
 
 class TestListPdfs:
@@ -602,6 +641,30 @@ class TestLinkPdf:
         )
 
         assert response.status_code == 401
+
+    async def test_link_pdf_creates_default_annotation_set(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Linking a PDF should create a default annotation set."""
+        response = await client.post(
+            "/v1/pdfs/link",
+            json={
+                "title": "Linked Default Set Test",
+                "source_url": "https://example.com/paper.pdf",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        pdf_id = uuid.UUID(response.json()["id"])
+
+        result = await db_session.execute(
+            select(AnnotationSet).where(
+                AnnotationSet.pdf_id == pdf_id,
+                AnnotationSet.user_id == test_user.id,
+            )
+        )
+        _assert_default_annotation_set(result.scalar_one_or_none(), pdf_id, test_user.id)
 
 
 class TestGetPdfCollections:

@@ -1,5 +1,6 @@
 import uuid
 from collections import namedtuple
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,17 @@ from tests.fixtures import (
 from tests.helpers import make_resolve_result as _make_resolve_result, init_http_clients
 
 _Passage = namedtuple("_Passage", ["content"])
+
+
+@contextmanager
+def _patched_session(cache_row=None, mock_session=None):
+    """Patch SessionLocal so auto-highlight helpers use a deterministic session."""
+    if mock_session is None:
+        mock_session = _mock_session(return_scalars=cache_row)
+    with patch("app.api.routes.auto_highlight.SessionLocal") as mock_sl:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=None)
+        yield mock_session
 
 
 @pytest.mark.asyncio
@@ -548,6 +560,7 @@ def _mock_session(return_scalars=None):
         scalar_result = MagicMock()
         scalar_result.scalars = MagicMock(return_value=MagicMock())
         scalar_result.scalar_one_or_none = MagicMock(return_value=return_scalars)
+        scalar_result.scalar_one = MagicMock(return_value=return_scalars)
         session.execute = AsyncMock(return_value=scalar_result)
     else:
         session.execute = AsyncMock()
@@ -1310,3 +1323,206 @@ async def test_run_analysis_background_setup_failure_no_shortlist():
         )
 
         mock_mark_failed.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _persist_thorough_batch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_thorough_batch_adds_annotations_and_progress():
+    from app.api.routes.auto_highlight import _persist_thorough_batch
+    from app.db.models import Annotation
+
+    cache_id = uuid.uuid4()
+    set_id = uuid.uuid4()
+    cache_row = MagicMock()
+    cache_row.status = "running"
+    cache_row.progress_pct = 0
+
+    highlights = [
+        {"text": "finding one", "page": 1, "category": "findings", "reason": "r1"},
+        {"text": "finding two", "page": 2, "category": "findings", "reason": "r2"},
+    ]
+
+    with _patched_session(cache_row) as mock_session:
+        result = await _persist_thorough_batch(
+            cache_id=cache_id,
+            set_id=set_id,
+            batch_highlights=highlights,
+            completed_count=2,
+            total_batches=3,
+        )
+
+    assert result is True
+    assert cache_row.progress_pct == 66
+
+    added = [call.args[0] for call in mock_session.add.call_args_list]
+    annotations = [a for a in added if isinstance(a, Annotation)]
+    assert len(annotations) == 2
+    assert annotations[0].selected_text == "finding one"
+    assert annotations[0].page_number == 1
+    assert annotations[1].selected_text == "finding two"
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_persist_thorough_batch_returns_false_when_cancelled():
+    from app.api.routes.auto_highlight import _persist_thorough_batch
+
+    cache_row = MagicMock()
+    cache_row.status = "cancelled"
+
+    with _patched_session(cache_row) as mock_session:
+        result = await _persist_thorough_batch(
+            cache_id=uuid.uuid4(),
+            set_id=uuid.uuid4(),
+            batch_highlights=[],
+            completed_count=1,
+            total_batches=2,
+        )
+
+    assert result is False
+    mock_session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_persist_thorough_batch_returns_false_on_db_error():
+    from app.api.routes.auto_highlight import _persist_thorough_batch
+
+    cache_row = MagicMock()
+    cache_row.status = "running"
+
+    mock_session = _mock_session(return_scalars=cache_row)
+    mock_session.commit = AsyncMock(side_effect=RuntimeError("DB down"))
+
+    with (
+        _patched_session(mock_session=mock_session),
+        patch(
+            "app.api.routes.auto_highlight._mark_cache_failed",
+            new_callable=AsyncMock,
+        ) as mock_mark_failed,
+    ):
+        result = await _persist_thorough_batch(
+            cache_id=uuid.uuid4(),
+            set_id=uuid.uuid4(),
+            batch_highlights=[
+                {"text": "finding", "page": 1, "category": "findings", "reason": "r"},
+            ],
+            completed_count=1,
+            total_batches=1,
+        )
+
+    assert result is False
+    mock_mark_failed.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _finalize_thorough_results
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_finalize_thorough_results_marks_complete():
+    from app.api.routes.auto_highlight import _finalize_thorough_results
+
+    cache_id = uuid.uuid4()
+    cache_row = MagicMock()
+    cache_row.status = "running"
+    cache_row.progress_pct = 66
+    cache_row.llm_response = None
+    cache_row.reasoning_trace = None
+
+    with _patched_session(cache_row):
+        result = await _finalize_thorough_results(
+            cache_id=cache_id,
+            all_highlights=[{"text": "finding", "page": 1, "category": "findings"}],
+            batch_reasoning_traces=[(1, 2, "reasoning one"), (2, 2, "reasoning two")],
+        )
+
+    assert result is True
+    assert cache_row.status == "complete"
+    assert cache_row.progress_pct == 100
+    assert cache_row.llm_response == [{"text": "finding", "page": 1, "category": "findings"}]
+    assert "## Batch 1/2" in cache_row.reasoning_trace
+    assert "reasoning one" in cache_row.reasoning_trace
+
+
+@pytest.mark.asyncio
+async def test_finalize_thorough_results_no_highlights_marks_failed():
+    from app.api.routes.auto_highlight import _finalize_thorough_results
+
+    cache_row = MagicMock()
+    cache_row.status = "running"
+    cache_row.progress_pct = 50
+
+    with _patched_session(cache_row):
+        result = await _finalize_thorough_results(
+            cache_id=uuid.uuid4(),
+            all_highlights=[],
+            batch_reasoning_traces=[],
+        )
+
+    assert result is False
+    assert cache_row.status == "failed"
+    assert cache_row.progress_pct == 100
+    assert "No highlight-worthy passages" in cache_row.llm_response["error"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_thorough_results_returns_false_when_cancelled():
+    from app.api.routes.auto_highlight import _finalize_thorough_results
+
+    cache_row = MagicMock()
+    cache_row.status = "cancelled"
+
+    with _patched_session(cache_row) as mock_session:
+        result = await _finalize_thorough_results(
+            cache_id=uuid.uuid4(),
+            all_highlights=[{"text": "finding", "page": 1, "category": "findings"}],
+            batch_reasoning_traces=[],
+        )
+
+    assert result is False
+    mock_session.commit.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# _run_analysis_background — cancellation checkpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_analysis_background_stops_when_cancelled_before_start():
+    from app.api.routes.auto_highlight import _run_analysis_background
+
+    cache_id = uuid.uuid4()
+    mock_cache = MagicMock()
+    mock_cache.id = cache_id
+    mock_cache.status = "cancelled"
+
+    with (
+        _patched_session(mock_cache),
+        patch(
+            "app.api.routes.auto_highlight._is_cache_cancelled",
+            new_callable=AsyncMock,
+        ) as mock_is_cancelled,
+    ):
+        mock_is_cancelled.return_value = True
+
+        await _run_analysis_background(
+            cache_id=cache_id,
+            pdf_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            categories=["findings"],
+            pages=[1],
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            tier="quick",
+            llm_client=MagicMock(),
+        )
+
+    # Should stop early without indexing/LLM work.
+    assert mock_cache.status == "cancelled"

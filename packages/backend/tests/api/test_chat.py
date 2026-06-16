@@ -1,9 +1,17 @@
 """Tests for chat routes."""
 
 import uuid
+from contextlib import ExitStack
+
 from fastapi import HTTPException
 from httpx import AsyncClient
+from sqlalchemy import select
 from unittest.mock import AsyncMock, patch, MagicMock
+
+from app.core.config import settings
+from app.db.models import ChatMessage, TrainingRagInteraction
+from app.services.chat_service import BuiltContext
+from app.services.training_log_service import TrainingLogService
 from tests.fixtures import (
     create_test_annotation,
     create_test_annotation_set,
@@ -12,6 +20,34 @@ from tests.fixtures import (
 )
 
 from tests.helpers import make_resolve_result as _resolve_result, init_http_clients, override_get_llm_http_client, override_get_embedding_http_client, TEST_EMBEDDING
+
+
+def _make_chunk(**kwargs):
+    """Build a vector-search chunk mock for streaming tests."""
+    chunk = MagicMock()
+    chunk.chunk_id = kwargs.get("chunk_id", "chunk-1")
+    chunk.page_number = kwargs.get("page_number", 1)
+    chunk.end_page_number = kwargs.get("end_page_number", 1)
+    chunk.content = kwargs.get("content", "Source passage.")
+    chunk.section_title = kwargs.get("section_title")
+    chunk.section_level = kwargs.get("section_level")
+    chunk.pdf_id = kwargs.get("pdf_id")
+    chunk.pdf_title = kwargs.get("pdf_title")
+    chunk.score = kwargs.get("score", 0.9)
+    return chunk
+
+
+async def _create_pdf_conversation(client, auth_headers, db_session, test_user, title="Test PDF"):
+    """Create a PDF and a conversation scoped to it; return (pdf, conversation_id)."""
+    pdf = await create_test_pdf(db_session, user_id=test_user.id, title=title)
+    await db_session.commit()
+
+    conv_resp = await client.post(
+        "/v1/chat/conversations",
+        json={"pdf_id": str(pdf.id)},
+        headers=auth_headers,
+    )
+    return pdf, uuid.UUID(conv_resp.json()["id"])
 
 
 class TestExplainNoteHelpers:
@@ -249,6 +285,8 @@ def _make_stream_mocks(*, stream_reply=None, embed_side_effect=None):
     mock_indexing.reset_if_stale = AsyncMock(return_value=False)
 
     mock_embed = MagicMock()
+    mock_embed.MODEL = "test-embedding-model"
+    mock_embed.DIMENSIONS = 384
     if embed_side_effect:
         mock_embed.embed_query = AsyncMock(side_effect=embed_side_effect)
     else:
@@ -275,6 +313,11 @@ def _stream_patches(mocks, *, with_chat=True, with_llm=True):
     """Return a list of patch context managers for common stream dependencies."""
     patches = [
         patch("app.api.routes.chat.EmbeddingService", return_value=mocks["embedding"]),
+        patch("app.api.routes.chat.EmbeddingService.MODEL", mocks["embedding"].MODEL),
+        patch(
+            "app.api.routes.chat.EmbeddingService.DIMENSIONS",
+            mocks["embedding"].DIMENSIONS,
+        ),
         patch(
             "app.services.indexing_service.IndexingService",
             return_value=mocks["indexing"],
@@ -841,6 +884,239 @@ class TestStreamMessage:
                 "section_level": 1,
             }
         ]
+
+    async def test_stream_message_logs_training_data_when_enabled(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """When TRAINING_DATA_LOGGING_ENABLED, a TrainingRagInteraction is captured."""
+        _setup_stream_mocks()
+
+        _, conv_id = await _create_pdf_conversation(
+            client, auth_headers, db_session, test_user, title="Training Log Paper"
+        )
+
+        async def mock_stream_reply(*args, **kwargs):
+            yield "Training "
+            yield "logged."
+
+        chunk = _make_chunk(
+            chunk_id="chunk-42",
+            content="Source passage for training log.",
+            section_title="Introduction",
+            section_level=1,
+            score=0.88,
+        )
+
+        mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
+        mocks["chat"].build_context.return_value = (
+            "[Page 1]\nSource passage for training log."
+        )
+        mocks["chat"].build_context_with_metadata.return_value = BuiltContext(
+            context="[Page 1]\nSource passage for training log.",
+            included_chunk_ids=["chunk-42"],
+        )
+
+        captured_contexts = []
+        captured_kwargs = []
+
+        def fake_schedule(context, **kwargs):
+            captured_contexts.append(context)
+            captured_kwargs.append(kwargs)
+            return None
+
+        with (
+            patch(
+                "app.api.routes.chat.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_pdf",
+                new_callable=AsyncMock,
+            ) as mock_search_pdf,
+            patch(
+                "app.services.chat_orchestrator.training_log_service.schedule_interaction_log",
+                side_effect=fake_schedule,
+            ) as mock_schedule,
+            patch.object(settings, "TRAINING_DATA_LOGGING_ENABLED", True),
+        ):
+            mock_resolve.return_value = _resolve_result(
+                provider="openrouter",
+                api_key="fake-key",
+                model=None,
+                is_in_house=True,
+            )
+            mock_search_pdf.return_value = [chunk]
+
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
+                response = await client.post(
+                    f"/v1/chat/conversations/{conv_id}/stream",
+                    json={"content": "What does this say?"},
+                    headers=auth_headers,
+                )
+
+        assert response.status_code == 200
+        assert "Training " in response.text
+        assert "logged." in response.text
+        assert len(captured_contexts) == 1
+        context = captured_contexts[0]
+        assert context.user_id == test_user.id
+        assert context.conversation_id == conv_id
+        assert context.query_text == "What does this say?"
+        assert context.scope_type == "single_pdf"
+        assert len(context.retrieved_chunks) == 1
+        assert context.retrieved_chunks[0]["chunk_id"] == "chunk-42"
+        assert context.retrieved_chunks[0]["included_in_prompt"] is True
+        assert context.retrieved_chunks[0]["prompt_rank"] == 1
+        mock_schedule.assert_called_once()
+
+        # Verify the captured context can be used to write a real interaction row.
+        kwargs = captured_kwargs[0]
+        await TrainingLogService().log_interaction(
+            db_session,
+            context,
+            assistant_message_id=kwargs["assistant_message_id"],
+            assistant_reply=kwargs["assistant_reply"],
+            latency_ms=kwargs.get("latency_ms"),
+            token_count=kwargs.get("token_count"),
+        )
+
+        result = await db_session.execute(
+            select(TrainingRagInteraction).where(
+                TrainingRagInteraction.conversation_id == conv_id
+            )
+        )
+        interaction = result.scalar_one_or_none()
+        assert interaction is not None
+        assert interaction.query_text == "What does this say?"
+        assert interaction.assistant_reply == "Training logged."
+
+    async def test_stream_message_does_not_log_training_data_when_disabled(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """When TRAINING_DATA_LOGGING_ENABLED=False, no training interaction row is written."""
+        _setup_stream_mocks()
+
+        _, conv_id = await _create_pdf_conversation(client, auth_headers, db_session, test_user)
+
+        async def mock_stream_reply(*args, **kwargs):
+            yield "No "
+            yield "logging."
+
+        chunk = _make_chunk()
+
+        mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
+        mocks["chat"].build_context.return_value = "[Page 1]\nSource passage."
+        mocks["chat"].build_context_with_metadata.return_value = BuiltContext(
+            context="[Page 1]\nSource passage.",
+            included_chunk_ids=["chunk-1"],
+        )
+
+        with (
+            patch(
+                "app.api.routes.chat.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_pdf",
+                new_callable=AsyncMock,
+            ) as mock_search_pdf,
+            patch.object(settings, "TRAINING_DATA_LOGGING_ENABLED", False),
+        ):
+            mock_resolve.return_value = _resolve_result(
+                provider="openrouter",
+                api_key="fake-key",
+                model=None,
+                is_in_house=True,
+            )
+            mock_search_pdf.return_value = [chunk]
+
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
+                response = await client.post(
+                    f"/v1/chat/conversations/{conv_id}/stream",
+                    json={"content": "Hello?"},
+                    headers=auth_headers,
+                )
+
+        assert response.status_code == 200
+        assert "No " in response.text
+
+        result = await db_session.execute(
+            select(TrainingRagInteraction).where(
+                TrainingRagInteraction.conversation_id == conv_id
+            )
+        )
+        assert result.scalar_one_or_none() is None
+
+    async def test_stream_message_training_log_failure_does_not_break_stream(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Training-log scheduling failure must not abort the user-visible SSE stream."""
+        _setup_stream_mocks()
+
+        _, conv_id = await _create_pdf_conversation(client, auth_headers, db_session, test_user)
+
+        async def mock_stream_reply(*args, **kwargs):
+            yield "Stream "
+            yield "ok."
+
+        chunk = _make_chunk()
+
+        mocks = _make_stream_mocks(stream_reply=mock_stream_reply)
+        mocks["chat"].build_context.return_value = "[Page 1]\nSource passage."
+        mocks["chat"].build_context_with_metadata.return_value = BuiltContext(
+            context="[Page 1]\nSource passage.",
+            included_chunk_ids=["chunk-1"],
+        )
+
+        with (
+            patch(
+                "app.api.routes.chat.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_pdf",
+                new_callable=AsyncMock,
+            ) as mock_search_pdf,
+            patch(
+                "app.services.chat_orchestrator.training_log_service.schedule_interaction_log",
+                side_effect=RuntimeError("logging failed"),
+            ),
+            patch.object(settings, "TRAINING_DATA_LOGGING_ENABLED", True),
+        ):
+            mock_resolve.return_value = _resolve_result(
+                provider="openrouter",
+                api_key="fake-key",
+                model=None,
+                is_in_house=True,
+            )
+            mock_search_pdf.return_value = [chunk]
+
+            with ExitStack() as stack:
+                for pm in _stream_patches(mocks):
+                    stack.enter_context(pm)
+                response = await client.post(
+                    f"/v1/chat/conversations/{conv_id}/stream",
+                    json={"content": "Hello?"},
+                    headers=auth_headers,
+                )
+
+        assert response.status_code == 200
+        assert "Stream " in response.text
+        assert "ok." in response.text
+
+        result = await db_session.execute(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conv_id)
+            .order_by(ChatMessage.created_at.asc())
+        )
+        messages = result.scalars().all()
+        assert len(messages) == 2
+        assert messages[1].role == "assistant"
+        assert messages[1].content == "Stream ok."
 
     # --- OpenRouter 429 handling -------------------------------------------------
 
