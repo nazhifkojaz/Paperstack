@@ -28,6 +28,7 @@ coverage/
 .coverage
 .pytest_cache/
 test-results/
+playwright-report/
 
 # OS
 .DS_Store
@@ -74,5 +75,8 @@ prompt_experiment_results.json
 .claude/
 # Added by code-review-graph
 .code-review-graph/
+
+# Graphify knowledge graph output
+graphify-out/
 
 .sapi
