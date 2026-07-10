@@ -87,7 +87,7 @@ async def delete_api_key(
     prefs = prefs_result.scalar_one_or_none()
     if prefs is not None:
         prefs.openrouter_key_mode = "app"
-        for field in ("chat_model", "auto_highlight_model", "explain_model"):
+        for field in ("conversation_model", "analysis_model"):
             if getattr(prefs, field) in OPENROUTER_BYOK_MODEL_IDS:
                 setattr(prefs, field, None)
 

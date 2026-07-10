@@ -28,9 +28,8 @@ export interface LLMModel {
 }
 
 export interface LLMPreferences {
-    chat_model: string | null
-    auto_highlight_model: string | null
-    explain_model: string | null
+    conversation_model: string | null
+    analysis_model: string | null
     openrouter_key_mode: 'app' | 'byok'
 }
 
