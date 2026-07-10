@@ -39,12 +39,18 @@ export function IndexStatusBadge({ pdfId }: IndexStatusBadgeProps) {
                 {data.status === 'failed' && <AlertCircle className="h-3 w-3" />}
                 {config.label}
             </Badge>
-            {(data.status === 'not_indexed' || data.status === 'failed') && (
+            {data.status !== 'indexing' && (
                 <button
                     onClick={() => reindex.mutate()}
                     disabled={reindex.isPending}
                     className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-                    title={data.status === 'failed' ? 'Retry indexing' : 'Start indexing'}
+                    title={
+                        data.status === 'failed'
+                            ? 'Retry indexing'
+                            : data.status === 'indexed'
+                              ? 'Re-index PDF'
+                              : 'Start indexing'
+                    }
                 >
                     <RefreshCw className={cn('h-3 w-3', reindex.isPending && 'animate-spin')} />
                 </button>
