@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useValidateCitations, useBulkExportCitations } from './citations'
+import { useValidateCitations, useBulkExportCitations, useLookupCitation } from './citations'
 
 // Mock the API client
 vi.mock('./client', () => ({
@@ -92,6 +92,73 @@ describe('citations API hooks', () => {
       createObjectURLSpy.mockRestore()
       revokeObjectURLSpy.mockRestore()
       createElementSpy.mockRestore()
+    })
+  })
+
+  describe('useLookupCitation', () => {
+    it('should call lookup endpoint with DOI', async () => {
+      const mockResponse = {
+        doi: '10.1234/test.doi',
+        isbn: null,
+        title: 'Test Paper Title',
+        authors: 'John Doe',
+        year: 2024,
+        bibtex: '@article{test2024}',
+        csl_json: null,
+        source: 'crossref' as const,
+      }
+      vi.mocked(apiFetch).mockResolvedValueOnce(mockResponse)
+
+      const { result } = renderHook(() => useLookupCitation(), {
+        wrapper: createWrapper(),
+      })
+
+      await result.current.mutateAsync({ doi: '10.1234/test.doi' })
+
+      expect(apiFetch).toHaveBeenCalledWith('/citations/lookup', {
+        method: 'POST',
+        body: JSON.stringify({ doi: '10.1234/test.doi' }),
+      })
+    })
+
+    it('should call lookup endpoint with ISBN', async () => {
+      const mockResponse = {
+        doi: null,
+        isbn: '0262033844',
+        title: 'Introduction to Algorithms',
+        authors: 'Thomas H. Cormen',
+        year: 2009,
+        bibtex: '@book{cormen2009}',
+        csl_json: null,
+        source: 'openlibrary' as const,
+      }
+      vi.mocked(apiFetch).mockResolvedValueOnce(mockResponse)
+
+      const { result } = renderHook(() => useLookupCitation(), {
+        wrapper: createWrapper(),
+      })
+
+      await result.current.mutateAsync({ isbn: '0262033844' })
+
+      expect(apiFetch).toHaveBeenCalledWith('/citations/lookup', {
+        method: 'POST',
+        body: JSON.stringify({ isbn: '0262033844' }),
+      })
+    })
+
+    it('should propagate error on failure', async () => {
+      vi.mocked(apiFetch).mockRejectedValueOnce(new Error('DOI not found'))
+
+      const { result } = renderHook(() => useLookupCitation(), {
+        wrapper: createWrapper(),
+      })
+
+      result.current.mutate({ doi: '10.9999/nonexistent' })
+
+      await waitFor(() => {
+        expect(result.current.isError).toBe(true)
+      })
+      expect(result.current.error?.message).toBe('DOI not found')
     })
   })
 })

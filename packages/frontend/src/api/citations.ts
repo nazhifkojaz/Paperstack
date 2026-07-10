@@ -60,6 +60,31 @@ export const useUpdateCitation = (pdfId: string) => {
     });
 };
 
+export interface LookupRequest {
+    doi?: string;
+    isbn?: string;
+}
+
+export interface LookupResponse {
+    doi: string | null;
+    isbn: string | null;
+    title: string | null;
+    authors: string | null;
+    year: number | null;
+    bibtex: string;
+    csl_json: object | null;
+    source: 'crossref' | 'openlibrary';
+}
+
+export const useLookupCitation = () =>
+    useMutation<LookupResponse, Error, LookupRequest>({
+        mutationFn: (req) =>
+            apiFetch<LookupResponse>('/citations/lookup', {
+                method: 'POST',
+                body: JSON.stringify(req),
+            }),
+    });
+
 interface BulkExportRequest {
     pdf_ids: string[];
     format?: 'bibtex' | 'json';
