@@ -1,13 +1,60 @@
 """Tests for collection routes."""
 
+import asyncio
 import uuid
+from datetime import date
 from httpx import AsyncClient
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from app.db.models import PdfSummary, UserUsageQuota
+from app.services.exceptions import QuotaExhaustedError
+from app.services.quota_service import quota_service
 from tests.fixtures import (
     create_test_pdf,
     create_test_collection,
     create_test_pdf_collection,
     create_test_citation,
 )
+
+
+def _make_create_task_stub(real_create_task):
+    """Capture (and close) background coroutines spawned by a route."""
+    background_tasks = []
+
+    def _create_task(coro):
+        coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
+        if coro_name == "run_bulk_generation":
+            background_tasks.append(coro)
+            coro.close()
+            return MagicMock()
+        return real_create_task(coro)
+
+    _create_task.background_tasks = background_tasks
+    return _create_task
+
+
+def _make_resolve(unlimited: bool = False):
+    async def _resolve(user, db, feature):
+        resolution = MagicMock(
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            is_in_house=True,
+        )
+        if unlimited:
+            quota_result = MagicMock(unlimited=True, remaining=-1)
+            return resolution, quota_result
+        try:
+            quota_result = await quota_service.check_and_decrement(
+                user.id, db, "summary"
+            )
+        except QuotaExhaustedError as exc:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=402, detail=str(exc))
+        return resolution, quota_result
+
+    return _resolve
 
 
 class TestCreateCollection:
@@ -593,4 +640,230 @@ class TestCollectionOverview:
             headers=auth_headers,
         )
 
+        assert response.status_code == 404
+
+
+class TestBulkSummarizeCollection:
+    async def test_bulk_skips_complete_members(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        from tests.helpers import setup_http_client_mocks
+
+        setup_http_client_mocks()
+
+        complete_pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Done", filename="d.pdf"
+        )
+        missing_pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Missing", filename="m.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Mixed", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=complete_pdf.id, collection_id=col.id
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=missing_pdf.id, collection_id=col.id
+        )
+        db_session.add(
+            PdfSummary(
+                pdf_id=complete_pdf.id,
+                user_id=test_user.id,
+                status="complete",
+                tldr="done",
+            )
+        )
+        await db_session.commit()
+
+        create_task_stub = _make_create_task_stub(asyncio.create_task)
+        with (
+            patch(
+                "app.api.routes.collections.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch("app.api.routes.collections.asyncio.create_task") as mock_create_task,
+        ):
+            mock_resolve.side_effect = _make_resolve(unlimited=True)
+            mock_create_task.side_effect = create_task_stub
+
+            response = await client.post(
+                f"/v1/collections/{col.id}/summaries",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 202
+        data = response.json()
+        assert data["skipped_complete"] == 1
+        assert [str(missing_pdf.id)] == [q for q in data["queued"]]
+        assert len(create_task_stub.background_tasks) == 1
+
+    async def test_bulk_quota_caps_queued(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        from tests.helpers import setup_http_client_mocks
+
+        setup_http_client_mocks()
+
+        pdfs = [
+            await create_test_pdf(
+                db_session,
+                user_id=test_user.id,
+                title=f"P{i}",
+                filename=f"p{i}.pdf",
+            )
+            for i in range(3)
+        ]
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Three", position=0
+        )
+        for p in pdfs:
+            await create_test_pdf_collection(
+                db_session, pdf_id=p.id, collection_id=col.id
+            )
+        db_session.add(
+            UserUsageQuota(
+                user_id=test_user.id,
+                summary_uses_remaining=1,
+                reset_at=date.today(),
+            )
+        )
+        await db_session.commit()
+
+        create_task_stub = _make_create_task_stub(asyncio.create_task)
+        with (
+            patch(
+                "app.api.routes.collections.resolve_api_key_with_quota",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch("app.api.routes.collections.asyncio.create_task") as mock_create_task,
+        ):
+            mock_resolve.side_effect = _make_resolve(unlimited=False)
+            mock_create_task.side_effect = create_task_stub
+
+            response = await client.post(
+                f"/v1/collections/{col.id}/summaries",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 202
+        data = response.json()
+        assert len(data["queued"]) == 1
+        assert data["skipped_quota"] == 2
+        assert data["total_papers"] == 3
+
+
+class TestCollectionSummariesList:
+    async def test_returns_member_rows_only(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        member = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Member", filename="m.pdf"
+        )
+        nonmember = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Other", filename="o.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="C", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=member.id, collection_id=col.id
+        )
+        db_session.add(
+            PdfSummary(
+                pdf_id=member.id,
+                user_id=test_user.id,
+                status="complete",
+                tldr="m",
+            )
+        )
+        db_session.add(
+            PdfSummary(
+                pdf_id=nonmember.id,
+                user_id=test_user.id,
+                status="complete",
+                tldr="o",
+            )
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/collections/{col.id}/summaries",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["pdf_id"] == str(member.id)
+
+
+class TestCollectionComparison:
+    async def test_comparison_rows_missing_count_and_order(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        older = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Older Paper", filename="old.pdf"
+        )
+        newer = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Newer Paper", filename="new.pdf"
+        )
+        unscored = await create_test_pdf(
+            db_session, user_id=test_user.id, title="No Year", filename="ny.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Compare", position=0
+        )
+        for p in (older, newer, unscored):
+            await create_test_pdf_collection(
+                db_session, pdf_id=p.id, collection_id=col.id
+            )
+        await create_test_citation(
+            db_session,
+            pdf_id=older.id,
+            user_id=test_user.id,
+            title="Older Paper",
+            year=2017,
+        )
+        await create_test_citation(
+            db_session,
+            pdf_id=newer.id,
+            user_id=test_user.id,
+            title="Newer Paper",
+            year=2020,
+        )
+        # Only 'older' has a complete summary.
+        db_session.add(
+            PdfSummary(
+                pdf_id=older.id,
+                user_id=test_user.id,
+                status="complete",
+                tldr="old tldr",
+            )
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/collections/{col.id}/comparison",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["missing_count"] == 2
+        titles = [r["title"] for r in data["rows"]]
+        # Year ascending (nulls last): 2017, 2020, then no-year.
+        assert titles == ["Older Paper", "Newer Paper", "No Year"]
+        # Complete summary attached to the older row; others null.
+        by_title = {r["title"]: r for r in data["rows"]}
+        assert by_title["Older Paper"]["summary"] is not None
+        assert by_title["Newer Paper"]["summary"] is None
+
+    async def test_comparison_other_users_collection_returns_404(
+        self, client: AsyncClient, auth_headers
+    ) -> None:
+        response = await client.get(
+            f"/v1/collections/{uuid.uuid4()}/comparison",
+            headers=auth_headers,
+        )
         assert response.status_code == 404
