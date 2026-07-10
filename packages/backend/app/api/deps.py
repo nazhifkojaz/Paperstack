@@ -66,10 +66,11 @@ async def get_embedding_http_client(
 
 
 _PREFERENCE_MAP = {
-    "chat": "chat_model",
-    "explain_paraphrase": "explain_model",
-    "auto_highlight_quick": "auto_highlight_model",
-    "auto_highlight_thorough": "auto_highlight_model",
+    "chat": "conversation_model",
+    "explain_paraphrase": "conversation_model",
+    "auto_highlight_quick": "analysis_model",
+    "auto_highlight_thorough": "analysis_model",
+    "summary": "analysis_model",
 }
 
 _RESOLVER_MAP = {
@@ -77,6 +78,7 @@ _RESOLVER_MAP = {
     "explain_paraphrase": "resolve_for_explain",
     "auto_highlight_quick": "resolve_for_auto_highlight",
     "auto_highlight_thorough": "resolve_for_auto_highlight",
+    "summary": "resolve_for_auto_highlight",
 }
 
 
@@ -88,6 +90,7 @@ async def resolve_api_key_with_quota(
         "explain_paraphrase",
         "auto_highlight_quick",
         "auto_highlight_thorough",
+        "summary",
     ],
 ):
     """Resolve API key for a feature, check quotas, raise HTTPException on errors.

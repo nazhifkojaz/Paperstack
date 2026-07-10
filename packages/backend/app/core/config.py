@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     QUOTA_EXPLAIN_PARAPHRASE_DAILY: int = 30
     QUOTA_AUTO_HIGHLIGHT_QUICK_DAILY: int = 5
     QUOTA_AUTO_HIGHLIGHT_THOROUGH_DAILY: int = 3
+    QUOTA_SUMMARY_DAILY: int = 10
+    # Bulk collection summarization: papers processed concurrently (VPS is
+    # 2 vCPU — mirror the auto-highlight thorough cap rationale).
+    SUMMARY_BULK_CONCURRENCY: int = 2
 
     # OpenRouter reasoning (thinking) mode
     OPENROUTER_REASONING_ENABLED: bool = True

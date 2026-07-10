@@ -26,7 +26,6 @@ from app.db.models import (
     Annotation,
     AnnotationSet,
     AutoHighlightCache,
-    PdfChunk,
 )
 from app.schemas.auto_highlight import (
     AutoHighlightRequest,
@@ -40,6 +39,7 @@ from app.services.llm_service import LLMService
 from app.services.highlight_shortlist_service import highlight_shortlist_service
 from app.services.pdf_download_service import pdf_download_service
 from app.services.indexing_service import IndexingService
+from app.services.pdf_text_utils import extract_abstract_text
 from app.services.quota_service import quota_service
 
 logger = logging.getLogger(__name__)
@@ -150,50 +150,6 @@ def _build_set_name(categories: list[str]) -> str:
     }
     names = [display.get(c, c.title()) for c in categories]
     return "AI: " + ", ".join(names)
-
-
-async def _extract_abstract_text(
-    pdf_id: uuid.UUID,
-    user_id: uuid.UUID,
-    db: AsyncSession,
-) -> str:
-    """Extract abstract text from indexed chunks.
-
-    First tries chunks tagged with section_title="Abstract", then falls back
-    to the first 3 chunks (which typically cover abstract + introduction).
-    """
-    # Try chunks with explicit "Abstract" section heading
-    result = await db.execute(
-        select(PdfChunk)
-        .where(
-            PdfChunk.pdf_id == pdf_id,
-            PdfChunk.user_id == user_id,
-            PdfChunk.section_title.ilike("abstract"),
-        )
-        .order_by(PdfChunk.chunk_index)
-        .limit(3)
-    )
-    abstract_chunks = result.scalars().all()
-
-    if abstract_chunks:
-        return " ".join(c.content for c in abstract_chunks)[:3000]
-
-    # Fall back to first chunks by index (usually cover abstract + introduction)
-    result = await db.execute(
-        select(PdfChunk)
-        .where(
-            PdfChunk.pdf_id == pdf_id,
-            PdfChunk.user_id == user_id,
-        )
-        .order_by(PdfChunk.chunk_index)
-        .limit(3)
-    )
-    first_chunks = result.scalars().all()
-
-    if first_chunks:
-        return " ".join(c.content for c in first_chunks)[:3000]
-
-    return ""
 
 
 _HIGHLIGHT_MIN_TEXT_LEN = 10
@@ -511,7 +467,7 @@ async def _fetch_paper_content(
         await idx_service.ensure_indexed(pdf_row, user, idx_status, db)
         await db.commit()
 
-        abstract_text = await _extract_abstract_text(pdf_id, user_id, db)
+        abstract_text = await extract_abstract_text(pdf_id, user_id, db)
         shortlist = await _chunk_for_analysis(
             pdf_id,
             user_id,
@@ -1681,6 +1637,8 @@ async def get_quota(
         auto_highlight_quick_total=snapshot.auto_highlight_quick_total,
         auto_highlight_thorough_remaining=snapshot.auto_highlight_thorough_remaining,
         auto_highlight_thorough_total=snapshot.auto_highlight_thorough_total,
+        summary_remaining=snapshot.summary_remaining,
+        summary_total=snapshot.summary_total,
         reset_at=snapshot.reset_at,
         has_own_key=snapshot.has_own_key,
         providers=snapshot.providers,

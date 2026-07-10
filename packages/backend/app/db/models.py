@@ -382,6 +382,12 @@ class UserUsageQuota(Base):
     auto_highlight_thorough_remaining: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("3")
     )
+    auto_highlight_thorough_remaining: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("3")
+    )
+    summary_uses_remaining: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("10")
+    )
     reset_at: Mapped[date] = mapped_column(
         Date, nullable=False, server_default=text("(now() AT TIME ZONE 'UTC')::date")
     )
@@ -407,6 +413,53 @@ class PdfIndexStatus(Base):
     chunk_count: Mapped[Optional[int]] = mapped_column(Integer)
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     indexed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
+    )
+
+
+class PdfSummary(Base):
+    __tablename__ = "pdf_summaries"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('not_generated', 'generating', 'complete', 'failed')",
+            name="ck_pdf_summaries_status",
+        ),
+    )
+
+    pdf_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pdfs.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'not_generated'")
+    )
+    progress_pct: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    tldr: Mapped[Optional[str]] = mapped_column(Text)
+    problem: Mapped[Optional[str]] = mapped_column(Text)
+    method: Mapped[Optional[str]] = mapped_column(Text)
+    dataset: Mapped[Optional[str]] = mapped_column(Text)
+    result: Mapped[Optional[str]] = mapped_column(Text)
+    contribution: Mapped[Optional[str]] = mapped_column(Text)
+    key_claims: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    # Column names the user has manually edited; generation must not
+    # overwrite these fields.
+    edited_fields: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    paper_embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(1024))
+    openalex_id: Mapped[Optional[str]] = mapped_column(String(64))
+    referenced_openalex_ids: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    model: Mapped[Optional[str]] = mapped_column(String(100))
+    generated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
     )
@@ -663,11 +716,13 @@ class UserLLMPreferences(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    chat_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    auto_highlight_model: Mapped[Optional[str]] = mapped_column(
+    # Two model knobs grouped by task category rather than per feature:
+    #   - conversation_model: chat + explain (interactive, latency-sensitive)
+    #   - analysis_model: auto-highlight + summaries (background, quality-focused)
+    conversation_model: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
     )
-    explain_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    analysis_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     openrouter_key_mode: Mapped[str] = mapped_column(
         String(10), nullable=False, server_default="app", default="app"
     )
