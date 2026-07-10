@@ -36,6 +36,11 @@ def _openrouter_model(
 
 OPENROUTER_MODELS = [
     _openrouter_model(
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "Nemotron 3 Super 120B",
+        "NVIDIA's Nemotron 3 Super model (default)",
+    ),
+    _openrouter_model(
         "openai/gpt-oss-120b:free",
         "GPT-OSS 120B",
         "OpenAI's open-source 120B model",
@@ -194,6 +199,50 @@ def _parse_queries_json(
         if cat in data and isinstance(data[cat], str) and data[cat].strip():
             result[cat] = data[cat].strip()
     return result
+
+
+SUMMARY_FIELDS = (
+    "tldr",
+    "problem",
+    "method",
+    "dataset",
+    "result",
+    "contribution",
+)
+
+
+def _parse_summary_json(raw_response: str | None) -> dict[str, Any]:
+    """Parse the paper-summary LLM response into a validated dict."""
+    if not raw_response:
+        raise ValueError("Empty LLM response in summary generation")
+    cleaned = strip_markdown_fences(raw_response)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', " ", cleaned)
+        try:
+            data = json.loads(sanitized)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse summary JSON: {e}: {cleaned[:200]}")
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+    parsed: dict[str, Any] = {}
+    for field in SUMMARY_FIELDS:
+        value = data.get(field)
+        parsed[field] = (
+            value.strip() if isinstance(value, str) and value.strip() else None
+        )
+    claims = data.get("key_claims")
+    if isinstance(claims, list):
+        parsed["key_claims"] = [
+            c.strip() for c in claims if isinstance(c, str) and c.strip()
+        ][:5]
+    else:
+        parsed["key_claims"] = []
+    if not parsed["tldr"]:
+        raise ValueError("Summary response missing required 'tldr' field")
+    return parsed
 
 
 class LLMService:
@@ -536,3 +585,55 @@ CRITICAL:
             return {}
 
         return _parse_queries_json(raw, categories)
+
+    async def generate_paper_summary(
+        self,
+        title: str,
+        source_text: str,
+        provider: str,
+        api_key: str,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a structured summary of a paper from its abstract/conclusion.
+
+        Returns {tldr, problem, method, dataset, result, contribution,
+        key_claims}. Raises ValueError on unparseable responses and
+        LLMProviderError/LLMRateLimitError on provider failures.
+        """
+        system_prompt = (
+            "You are an academic paper analysis assistant. You produce faithful, "
+            "compact structured summaries of research papers. Only state facts "
+            "supported by the provided text; use null when a field cannot be "
+            "determined."
+        )
+        user_prompt = (
+            f"Paper Title: {title}\n\n"
+            f"Text (abstract, and conclusion when available):\n{source_text[:6000]}\n\n"
+            "Summarize into JSON (no markdown fences) with EXACTLY these keys:\n"
+            "{\n"
+            '  "tldr": "2-3 sentence plain-language summary",\n'
+            '  "problem": "the problem addressed, 1-2 sentences or null",\n'
+            '  "method": "the approach/technique, 1-2 sentences or null",\n'
+            '  "dataset": "datasets/corpora/benchmarks used, or null",\n'
+            '  "result": "headline quantitative/qualitative results, or null",\n'
+            '  "contribution": "the main novel contribution, or null",\n'
+            '  "key_claims": ["3-5 short verbatim-or-near-verbatim claims"]\n'
+            "}\n\n"
+            "CRITICAL: use the paper's actual terminology; do not invent "
+            "numbers or datasets not present in the text."
+        )
+        if provider != "openrouter":
+            raise ValueError(f"Unknown provider: {provider}")
+        reasoning_effort = (
+            settings.OPENROUTER_REASONING_EFFORT
+            if settings.OPENROUTER_REASONING_ENABLED
+            else None
+        )
+        raw = await self.call_openrouter(
+            system_prompt,
+            user_prompt,
+            api_key,
+            model=model or DEFAULT_FREE_MODEL,
+            reasoning_effort=reasoning_effort,
+        )
+        return _parse_summary_json(raw)

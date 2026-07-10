@@ -1,20 +1,40 @@
+import asyncio
 import logging
 import re
 import uuid
 from collections import Counter
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.db.models import Collection, Pdf, PdfCollection, User, Citation, PdfIndexStatus
+from app.api.deps import resolve_api_key_with_quota
+from app.core.http_client import HTTPClientState
+from app.db.models import (
+    Collection,
+    Pdf,
+    PdfCollection,
+    PdfSummary,
+    User,
+    Citation,
+    PdfIndexStatus,
+)
 from app.schemas.collection import (
     CollectionCreate,
     CollectionResponse,
     CollectionUpdate,
 )
+from app.schemas.summary import (
+    BulkSummarizeResponse,
+    ComparisonResponse,
+    ComparisonRow,
+    PdfSummaryResponse,
+)
+from app.services import summary_service
+from app.services.exceptions import QuotaExhaustedError
+from app.services.quota_service import quota_service
 from app.utils.db_utils import handle_unique_violation
 from app.api.routes.citations import build_bibtex_export
 
@@ -358,3 +378,195 @@ async def get_collection_overview(
         "top_authors": top_authors,
         "recent_papers": recent_papers,
     }
+
+
+async def _load_owned_collection(
+    db: AsyncSession, collection_id: uuid.UUID, user_id: uuid.UUID
+) -> Collection:
+    collection = await db.get(Collection, collection_id)
+    if not collection or collection.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    return collection
+
+
+@router.post(
+    "/{collection_id}/summaries",
+    response_model=BulkSummarizeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def bulk_summarize_collection(
+    collection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> BulkSummarizeResponse:
+    """Queue summary generation for every member paper missing one."""
+    await _load_owned_collection(db, collection_id, current_user.id)
+
+    pdf_rows = await db.execute(
+        select(Pdf.id)
+        .join(PdfCollection, PdfCollection.pdf_id == Pdf.id)
+        .where(
+            PdfCollection.collection_id == collection_id,
+            Pdf.user_id == current_user.id,
+        )
+        .order_by(Pdf.title)
+    )
+    member_ids = [row[0] for row in pdf_rows.all()]
+    total_papers = len(member_ids)
+
+    if not member_ids:
+        return BulkSummarizeResponse(
+            queued=[],
+            skipped_complete=0,
+            skipped_quota=0,
+            total_papers=0,
+        )
+
+    summary_rows = await db.execute(
+        select(PdfSummary).where(PdfSummary.pdf_id.in_(member_ids))
+    )
+    summaries = {s.pdf_id: s for s in summary_rows.scalars().all()}
+
+    candidates: list[uuid.UUID] = []
+    skipped_complete = 0
+    for pid in member_ids:
+        row = summaries.get(pid)
+        if row is None or row.status in ("not_generated", "failed"):
+            candidates.append(pid)
+        elif row.status == "complete":
+            skipped_complete += 1
+        # 'generating' is silently skipped (neither queued nor an error).
+
+    if not candidates:
+        return BulkSummarizeResponse(
+            queued=[],
+            skipped_complete=skipped_complete,
+            skipped_quota=0,
+            total_papers=total_papers,
+        )
+
+    # Resolve the key once (covers the first candidate). When the result is
+    # unlimited (BYOK), no quota is consumed for any candidate.
+    resolution, quota_result = await resolve_api_key_with_quota(
+        current_user, db, "summary"
+    )
+    queued: list[uuid.UUID] = []
+    skipped_quota = 0
+
+    if quota_result.unlimited:
+        queued.extend(candidates)
+    else:
+        # First candidate already paid via resolve_api_key_with_quota.
+        queued.append(candidates[0])
+        for pid in candidates[1:]:
+            try:
+                await quota_service.check_and_decrement(current_user.id, db, "summary")
+            except QuotaExhaustedError:
+                skipped_quota = len(candidates) - len(queued)
+                break
+            queued.append(pid)
+
+    # Upsert queued rows to 'generating' in the request session, commit, then
+    # spawn ONE background task for the whole collection.
+    for pid in queued:
+        row = summaries.get(pid)
+        if row:
+            row.status = "generating"
+            row.progress_pct = 0
+            row.error_message = None
+        else:
+            db.add(
+                PdfSummary(
+                    pdf_id=pid,
+                    user_id=current_user.id,
+                    status="generating",
+                )
+            )
+    await db.commit()
+
+    llm_client = HTTPClientState.get_llm_client(request.app)
+    asyncio.create_task(
+        summary_service.run_bulk_generation(
+            pdf_ids=queued,
+            user_id=current_user.id,
+            provider=resolution.provider,
+            api_key=resolution.api_key,
+            model=resolution.model,
+            llm_client=llm_client,
+        )
+    )
+
+    return BulkSummarizeResponse(
+        queued=queued,
+        skipped_complete=skipped_complete,
+        skipped_quota=skipped_quota,
+        total_papers=total_papers,
+    )
+
+
+@router.get("/{collection_id}/summaries", response_model=List[PdfSummaryResponse])
+async def get_collection_summaries(
+    collection_id: uuid.UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> List[PdfSummaryResponse]:
+    """Return all summary rows for members of a collection."""
+    await _load_owned_collection(db, collection_id, current_user.id)
+
+    result = await db.execute(
+        select(PdfSummary)
+        .join(PdfCollection, PdfCollection.pdf_id == PdfSummary.pdf_id)
+        .where(
+            PdfCollection.collection_id == collection_id,
+            PdfSummary.user_id == current_user.id,
+        )
+    )
+    return result.scalars().all()
+
+
+@router.get("/{collection_id}/comparison", response_model=ComparisonResponse)
+async def get_collection_comparison(
+    collection_id: uuid.UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> ComparisonResponse:
+    """Comparison matrix rows: one per member paper, with optional summary."""
+    await _load_owned_collection(db, collection_id, current_user.id)
+
+    rows = await db.execute(
+        select(Pdf, Citation, PdfSummary)
+        .join(PdfCollection, PdfCollection.pdf_id == Pdf.id)
+        .outerjoin(Citation, Citation.pdf_id == Pdf.id)
+        .outerjoin(
+            PdfSummary,
+            (PdfSummary.pdf_id == Pdf.id) & (PdfSummary.user_id == current_user.id),
+        )
+        .where(
+            PdfCollection.collection_id == collection_id,
+            Pdf.user_id == current_user.id,
+        )
+    )
+    pairs = rows.all()
+
+    comparison_rows: list[ComparisonRow] = []
+    missing_count = 0
+    for pdf, citation, summary in pairs:
+        title = (citation.title if citation and citation.title else None) or pdf.title
+        year = citation.year if citation else None
+        summary_resp = PdfSummaryResponse.model_validate(summary) if summary else None
+        if not summary or summary.status != "complete":
+            missing_count += 1
+        comparison_rows.append(
+            ComparisonRow(
+                pdf_id=pdf.id,
+                title=title,
+                year=year,
+                summary=summary_resp,
+            )
+        )
+
+    # Order by Citation.year (nulls last), then title.
+    comparison_rows.sort(key=lambda r: (r.year is None, r.year or 0, r.title.lower()))
+
+    return ComparisonResponse(rows=comparison_rows, missing_count=missing_count)
