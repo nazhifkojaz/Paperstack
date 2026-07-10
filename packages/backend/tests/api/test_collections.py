@@ -6,6 +6,7 @@ from tests.fixtures import (
     create_test_pdf,
     create_test_collection,
     create_test_pdf_collection,
+    create_test_citation,
 )
 
 
@@ -327,6 +328,268 @@ class TestRemovePdfFromCollection:
 
         response = await client.delete(
             f"/v1/collections/{col.id}/pdfs/{pdf.id}",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404
+
+
+class TestUpdateCollectionCycleGuard:
+    """Tests for cycle detection in PATCH /v1/collections/{collection_id}"""
+
+    async def test_cannot_set_self_as_parent(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test that a collection cannot be its own parent."""
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Self", position=0
+        )
+        await db_session.commit()
+
+        response = await client.patch(
+            f"/v1/collections/{col.id}",
+            json={"parent_id": str(col.id)},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400
+
+    async def test_cannot_move_under_descendant(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test that a collection cannot be moved under its own descendant."""
+        grandparent = await create_test_collection(
+            db_session, user_id=test_user.id, name="Grandparent", position=0
+        )
+        parent = await create_test_collection(
+            db_session,
+            user_id=test_user.id,
+            name="Parent",
+            parent_id=grandparent.id,
+            position=0,
+        )
+        child = await create_test_collection(
+            db_session,
+            user_id=test_user.id,
+            name="Child",
+            parent_id=parent.id,
+            position=0,
+        )
+        await db_session.commit()
+
+        response = await client.patch(
+            f"/v1/collections/{grandparent.id}",
+            json={"parent_id": str(child.id)},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400
+
+
+class TestExportCollection:
+    """Tests for GET /v1/collections/{collection_id}/export"""
+
+    async def test_export_bibtex(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test exporting a collection as BibTeX."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Export Me", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf.id, collection_id=col.id
+        )
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            bibtex="@article{test2024,\n  title  = {Test Title},\n}",
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/collections/{col.id}/export",
+            params={"format": "bibtex"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert "Test Title" in response.text
+        assert "attachment" in response.headers["content-disposition"]
+
+    async def test_export_markdown(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test exporting a collection as Markdown."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id, title="A Paper")
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Markdown Export", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf.id, collection_id=col.id
+        )
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            title="A Paper",
+            authors="Doe, John",
+            year=2024,
+            doi="10.1234/test",
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/collections/{col.id}/export",
+            params={"format": "markdown"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert "A Paper" in response.text
+        assert "Doe, John" in response.text
+        assert "doi.org/10.1234/test" in response.text
+
+    async def test_export_skips_pdf_without_citation(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test that papers without citations are counted in the skip note."""
+        pdf1 = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Has Citation", filename="has.pdf"
+        )
+        pdf2 = await create_test_pdf(
+            db_session, user_id=test_user.id, title="No Citation", filename="no.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Mixed", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf1.id, collection_id=col.id
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf2.id, collection_id=col.id
+        )
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf1.id,
+            user_id=test_user.id,
+            bibtex="@article{has2024}",
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/collections/{col.id}/export",
+            params={"format": "bibtex"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert "1 of 2 papers had no citation" in response.text
+
+    async def test_export_other_users_collection_returns_404(
+        self, client: AsyncClient, auth_headers
+    ) -> None:
+        """Test exporting another user's collection returns 404."""
+        fake_collection_id = uuid.uuid4()
+
+        response = await client.get(
+            f"/v1/collections/{fake_collection_id}/export",
+            params={"format": "bibtex"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404
+
+
+class TestCollectionOverview:
+    """Tests for GET /v1/collections/{collection_id}/overview"""
+
+    async def test_overview_aggregates(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test overview returns correct aggregate stats."""
+        pdf1 = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Paper 2023", filename="p1.pdf"
+        )
+        pdf2 = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Paper 2024", filename="p2.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Stats", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf1.id, collection_id=col.id
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf2.id, collection_id=col.id
+        )
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf1.id,
+            user_id=test_user.id,
+            authors="John Doe",
+            year=2023,
+        )
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf2.id,
+            user_id=test_user.id,
+            authors="John Doe, Jane Smith",
+            year=2024,
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/collections/{col.id}/overview",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["paper_count"] == 2
+        assert "2023" in data["year_distribution"]
+        assert "2024" in data["year_distribution"]
+        assert data["year_distribution"]["2023"] == 1
+        assert data["year_distribution"]["2024"] == 1
+        assert len(data["top_authors"]) >= 1
+        author_names = [a["name"] for a in data["top_authors"]]
+        assert "John Doe" in author_names
+
+    async def test_overview_recent_papers(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Test overview returns recent papers."""
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Recent Paper", filename="r.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Recent", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf.id, collection_id=col.id
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            f"/v1/collections/{col.id}/overview",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["paper_count"] == 1
+        assert len(data["recent_papers"]) >= 1
+        assert data["recent_papers"][0]["title"] == "Recent Paper"
+
+    async def test_overview_other_users_collection_returns_404(
+        self, client: AsyncClient, auth_headers
+    ) -> None:
+        """Test overview for another user's collection returns 404."""
+        fake_collection_id = uuid.uuid4()
+
+        response = await client.get(
+            f"/v1/collections/{fake_collection_id}/overview",
             headers=auth_headers,
         )
 
