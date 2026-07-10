@@ -29,6 +29,7 @@ class PdfUrlCheckResponse(BaseModel):
     file_size: Optional[int] = None
     title: Optional[str] = None
     cors_blocked: bool = False
+    can_force_link: bool = False
     error: Optional[str] = None
     suggestions: Optional[List[str]] = None
 

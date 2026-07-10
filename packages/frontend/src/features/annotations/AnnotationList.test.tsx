@@ -89,6 +89,20 @@ describe('SetAnnotationList', () => {
     expect(screen.getByText(/Page 3/)).toBeInTheDocument()
   })
 
+  it('shows per-color count breakdown in By Page mode', () => {
+    render(<SetAnnotationList setId="set-1" groupBy="page" />)
+    // Page 1: yellow highlight + red rect
+    expect(screen.getByTitle('Highlights: 1')).toBeInTheDocument()
+    expect(screen.getByTitle('Important: 1')).toBeInTheDocument()
+    // Page 3: blue highlight
+    expect(screen.getByTitle('Methods: 1')).toBeInTheDocument()
+  })
+
+  it('does not show color breakdown in By Color mode', () => {
+    render(<SetAnnotationList setId="set-1" groupBy="color" />)
+    expect(screen.queryByTitle('Highlights: 1')).not.toBeInTheDocument()
+  })
+
   it('groups annotations by color when toggled', () => {
     render(<SetAnnotationList setId="set-1" groupBy="color" />)
     expect(screen.getByText(/Highlights/)).toBeInTheDocument()

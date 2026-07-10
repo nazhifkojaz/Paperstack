@@ -13,12 +13,15 @@ import { cn } from '@/lib/utils'
 import { AnnotationDetailDrawer } from './AnnotationDetailDrawer'
 import { DEFAULT_HIGHLIGHT_COLOR, DEFAULT_COLOR_LABELS, ANNOTATION_COLORS } from './constants'
 
+type ColorCount = { color: string; count: number }
+
 type AnnotationGroup = {
   key: string
   label: string
   color?: string
   count: number
   annotations: Annotation[]
+  colorCounts?: ColorCount[]
 }
 
 const TYPE_ICONS: Record<Annotation['type'], React.ReactNode> = {
@@ -63,16 +66,32 @@ function groupAnnotationsByPage(annotations: Annotation[]): AnnotationGroup[] {
   }
 
   return Array.from(grouped.entries())
-    .map(([page, annotations]) => ({
-      key: `page-${page}`,
-      label: `Page ${page}`,
-      count: annotations.length,
-      annotations: annotations.sort((a, b) => {
-        const pa = getAnnotationPosition(a)
-        const pb = getAnnotationPosition(b)
-        return pa.y !== pb.y ? pa.y - pb.y : pa.x - pb.x
-      }),
-    }))
+    .map(([page, annotations]) => {
+      const colorMap = new Map<string, number>()
+      for (const ann of annotations) {
+        const color = ann.color || DEFAULT_HIGHLIGHT_COLOR
+        colorMap.set(color, (colorMap.get(color) ?? 0) + 1)
+      }
+      const colorCounts: ColorCount[] = Array.from(colorMap.entries())
+        .map(([color, count]) => ({ color, count }))
+        .sort((a, b) => {
+          const ai = COLOR_ORDER.indexOf(a.color)
+          const bi = COLOR_ORDER.indexOf(b.color)
+          return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
+        })
+
+      return {
+        key: `page-${page}`,
+        label: `Page ${page}`,
+        count: annotations.length,
+        annotations: annotations.sort((a, b) => {
+          const pa = getAnnotationPosition(a)
+          const pb = getAnnotationPosition(b)
+          return pa.y !== pb.y ? pa.y - pb.y : pa.x - pb.x
+        }),
+        colorCounts,
+      }
+    })
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
 }
 
@@ -304,6 +323,26 @@ export const SetAnnotationList: React.FC<SetAnnotationListProps> = ({ setId, pdf
               </button>
               {groupBy === 'color' && group.color && (
                 <ColorGroupLabel color={group.color} label={group.label} />
+              )}
+              {groupBy === 'page' && (group.colorCounts?.length ?? 0) > 0 && (
+                <div className="flex items-center gap-1 shrink-0 normal-case tracking-normal">
+                  {group.colorCounts?.map(({ color, count }) => {
+                    const colorLabel = colorLabels[color] || color
+                    return (
+                      <span
+                        key={color}
+                        className="flex items-center gap-0.5"
+                        title={`${colorLabel}: ${count}`}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full inline-block"
+                          style={{ backgroundColor: color }}
+                        />
+                        <span>{count}</span>
+                      </span>
+                    )
+                  })}
+                </div>
               )}
               <span className="text-[9px] bg-muted px-1.5 py-0.5 rounded-full shrink-0">
                 {group.count}

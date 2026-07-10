@@ -25,9 +25,7 @@ def _openrouter_model(
     requires_byok: bool | None = None,
 ) -> dict[str, str | bool]:
     if requires_byok is None:
-        requires_byok = not (
-            model_id.endswith(":free") or model_id == "openrouter/owl-alpha"
-        )
+        requires_byok = not model_id.endswith(":free")
     return {
         "id": model_id,
         "label": label,
@@ -43,29 +41,9 @@ OPENROUTER_MODELS = [
         "OpenAI's open-source 120B model",
     ),
     _openrouter_model(
-        "z-ai/glm-4.5-air:free",
-        "GLM 4.5 Air",
-        "Zhipu AI's efficient Air variant",
-    ),
-    _openrouter_model(
-        "minimax/minimax-m2.5:free",
-        "MiniMax M2.5",
-        "MiniMax's efficient long-context model",
-    ),
-    _openrouter_model(
-        "nex-agi/nex-n2-pro:free",
-        "Nex N2 Pro",
-        "Nex AGI's N2 Pro model",
-    ),
-    _openrouter_model(
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "Nemotron 3 Ultra 550B",
         "NVIDIA's ultra-scale Nemotron 3 model",
-    ),
-    _openrouter_model(
-        "moonshotai/kimi-k2.6:free",
-        "Kimi K2.6",
-        "Moonshot AI's Kimi K2.6 model",
     ),
     _openrouter_model(
         "anthropic/claude-fable-5",
@@ -91,11 +69,6 @@ OPENROUTER_MODELS = [
         "x-ai/grok-4.3",
         "Grok 4.3",
         "xAI's Grok model through OpenRouter",
-    ),
-    _openrouter_model(
-        "openrouter/owl-alpha",
-        "Owl Alpha",
-        "OpenRouter's Owl Alpha model",
     ),
     _openrouter_model(
         "openai/gpt-5.5",

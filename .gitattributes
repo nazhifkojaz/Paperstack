@@ -1,0 +1,2 @@
+# PDFs are binary — stops git rendering them as thousands of text diff lines
+*.pdf binary

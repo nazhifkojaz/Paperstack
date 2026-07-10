@@ -126,6 +126,18 @@ class TestEmbedTexts:
             await svc.embed_texts(["hello"])
 
     @respx.mock
+    async def test_transport_error_raises_embedding_error(self, svc):
+        # A non-timeout transport failure (ConnectError/ReadError) is a subclass
+        # of httpx.HTTPError but NOT httpx.TimeoutException. Before the fix these
+        # escaped uncaught and crashed the chat request with a raw httpx error
+        # instead of a clean EmbeddingError → 502.
+        respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+            side_effect=httpx.ConnectError("refused")
+        )
+        with pytest.raises(EmbeddingError, match="request failed"):
+            await svc.embed_texts(["hello"])
+
+    @respx.mock
     async def test_batching_splits_requests(self, svc, monkeypatch):
         monkeypatch.setattr(svc, "BATCH_SIZE", 2)
         route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(

@@ -170,6 +170,24 @@ describe('ChatMessageList', () => {
     })
   })
 
+  describe('user message markdown', () => {
+    it('renders blockquotes in user messages', () => {
+      render(
+        <ChatMessageList
+          messages={[createMockMessage({
+            role: 'user',
+            content: '> This is a quoted line\n\nFollow-up question',
+          })]}
+        />
+      )
+
+      const blockquote = document.querySelector('blockquote')
+      expect(blockquote).toBeInTheDocument()
+      expect(blockquote).toHaveTextContent('This is a quoted line')
+      expect(screen.getByText('Follow-up question')).toBeInTheDocument()
+    })
+  })
+
   describe('empty state', () => {
     it('shows empty message when no messages', () => {
       render(

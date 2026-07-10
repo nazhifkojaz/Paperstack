@@ -21,6 +21,7 @@ export interface PdfChatPanelShellProps {
   isFullscreen: boolean;
   isSending: boolean;
   userAvatarUrl?: string;
+  inputRef?: RefObject<HTMLTextAreaElement | null>;
   onCancelDeleteConversation: () => void;
   onChunkClick: (chunk: ContextChunk) => void;
   onClose: () => void;
@@ -53,6 +54,7 @@ export function PdfChatPanelShell({
   isFullscreen,
   isSending,
   userAvatarUrl,
+  inputRef,
   onCancelDeleteConversation,
   onChunkClick,
   onClose,
@@ -106,6 +108,7 @@ export function PdfChatPanelShell({
           isFullscreen={isFullscreen}
           isSending={isSending}
           userAvatarUrl={userAvatarUrl}
+          inputRef={inputRef}
           onChunkClick={onChunkClick}
           onDismissFailed={onDismissFailed}
           onInputKeyDown={onInputKeyDown}

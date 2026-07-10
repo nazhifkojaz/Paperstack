@@ -18,6 +18,7 @@ interface PdfChatPanelBodyProps {
   isFullscreen: boolean;
   isSending: boolean;
   userAvatarUrl?: string;
+  inputRef?: RefObject<HTMLTextAreaElement | null>;
   onChunkClick: (chunk: ContextChunk) => void;
   onDismissFailed: (messageId: string) => void;
   onInputKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
@@ -41,6 +42,7 @@ export function PdfChatPanelBody({
   isFullscreen,
   isSending,
   userAvatarUrl,
+  inputRef,
   onChunkClick,
   onDismissFailed,
   onInputKeyDown,
@@ -104,6 +106,7 @@ export function PdfChatPanelBody({
         disabled={!activeConversationId}
         wrapperClassName={isFullscreen ? 'flex justify-center' : ''}
         innerClassName={isFullscreen ? 'w-full max-w-2xl' : ''}
+        inputRef={inputRef}
       />
     </>
   );

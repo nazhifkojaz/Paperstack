@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useAuthStore } from '@/stores/authStore';
 import { useChatHighlightStore } from '@/stores/chatHighlightStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -21,8 +22,10 @@ export function usePdfChatPanelController({
     activeConversationId,
     isChatFullscreen,
     isChatPanelOpen,
+    pendingAskQuote,
     setActiveConversationId,
     setChatFullscreen,
+    setPendingAskQuote,
     toggleChatFullscreen,
     toggleChatPanel,
   } = useChatStore();
@@ -71,14 +74,50 @@ export function usePdfChatPanelController({
     activeConversationId,
     setActiveConversationId,
     clearStreaming,
-    autoSelectEnabled: isChatPanelOpen,
+    autoSelectEnabled: isChatPanelOpen && !pendingAskQuote,
     onConversationReset: () => setIndexError(null),
   });
   const displayMessages = useChatMessages(history, streamingMessage);
   useChatPanelFullscreen(isChatPanelOpen, isChatFullscreen, setChatFullscreen);
 
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const creatingAskConversationRef = useRef(false);
+
+  useEffect(() => {
+    if (!isChatPanelOpen || !pendingAskQuote) {
+      creatingAskConversationRef.current = false;
+      return;
+    }
+
+    if (creatingAskConversationRef.current && !activeConversationId) return;
+
+    if (!activeConversationId) {
+      creatingAskConversationRef.current = true;
+      createNewConversation();
+      return;
+    }
+
+    const quotedText = pendingAskQuote.text.split('\n').join('\n> ');
+    const formatted = `> ${quotedText}\n> \n> — Page ${pendingAskQuote.pageNumber}\n\n`;
+    setInput(formatted);
+    setPendingAskQuote(null);
+    creatingAskConversationRef.current = false;
+
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  }, [
+    isChatPanelOpen,
+    pendingAskQuote,
+    activeConversationId,
+    createNewConversation,
+    setInput,
+    setPendingAskQuote,
+  ]);
+
   const closePanel = () => {
     setChatFullscreen(false);
+    setPendingAskQuote(null);
     toggleChatPanel();
   };
 
@@ -98,6 +137,7 @@ export function usePdfChatPanelController({
       isFullscreen: isChatFullscreen,
       isSending,
       userAvatarUrl,
+      inputRef,
       onCancelDeleteConversation: cancelDeleteConversation,
       onChunkClick: (chunk) => {
         setPendingHighlight({

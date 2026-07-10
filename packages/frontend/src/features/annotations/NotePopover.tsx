@@ -6,7 +6,7 @@ import type { ParaphraseLevel } from '@/api/chat';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Pencil, Save } from 'lucide-react';
+import { Pencil, Save, MessageCircle } from 'lucide-react';
 import { AnnotationAiActionControls } from './AnnotationAiActionControls';
 import {
     getDefaultAnnotationContentTab,
@@ -41,6 +41,7 @@ interface NotePopoverProps {
     isParaphrasing?: boolean;
     paraphraseStatusMessage?: string;
     onParaphraseThis?: (annotationId: string, level?: ParaphraseLevel) => void;
+    onAskInChat?: (annotationId: string) => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -71,6 +72,7 @@ export const NotePopover = ({
     isParaphrasing,
     paraphraseStatusMessage,
     onParaphraseThis,
+    onAskInChat,
 }: NotePopoverProps) => {
     const userNote = useMemo(() => getAnnotationUserNote(annotation), [annotation]);
     const aiExplanation = useMemo(() => getAnnotationAiExplanation(annotation), [annotation]);
@@ -79,7 +81,8 @@ export const NotePopover = ({
     const hasAiParaphrase = !!aiParaphrase || !!isParaphrasing;
     const hasAiContent = hasAiExplanation || hasAiParaphrase;
     const canShowAiActions = annotation.type === 'highlight' && (!!onExplainThis || !!onParaphraseThis);
-    const canUseAiActions = canShowAiActions && !!annotation.selected_text;
+    const canShowAskInChat = annotation.type === 'highlight' && !!onAskInChat;
+    const canUseAiActions = (canShowAiActions || canShowAskInChat) && !!annotation.selected_text;
     const hasTabbedContent = hasAiContent || canShowAiActions;
     const aiUnavailableTitle = canUseAiActions
         ? undefined
@@ -194,6 +197,25 @@ export const NotePopover = ({
         setIsEditing(false);
         onParaphraseThis(annotation.id, paraphraseLevel);
     };
+
+    const handleAskInChat = () => {
+        if (!canUseAiActions || !onAskInChat) return;
+        onAskInChat(annotation.id);
+    };
+
+    const askInChatButton = canShowAskInChat ? (
+        <Button
+            size="sm"
+            variant="ghost"
+            className="text-violet-700 hover:bg-violet-50"
+            onClick={handleAskInChat}
+            disabled={!canUseAiActions}
+            title={aiUnavailableTitle}
+        >
+            <MessageCircle className="h-3 w-3 mr-1" />
+            Ask in Chat
+        </Button>
+    ) : null;
 
     if (!containerDims || !annotation.rects[0]) return null;
 
@@ -334,6 +356,7 @@ export const NotePopover = ({
                         </>
                     ) : activeTab === 'explanation' && onExplainThis ? (
                         <>
+                            {askInChatButton}
                             <Button size="sm" variant="ghost" onClick={onClose}>
                                 Close
                             </Button>
@@ -354,6 +377,7 @@ export const NotePopover = ({
                         </>
                     ) : activeTab === 'paraphrase' && onParaphraseThis ? (
                         <>
+                            {askInChatButton}
                             <Button size="sm" variant="ghost" onClick={onClose}>
                                 Close
                             </Button>
@@ -375,6 +399,7 @@ export const NotePopover = ({
                         </>
                     ) : (
                         <>
+                            {askInChatButton}
                             <Button size="sm" variant="ghost" onClick={onClose}>
                                 Close
                             </Button>

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, Sparkles } from 'lucide-react'
+import { RefreshCw, Sparkles, MessageCircle } from 'lucide-react'
 import { useUpdateAnnotation, useDeleteAnnotation } from '@/api/annotations'
 import { useAnnotationStore } from '@/stores/annotationStore'
 import type { Annotation } from '@/api/annotations'
@@ -20,6 +20,7 @@ interface AnnotationContextMenuProps {
   onEditNote: (annotationId: string) => void
   onExplainThis?: (annotationId: string) => void
   onParaphraseThis?: (annotationId: string) => void
+  onAskInChat?: (annotationId: string) => void
   aiUsesRemaining?: number | null
 }
 
@@ -30,6 +31,7 @@ export const AnnotationContextMenu = ({
   onEditNote,
   onExplainThis,
   onParaphraseThis,
+  onAskInChat,
   aiUsesRemaining,
 }: AnnotationContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null)
@@ -41,6 +43,7 @@ export const AnnotationContextMenu = ({
   const hasSelectedText = !!annotation.selected_text
   const canShowExplain = isHighlight && !!onExplainThis
   const canShowParaphrase = isHighlight && !!onParaphraseThis
+  const canShowAskInChat = isHighlight && !!onAskInChat
   const canUseAiActions = hasSelectedText
   const aiUnavailableTitle = canUseAiActions
     ? undefined
@@ -57,6 +60,7 @@ export const AnnotationContextMenu = ({
       + (isHighlight && hasSelectedText ? 40 : 0)
       + (canShowExplain ? 40 : 0)
       + (canShowParaphrase ? 40 : 0)
+      + (canShowAskInChat ? 40 : 0)
       + (showAiQuota ? 18 : 0)
     const PADDING = 8
 
@@ -127,6 +131,12 @@ export const AnnotationContextMenu = ({
     onClose()
   }
 
+  const handleAskInChat = () => {
+    if (!canUseAiActions) return
+    if (onAskInChat) onAskInChat(annotation.id)
+    onClose()
+  }
+
   const handleColorChange = (color: string) => {
     updateAnnotation({
       id: annotation.id,
@@ -188,6 +198,17 @@ export const AnnotationContextMenu = ({
         >
           <RefreshCw className="w-4 h-4" />
           Paraphrase This
+        </button>
+      )}
+      {canShowAskInChat && (
+        <button
+          className="w-full px-4 py-2 text-left text-sm text-violet-700 hover:bg-violet-50 flex items-center gap-2 disabled:cursor-not-allowed disabled:text-violet-300 disabled:hover:bg-transparent"
+          onClick={handleAskInChat}
+          disabled={!canUseAiActions}
+          title={aiUnavailableTitle}
+        >
+          <MessageCircle className="w-4 h-4" />
+          Ask in Chat
         </button>
       )}
       {showAiQuota && (

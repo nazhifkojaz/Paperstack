@@ -48,6 +48,7 @@ npm-debug.log*
 # Frontend build cache
 .eslintcache
 *.tsbuildinfo
+packages/frontend/vite.config.d.ts
 
 # PDF.js worker (pre-built binary, installed via pdfjs-dist)
 packages/frontend/public/pdf.worker.min.mjs
@@ -58,12 +59,15 @@ packages/frontend/public/pdf.worker.min.mjs
 # Superpowers brainstorm artifacts
 .superpowers/
 
-# Documentation (design docs, plans — not needed in repo)
-docs/
+# Documentation scratch (root-only)
+/docs/
 
 # Scratch/experiment folders
 experiment_pdf/
 prompt_experiment_results.json
+
+# Benchmark harness + data (lives outside the Paperstack repo; never committed)
+benchmark/
 
 # Editor/tool configs
 .opencode/

@@ -2,6 +2,7 @@
 
 from app.services.chunking_service import (
     Chunk,
+    chunk_document,
     chunk_text_with_pages,
     _parse_headings,
     _find_sentence_boundary,
@@ -13,8 +14,11 @@ from app.services.chunking_service import (
     _is_reference_heading,
     _is_list_item,
     _has_list_content,
+    _valid_section_title,
+    _MAX_SECTION_TITLE_CHARS,
     _REFERENCE_HEADINGS,
 )
+from app.services.extractors.base import ExtractedDocument, RawBlock
 
 
 # --- Chunk dataclass ---
@@ -397,9 +401,9 @@ def test_chunk_text_includes_content_before_references():
 
 
 def test_chunk_size_configurable_smaller(monkeypatch):
-    """Smaller CHUNK_SIZE should produce more chunks."""
-    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE", 300)
-    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP", 50)
+    """Smaller CHUNK_SIZE_TOKENS should produce more chunks."""
+    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE_TOKENS", 50)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP_TOKENS", 10)
 
     paras = "\n\n".join(
         f"Paragraph number {i}. "
@@ -408,16 +412,16 @@ def test_chunk_size_configurable_smaller(monkeypatch):
     )
     text = f"--- PAGE 1 ---\n\n{paras}"
 
-    # With default CHUNK_SIZE=800, this would produce ~2-3 chunks
-    # With CHUNK_SIZE=300, we should get significantly more
+    # With default CHUNK_SIZE_TOKENS=400 this would produce ~1 chunk; with 50
+    # tokens each (paragraphs are ~25 tokens), we should get several.
     chunks = chunk_text_with_pages(text)
     assert len(chunks) >= 4
 
 
 def test_chunk_size_configurable_larger(monkeypatch):
-    """Larger CHUNK_SIZE should produce fewer, bigger chunks."""
-    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE", 2000)
-    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP", 200)
+    """Larger CHUNK_SIZE_TOKENS should produce fewer, bigger chunks."""
+    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE_TOKENS", 2000)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP_TOKENS", 200)
 
     paras = "\n\n".join(
         f"Paragraph number {i}. "
@@ -427,7 +431,7 @@ def test_chunk_size_configurable_larger(monkeypatch):
     text = f"--- PAGE 1 ---\n\n{paras}"
 
     chunks = chunk_text_with_pages(text)
-    # With CHUNK_SIZE=2000, all content should fit in very few chunks
+    # With CHUNK_SIZE_TOKENS=2000, all content should fit in very few chunks
     assert len(chunks) <= 3
     # Each chunk should be substantially larger than the default would allow
     for c in chunks:
@@ -435,9 +439,9 @@ def test_chunk_size_configurable_larger(monkeypatch):
 
 
 def test_chunk_overlap_configurable(monkeypatch):
-    """CHUNK_OVERLAP affects how much text is shared between consecutive chunks."""
-    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE", 400)
-    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP", 100)
+    """CHUNK_OVERLAP_TOKENS affects how much text is shared between chunks."""
+    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE_TOKENS", 80)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP_TOKENS", 30)
 
     paras = "\n\n".join(
         f"Paragraph {i}. " + "Repeated sentence for content. " * 5 for i in range(8)
@@ -452,15 +456,15 @@ def test_chunk_overlap_configurable(monkeypatch):
         words_curr = set(chunks[i].content.lower().split())
         words_next = set(chunks[i + 1].content.lower().split())
         shared = words_curr & words_next
-        # With overlap of 100 chars, there should be some shared words
+        # With overlap of 30 tokens, there should be some shared words
         assert len(shared) > 0
 
 
 def test_chunk_size_default_not_broken(monkeypatch):
     """Verify chunking still works with default config values."""
     # Explicitly set to defaults to ensure no regression
-    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE", 800)
-    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP", 150)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_SIZE_TOKENS", 400)
+    monkeypatch.setattr("app.core.config.settings.CHUNK_OVERLAP_TOKENS", 64)
 
     paras = "\n\n".join(
         f"This is paragraph {i}. " + "It contains multiple sentences. " * 4
@@ -678,10 +682,10 @@ def test_list_preservation_keeps_list_intact():
 
 
 def test_list_preservation_respects_2x_limit():
-    """List exceeding 2x CHUNK_SIZE should still be split."""
-    # Each item ~100 chars, 25 items = ~2500 chars > CHUNK_SIZE * 2 (1600)
+    """List exceeding 2x CHUNK_SIZE_TOKENS should still be split."""
+    # Each item ~15 tokens; 60 items ~900 tokens > CHUNK_SIZE_TOKENS * 2 (800)
     items = []
-    for i in range(25):
+    for i in range(60):
         items.append(
             f"{i + 1}. This is a very detailed list item number {i} that adds content."
         )
@@ -691,7 +695,7 @@ def test_list_preservation_respects_2x_limit():
     # List is too large to keep in one chunk — must split
     assert len(chunks) >= 2
     all_content = " ".join(c.content for c in chunks)
-    for i in range(25):
+    for i in range(60):
         assert f"item number {i}" in all_content
 
 
@@ -702,8 +706,10 @@ def test_list_preservation_mixed_content():
         items.append(
             f"- List item number {i} with enough content to be meaningful here."
         )
+    # Regular paragraph is large enough that list + regular > CHUNK_SIZE_TOKENS,
+    # forcing a flush between the list run and the regular text.
     regular = " ".join(
-        f"This is regular paragraph text sentence {i}. " for i in range(20)
+        f"This is regular paragraph text sentence {i}." for i in range(50)
     )
     text = "--- PAGE 1 ---\n\n" + "\n\n".join(items) + "\n\n" + regular
     chunks = chunk_text_with_pages(text)
@@ -735,3 +741,414 @@ def test_list_preservation_at_chunk_boundary():
         "List item" in c.content and "prefix paragraph" in c.content for c in chunks
     )
     assert list_in_prefix_chunk, "List items should extend the chunk past chunk_size"
+
+
+# --- Phase 3: markdown-aware chunk_document (§6.6) ---
+
+
+def _doc(*blocks: RawBlock, page_count: int = 1) -> ExtractedDocument:
+    """Build a minimal ExtractedDocument for chunk_document tests."""
+    return ExtractedDocument(
+        page_count=page_count,
+        extraction_backend="test",
+        blocks=list(blocks),
+    )
+
+
+def test_table_block_emitted_atomic():
+    """A table larger than the size budget becomes one unsplit 'table' chunk."""
+    big_table = "| col a | col b |\n|---|---|\n" + "\n".join(
+        f"| {i} | {'x' * 40} |" for i in range(80)
+    )
+    doc = _doc(
+        RawBlock(block_type="table", content=big_table, page_number=1, section_path=[])
+    )
+    chunks = chunk_document(doc)
+    assert len(chunks) == 1
+    assert chunks[0].chunk_type == "table"
+    assert chunks[0].content == big_table
+
+
+def test_equation_not_orphaned():
+    """An equation block is never split mid-$; it stands as an atomic chunk."""
+    equation = "$$E = mc^2$$ plus " * 60  # oversized — must not be split
+    doc = _doc(
+        RawBlock(
+            block_type="paragraph",
+            content="A preceding paragraph with enough content to pass quality.",
+            page_number=1,
+            section_path=[],
+        ),
+        RawBlock(
+            block_type="equation",
+            content=equation,
+            page_number=1,
+            section_path=[],
+        ),
+    )
+    chunks = chunk_document(doc)
+    eq_chunks = [c for c in chunks if c.chunk_type == "equation"]
+    assert len(eq_chunks) == 1
+    # never split: the whole equation text is preserved verbatim
+    assert eq_chunks[0].content == equation.strip()
+
+
+def test_heading_sets_section_context():
+    """A heading block flushes the buffer and sets section_title/level."""
+    doc = _doc(
+        RawBlock(
+            block_type="paragraph",
+            content="Para before the heading with enough content to pass quality.",
+            page_number=1,
+            section_path=[],
+        ),
+        RawBlock(
+            block_type="heading",
+            content="Methods",
+            page_number=1,
+            section_path=["Methods"],
+        ),
+        RawBlock(
+            block_type="paragraph",
+            content="Para after the heading with enough content to pass quality.",
+            page_number=1,
+            section_path=["Methods"],
+        ),
+    )
+    chunks = chunk_document(doc)
+    method_chunks = [c for c in chunks if c.section_title == "Methods"]
+    assert len(method_chunks) >= 1
+    assert all(c.section_level == 1 for c in method_chunks)
+    # pre-heading chunk carries no section
+    assert any(c.section_title is None for c in chunks)
+
+
+def test_references_skip_resumes_on_appendix():
+    """Post-References appendix must be indexed.
+
+    NeurIPS/ICLR/ACL papers place a large appendix *after* References; the
+    ``in_references`` latch must resume on an appendix heading so the appendix
+    (where gold evidence frequently lives) is not discarded.
+    """
+    doc = _doc(
+        RawBlock(
+            block_type="paragraph",
+            content="Main text paragraph with enough content to pass quality.",
+            page_number=1,
+            section_path=[],
+        ),
+        RawBlock(
+            block_type="heading",
+            content="References",
+            page_number=1,
+            section_path=["References"],
+        ),
+        RawBlock(
+            block_type="paragraph",
+            content="Smith, J. et al. A paper title. Journal of Stuff, 2020.",
+            page_number=1,
+            section_path=["References"],
+        ),
+        RawBlock(
+            block_type="heading",
+            content="Appendix",
+            page_number=2,
+            section_path=["Appendix"],
+        ),
+        RawBlock(
+            block_type="paragraph",
+            content="Appendix prose describing the dataset curation in detail here.",
+            page_number=2,
+            section_path=["Appendix"],
+        ),
+    )
+    chunks = chunk_document(doc)
+    all_text = "\n".join(c.content for c in chunks)
+    # reference entry is skipped (back-matter)
+    assert "Smith, J. et al." not in all_text
+    # appendix content is indexed (regression: was dropped by the permanent latch)
+    assert "Appendix prose describing the dataset curation" in all_text
+
+
+def test_references_skip_resumes_on_lettered_appendix():
+    """A lettered appendix heading ('A Appendix details') also resumes indexing."""
+    doc = _doc(
+        RawBlock(
+            block_type="heading",
+            content="References",
+            page_number=1,
+            section_path=["References"],
+        ),
+        RawBlock(
+            block_type="heading",
+            content="A Appendix: Hyperparameter Details",
+            page_number=3,
+            section_path=["A Appendix: Hyperparameter Details"],
+        ),
+        RawBlock(
+            block_type="paragraph",
+            content="We used a learning rate of 1e-4 with cosine scheduling for training.",
+            page_number=3,
+            section_path=["A Appendix: Hyperparameter Details"],
+        ),
+    )
+    chunks = chunk_document(doc)
+    all_text = "\n".join(c.content for c in chunks)
+    assert "learning rate of 1e-4" in all_text
+
+
+def test_page_attribution_spanning_pages():
+    """A chunk spanning pages 3-4 records page_number=3, end_page_number=4."""
+    p3 = " ".join(f"Sentence {i} on page three here." for i in range(6))
+    p4 = " ".join(f"Sentence {i} on page four goes here." for i in range(6))
+    doc = _doc(
+        RawBlock(block_type="paragraph", content=p3, page_number=3, section_path=[]),
+        RawBlock(block_type="paragraph", content=p4, page_number=4, section_path=[]),
+        page_count=4,
+    )
+    chunks = chunk_document(doc)
+    assert len(chunks) >= 1
+    assert any(
+        c.page_number == 3 and c.end_page_number == 4
+        for c in chunks
+        if c.end_page_number > c.page_number
+    )
+
+
+def test_chunk_type_set_per_block():
+    """paragraph / table / equation blocks get tagged with the right chunk_type."""
+    doc = _doc(
+        RawBlock(
+            block_type="paragraph",
+            content="A normal paragraph with enough content to pass quality checks.",
+            page_number=1,
+            section_path=[],
+        ),
+        RawBlock(
+            block_type="table",
+            content="| a | b |\n|---|---|\n| 1 | 2 |",
+            page_number=1,
+            section_path=[],
+        ),
+        RawBlock(
+            block_type="equation",
+            content="$$x = y$$",
+            page_number=1,
+            section_path=[],
+        ),
+    )
+    chunks = chunk_document(doc)
+    types = {c.chunk_type for c in chunks}
+    assert {"paragraph", "table", "equation"} <= types
+
+
+def test_code_block_emitted_atomic():
+    """A code block becomes its own 'code' chunk, not merged into a paragraph.
+
+    Previously code blocks flowed into the paragraph buffer and were flushed as
+    chunk_type='paragraph', so the documented 'code' type was never produced
+    and a chunk_type_filter=['code'] query returned nothing.
+    """
+    doc = _doc(
+        RawBlock(
+            block_type="paragraph",
+            content="A normal paragraph with enough content to pass quality checks.",
+            page_number=1,
+            section_path=[],
+        ),
+        RawBlock(
+            block_type="code",
+            content="def train(model, data):\n    return model.fit(data)",
+            page_number=1,
+            section_path=[],
+        ),
+    )
+    chunks = chunk_document(doc)
+    code_chunks = [c for c in chunks if c.chunk_type == "code"]
+    assert len(code_chunks) == 1
+    assert "def train" in code_chunks[0].content
+    # The code must NOT have been absorbed into the paragraph chunk.
+    para_chunks = [c for c in chunks if c.chunk_type == "paragraph"]
+    assert all("def train" not in c.content for c in para_chunks)
+
+
+def test_caption_attaches_to_preceding_table():
+    """A caption right after a table merges into the table chunk."""
+    doc = _doc(
+        RawBlock(
+            block_type="table",
+            content="| a | b |\n|---|---|\n| 1 | 2 |",
+            page_number=1,
+            section_path=[],
+        ),
+        RawBlock(
+            block_type="caption",
+            content="Table 1: Results of the experiment.",
+            page_number=1,
+            section_path=[],
+        ),
+    )
+    chunks = chunk_document(doc)
+    # caption attached -> still a single table chunk carrying the caption text
+    assert len(chunks) == 1
+    assert chunks[0].chunk_type == "table"
+    assert "Table 1:" in chunks[0].content
+
+
+def test_overlap_stays_within_section():
+    """Overlap must not carry text across a heading boundary."""
+
+    def para(n: int) -> str:
+        return f"This is paragraph {n}. " + "Word " * 60
+
+    blocks: list[RawBlock] = []
+    for i in range(12):
+        blocks.append(
+            RawBlock(
+                block_type="paragraph",
+                content=para(i),
+                page_number=1,
+                section_path=["Section A"],
+            )
+        )
+    blocks.append(
+        RawBlock(
+            block_type="heading",
+            content="Section B",
+            page_number=1,
+            section_path=["Section B"],
+        )
+    )
+    blocks.append(
+        RawBlock(
+            block_type="paragraph",
+            content="This paragraph belongs to section B with enough content here.",
+            page_number=1,
+            section_path=["Section B"],
+        )
+    )
+    chunks = chunk_document(_doc(*blocks))
+    b_chunks = [c for c in chunks if c.section_title == "Section B"]
+    assert len(b_chunks) >= 1
+    # No section-B chunk should leak section-A paragraph text via overlap
+    for c in b_chunks:
+        assert "This is paragraph" not in c.content
+
+
+def test_legacy_adapter_delegates_and_recovers_headings():
+    """chunk_text_with_pages delegates to chunk_document and recovers headings.
+
+    Phase 3 switched sizing from chars to tokens, so the adapter no longer
+    matches the pre-refactor chunk *count* byte-for-byte (the golden harness
+    covers baseline stability instead). What must still hold: the adapter
+    builds a correct ExtractedDocument, so [HEADING L{n}] markers propagate as
+    section_title on the emitted chunks and chunk indices stay sequential.
+    """
+    body = " ".join(f"This is sentence {i} with enough content." for i in range(15))
+    methods = " ".join(f"Method sentence {i} is detailed here." for i in range(15))
+    text = f"--- PAGE 1 ---\n\n{body}\n\n[HEADING L2] Methods\n\n{methods}"
+    chunks = chunk_text_with_pages(text)
+    assert len(chunks) >= 1
+    assert [c.chunk_index for c in chunks] == list(range(len(chunks)))
+    sections = {c.section_title for c in chunks if c.section_title}
+    assert "Methods" in sections
+
+
+# --- Oversized section_path entries (indexing-abort regression) ---
+
+
+def test_valid_section_title_thresholds():
+    assert _valid_section_title(None) is None
+    assert _valid_section_title("") is None
+    assert _valid_section_title("   ") is None
+    assert _valid_section_title("Introduction") == "Introduction"
+    at_limit = "x" * _MAX_SECTION_TITLE_CHARS
+    assert _valid_section_title(at_limit) == at_limit
+    over_limit = "x" * (_MAX_SECTION_TITLE_CHARS + 1)
+    assert _valid_section_title(over_limit) is None
+
+
+def test_oversized_section_path_entry_rejected():
+    """A >200-char section_path entry (a misclassified algorithm/code body, as
+    seen on PeerQA's VICReg paper) must not propagate to a chunk's
+    section_title -- it overflows ``pdf_chunks.section_title varchar(500)`` and
+    aborts indexing for the whole paper. With no valid ancestor, it is None.
+    """
+    bogus = "f: encoder, p: projector, lambda, mu, nu: coefficients, " * 10
+    assert len(bogus) > _MAX_SECTION_TITLE_CHARS
+    doc = _doc(
+        RawBlock(
+            block_type="heading",
+            content=bogus,
+            page_number=1,
+            section_path=[bogus],
+        ),
+        RawBlock(
+            block_type="paragraph",
+            content="A normal paragraph with enough content to pass quality checks here.",
+            page_number=1,
+            section_path=[bogus],
+        ),
+    )
+    chunks = chunk_document(doc)
+    assert len(chunks) >= 1
+    for c in chunks:
+        assert c.section_title is None
+
+
+def test_oversized_section_path_falls_back_to_ancestor():
+    """When the current section_path entry is bogus but a valid ancestor exists,
+    the chunk inherits the ancestor's title and level rather than carrying the
+    bogus value or None."""
+    bogus = "x" * (_MAX_SECTION_TITLE_CHARS + 50)
+    doc = _doc(
+        RawBlock(
+            block_type="heading",
+            content="Methods",
+            page_number=1,
+            section_path=["Methods"],
+        ),
+        RawBlock(
+            block_type="heading",
+            content=bogus,
+            page_number=1,
+            section_path=["Methods", bogus],
+        ),
+        RawBlock(
+            block_type="paragraph",
+            content="A normal paragraph with enough content to pass quality checks here.",
+            page_number=1,
+            section_path=["Methods", bogus],
+        ),
+    )
+    chunks = chunk_document(doc)
+    para_chunks = [c for c in chunks if c.chunk_type == "paragraph"]
+    assert len(para_chunks) >= 1
+    for c in para_chunks:
+        assert c.section_title == "Methods"
+        assert c.section_level == 1
+
+
+def test_no_chunk_section_title_exceeds_column_limit():
+    """Regression guard for the indexing-abort bug: no emitted chunk may carry a
+    section_title longer than ``_MAX_SECTION_TITLE_CHARS``, regardless of what
+    an extractor places in section_path."""
+    bogus = "Algorithm pseudocode body misclassified as a heading: " * 20
+    assert len(bogus) > _MAX_SECTION_TITLE_CHARS
+    doc = _doc(
+        RawBlock(
+            block_type="heading", content=bogus, page_number=1, section_path=[bogus]
+        ),
+        RawBlock(
+            block_type="paragraph",
+            content="Paragraph with enough content to pass the quality filter for chunking.",
+            page_number=1,
+            section_path=[bogus],
+        ),
+    )
+    chunks = chunk_document(doc)
+    assert chunks
+    for c in chunks:
+        assert (
+            c.section_title is None or len(c.section_title) <= _MAX_SECTION_TITLE_CHARS
+        )

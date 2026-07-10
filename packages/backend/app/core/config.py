@@ -77,9 +77,21 @@ class Settings(BaseSettings):
     RATE_LIMIT_CHAT_CONVERSATIONS: str = "30/minute"
     RATE_LIMIT_SEMANTIC_SEARCH: str = "10/minute"
 
-    # Chunking
+    # Chunking (Phase C, Phase 3): the chunker sizes by TOKENS, not characters,
+    # using tiktoken's cl100k_base encoding (matches the embedding model family
+    # and uses the 8K context window properly). CHUNK_SIZE/CHUNK_OVERLAP are
+    # retained for backwards compatibility but are no longer read by the chunker.
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150
+    CHUNK_SIZE_TOKENS: int = 400
+    CHUNK_OVERLAP_TOKENS: int = 64
+
+    # Extraction backend: which DocumentExtractor implementation produces the
+    # ExtractedDocument that the chunker walks. "pymupdf" is the legacy
+    # font-heuristic extractor; "pymupdf4llm" is the new Markdown-based one
+    # (Phase C). Default flipped to "pymupdf4llm" in Phase 6 after the golden
+    # corpus passed; the legacy backend remains available via config override.
+    EXTRACTION_BACKEND: str = "pymupdf4llm"  # "pymupdf" | "pymupdf4llm"
 
     # Contextual retrieval: prepend "Paper: <title>\nSection: <section>" to
     # each chunk's text before embedding. The raw `content` column is
@@ -89,13 +101,27 @@ class Settings(BaseSettings):
     CONTEXTUAL_RETRIEVAL_ENABLED: bool = True
 
     # Retrieval top_k values
-    CHAT_TOP_K_SINGLE_PDF: int = 6
+    CHAT_TOP_K_SINGLE_PDF: int = 10
     CHAT_TOP_K_COLLECTION: int = 8
     EXPLAIN_TOP_K: int = 4
 
     # Hybrid search weights
     HYBRID_SEMANTIC_WEIGHT: float = 0.7
     HYBRID_KEYWORD_WEIGHT: float = 0.3
+
+    # Optional cross-encoder reranker (second retrieval stage). None = disabled
+    # (behaviour identical to the pre-reranker path). When set, retrieval pulls a
+    # RERANKER_POOL_K candidate pool via hybrid search and re-orders it before
+    # truncating to top_k. RERANKER_BACKEND selects the implementation:
+    # "openrouter" calls OpenRouter /v1/rerank (no extra deps; e.g.
+    # "cohere/rerank-v3.5"); "local" loads a HuggingFace cross-encoder via
+    # torch + sentence-transformers (lazy, e.g. "BAAI/bge-reranker-v2-m3").
+    # RERANKER_FALLBACK_MODEL is consulted only on a 402 (out of credits) from
+    # the primary model — a :free slug keeps rerank alive when credits run out.
+    RERANKER_MODEL: str | None = None
+    RERANKER_BACKEND: str = "openrouter"
+    RERANKER_FALLBACK_MODEL: str | None = None
+    RERANKER_POOL_K: int = 50
 
     # Training data logging
     TRAINING_DATA_LOGGING_ENABLED: bool = False

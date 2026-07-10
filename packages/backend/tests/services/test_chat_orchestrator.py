@@ -139,6 +139,113 @@ class TestPreparePdfContext:
         assert result.training_chunks_payload[0]["retrieval_score"] == 0.82
         assert result.training_chunks_payload[0]["content"] == "chunk text"
 
+    async def test_prepare_pdf_context_uses_rerank_when_enabled(
+        self, orchestrator, mock_user, mock_db, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "app.core.config.settings.RERANKER_MODEL", "cohere/rerank-v3.5"
+        )
+        pdf_id = uuid.uuid4()
+        pdf_row = MagicMock()
+        pdf_row.title = "Test Paper"
+        pdf_row.id = pdf_id
+
+        scalar_result = MagicMock()
+        scalar_result.scalar_one_or_none = MagicMock(return_value=pdf_row)
+        mock_db.execute = AsyncMock(return_value=scalar_result)
+
+        rerank_chunk = MagicMock()
+        rerank_chunk.page_number = 3
+        rerank_chunk.end_page_number = None
+        rerank_chunk.content = "reranked text"
+        rerank_chunk.section_title = None
+        rerank_chunk.section_level = None
+        rerank_chunk.chunk_id = str(uuid.uuid4())
+        rerank_chunk.score = 0.95
+
+        with (
+            patch(
+                "app.services.reranker_service.get_reranker",
+                return_value=MagicMock(pool_k=50),
+            ) as mock_get,
+            patch(
+                "app.services.reranker_service.retrieve_with_rerank",
+                new_callable=AsyncMock,
+                return_value=[rerank_chunk],
+            ) as mock_rerank,
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_pdf",
+                new_callable=AsyncMock,
+            ) as mock_search,
+        ):
+            result = await orchestrator.prepare_context(
+                query="test query",
+                pdf_id=pdf_id,
+                collection_id=None,
+                user=mock_user,
+                db=mock_db,
+            )
+
+        assert mock_get.called
+        assert mock_rerank.called
+        assert not mock_search.called  # rerank path taken, plain search skipped
+        assert len(result.top_chunks) == 1
+        assert result.top_chunks[0].content == "reranked text"
+
+    async def test_prepare_pdf_context_rerank_failure_falls_back(
+        self, orchestrator, mock_user, mock_db, monkeypatch
+    ):
+        from app.services.exceptions import RerankError
+
+        monkeypatch.setattr(
+            "app.core.config.settings.RERANKER_MODEL", "cohere/rerank-v3.5"
+        )
+        pdf_id = uuid.uuid4()
+        pdf_row = MagicMock()
+        pdf_row.title = "Test Paper"
+        pdf_row.id = pdf_id
+
+        scalar_result = MagicMock()
+        scalar_result.scalar_one_or_none = MagicMock(return_value=pdf_row)
+        mock_db.execute = AsyncMock(return_value=scalar_result)
+
+        fallback_chunk = MagicMock()
+        fallback_chunk.page_number = 1
+        fallback_chunk.end_page_number = None
+        fallback_chunk.content = "fallback chunk"
+        fallback_chunk.section_title = None
+        fallback_chunk.section_level = None
+        fallback_chunk.chunk_id = str(uuid.uuid4())
+        fallback_chunk.score = 0.5
+
+        with (
+            patch(
+                "app.services.reranker_service.get_reranker",
+                return_value=MagicMock(pool_k=50),
+            ),
+            patch(
+                "app.services.reranker_service.retrieve_with_rerank",
+                new_callable=AsyncMock,
+                side_effect=RerankError("boom"),
+            ),
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_pdf",
+                new_callable=AsyncMock,
+                return_value=[fallback_chunk],
+            ) as mock_search,
+        ):
+            result = await orchestrator.prepare_context(
+                query="test query",
+                pdf_id=pdf_id,
+                collection_id=None,
+                user=mock_user,
+                db=mock_db,
+            )
+
+        assert mock_search.called  # fell back to plain hybrid retrieval
+        assert len(result.top_chunks) == 1
+        assert result.top_chunks[0].content == "fallback chunk"
+
     async def test_prepare_pdf_context_pdf_not_found(
         self, orchestrator, mock_user, mock_db
     ):

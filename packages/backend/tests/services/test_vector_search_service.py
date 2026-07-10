@@ -1016,3 +1016,90 @@ class TestHybridSearchEdgeCases:
 
         assert len(results) == 1
         assert len(results[0].content) == 500
+
+
+class TestChunkTypeFilter:
+    """Tests for Phase 5 chunk_type filtering in retrieval."""
+
+    @pytest.mark.parametrize(
+        "method_name,method_kwargs",
+        [
+            ("search_pdf", {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 3}),
+            (
+                "search_collection",
+                {"collection_id": "uuid4", "user_id": "uuid4", "top_k": 3},
+            ),
+            ("search_all", {"user_id": "uuid4", "limit": 3}),
+        ],
+    )
+    async def test_chunk_type_filter_appends_clause_and_params(
+        self, method_name, method_kwargs
+    ):
+        """When chunk_type_filter is provided, SQL includes ANY(:chunk_types)."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        method = getattr(service, method_name)
+
+        kwargs = {
+            "query_vector": [0.1] * 384,
+            "db": mock_db,
+            "query_text": "test query",
+            "chunk_type_filter": ["paragraph", "table"],
+        }
+        for k, v in method_kwargs.items():
+            kwargs[k] = uuid4() if v == "uuid4" else v
+
+        await method(**kwargs)
+
+        call_args = mock_db.execute.call_args
+        params = call_args[0][1]
+        sql = call_args[0][0].text
+
+        assert "pc.chunk_type = ANY(:chunk_types)" in sql
+        assert params["chunk_types"] == ["paragraph", "table"]
+
+    @pytest.mark.parametrize(
+        "method_name,method_kwargs,filter_value",
+        [
+            ("search_pdf", {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 3}, None),
+            ("search_pdf", {"pdf_id": "uuid4", "user_id": "uuid4", "top_k": 3}, []),
+            (
+                "search_collection",
+                {"collection_id": "uuid4", "user_id": "uuid4", "top_k": 3},
+                None,
+            ),
+            ("search_all", {"user_id": "uuid4", "limit": 3}, None),
+        ],
+    )
+    async def test_no_chunk_type_filter_omits_clause(
+        self, method_name, method_kwargs, filter_value
+    ):
+        """When chunk_type_filter is absent or empty, no chunk_type SQL is emitted."""
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.__iter__ = lambda self: iter([])
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        service = VectorSearchService()
+        method = getattr(service, method_name)
+
+        kwargs = {
+            "query_vector": [0.1] * 384,
+            "db": mock_db,
+            "chunk_type_filter": filter_value,
+        }
+        for k, v in method_kwargs.items():
+            kwargs[k] = uuid4() if v == "uuid4" else v
+
+        await method(**kwargs)
+
+        call_args = mock_db.execute.call_args
+        params = call_args[0][1]
+        sql = call_args[0][0].text
+
+        assert "pc.chunk_type" not in sql
+        assert "chunk_types" not in params

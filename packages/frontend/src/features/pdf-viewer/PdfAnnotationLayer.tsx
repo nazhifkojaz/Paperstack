@@ -39,6 +39,7 @@ export const PdfAnnotationLayer = ({
     editingNoteId,
     handleExplainThis,
     handleParaphraseThis,
+    handleAskInChat,
     isDrawingRect,
     openContextMenu,
     pageAnnotations,
@@ -133,6 +134,7 @@ export const PdfAnnotationLayer = ({
         onEditNote={setEditingNoteId}
         onExplainThis={handleExplainThis}
         onParaphraseThis={handleParaphraseThis}
+        onAskInChat={handleAskInChat}
         onSelectAnnotation={setSelectedAnnotationId}
       />
     </div>

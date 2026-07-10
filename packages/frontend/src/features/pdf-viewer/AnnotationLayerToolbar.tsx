@@ -44,6 +44,7 @@ interface AnnotationLayerToolbarProps {
   onEditNote: (annotationId: string | null) => void;
   onExplainThis: (annotationId: string) => void;
   onParaphraseThis: (annotationId: string, level?: ParaphraseLevel) => void;
+  onAskInChat?: (annotationId: string) => void;
   onSelectAnnotation: (annotationId: string | null) => void;
 }
 
@@ -61,6 +62,7 @@ export function AnnotationLayerToolbar({
   onEditNote,
   onExplainThis,
   onParaphraseThis,
+  onAskInChat,
   onSelectAnnotation,
 }: AnnotationLayerToolbarProps) {
   const getAnnotationWithRects = (annotationId: string | null) => {
@@ -107,6 +109,7 @@ export function AnnotationLayerToolbar({
           }
           paraphraseStatusMessage={annotationParaphrase.statusMessage}
           onParaphraseThis={onParaphraseThis}
+          onAskInChat={onAskInChat}
         />
       )}
 
@@ -165,6 +168,7 @@ export function AnnotationLayerToolbar({
           onEditNote={onEditNote}
           onExplainThis={onExplainThis}
           onParaphraseThis={onParaphraseThis}
+          onAskInChat={onAskInChat}
           aiUsesRemaining={
             annotationParaphrase.explainUsesRemaining ??
             annotationExplain.explainUsesRemaining

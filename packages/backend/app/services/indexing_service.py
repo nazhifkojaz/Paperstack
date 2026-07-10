@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.models import Pdf, PdfChunk, PdfIndexStatus, User
-from app.services.chunking_service import chunk_text_with_pages
+from app.services.chunking_service import chunk_document
 from app.services.contextualizer import build_embed_inputs
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import (
@@ -30,9 +30,10 @@ from app.services.exceptions import (
     IndexingError,
     TextExtractionError,
 )
+from app.services.extractors import get_extractor
 from app.services.pdf_download_service import PdfDownloadService, PdfSource
 from app.services.storage.factory import get_storage_backend
-from app.services.text_extractor import extract_text_with_pages, validate_extraction
+from app.services.text_extractor import validate_extraction
 from app.services.api_key_service import api_key_service
 
 
@@ -133,17 +134,24 @@ class IndexingService:
         try:
             tmp_path = await self.download_pdf_for_row(pdf_row, user, db)
 
-            with open(tmp_path, "rb") as f:
-                text_with_pages, _total_pages, _pages_analyzed = (
-                    extract_text_with_pages(f)
-                )
+            # Extraction backend is selected by the EXTRACTION_BACKEND setting
+            # (Phase 4 wiring). Both backends speak the ExtractedDocument
+            # contract; chunk_document walks the typed block stream.
+            pdf_bytes = tmp_path.read_bytes()
+            extractor = get_extractor(settings.EXTRACTION_BACKEND)
+            doc = extractor.extract(pdf_bytes)
 
-            if not text_with_pages.strip():
+            # Quality gate on the joined block stream. The legacy text with
+            # ``--- PAGE N ---`` markers is gone; validate_extraction's
+            # heuristics (length, alphabetic ratio, repetition) run on the
+            # plain text the chunker will walk.
+            joined_text = "\n\n".join(b.content for b in doc.blocks)
+            if not joined_text.strip():
                 raise TextExtractionError(
                     "PDF has no extractable text (may be image-only)."
                 )
 
-            quality = validate_extraction(text_with_pages)
+            quality = validate_extraction(joined_text)
             if not quality.is_usable:
                 raise TextExtractionError(
                     f"Extracted text quality too low (score: {quality.score:.1f}). "
@@ -157,7 +165,7 @@ class IndexingService:
                     quality.warnings,
                 )
 
-            chunks = chunk_text_with_pages(text_with_pages)
+            chunks = chunk_document(doc)
             if not chunks:
                 raise ChunkingError("No chunks produced from PDF text.")
 
@@ -202,12 +210,14 @@ class IndexingService:
                         embedding=embedding,
                         section_title=chunk.section_title,
                         section_level=chunk.section_level,
+                        chunk_type=chunk.chunk_type,
                     )
                 )
 
             now = datetime.now(timezone.utc)
             index_status.status = "indexed"
             index_status.chunk_count = len(chunks)
+            index_status.extraction_backend = doc.extraction_backend
             index_status.indexed_at = now
             index_status.updated_at = now
             index_status.error_message = None

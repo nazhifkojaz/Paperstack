@@ -105,7 +105,7 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
     };
 
     const handleLink = async () => {
-        if (!url.trim() || !urlTitle.trim() || !checkResult?.valid) return;
+        if (!url.trim() || !urlTitle.trim() || (!checkResult?.valid && !checkResult?.can_force_link)) return;
 
         try {
             await toast.promise(linkMutation.mutateAsync({
@@ -292,7 +292,13 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
                                     </div>
                                 </div>
                             )}
-                            {checkResult && !checkResult.valid && !checkResult.cors_blocked && (
+                            {checkResult && !checkResult.valid && !checkResult.cors_blocked && checkResult.can_force_link && (
+                                <div className="flex items-start gap-2 text-xs text-amber-600">
+                                    <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                                    <span>{checkResult.error}</span>
+                                </div>
+                            )}
+                            {checkResult && !checkResult.valid && !checkResult.cors_blocked && !checkResult.can_force_link && (
                                 <div className="flex items-center gap-2 text-xs text-destructive">
                                     <XCircle className="h-3.5 w-3.5 shrink-0" />
                                     <span>{checkResult.error}</span>
@@ -324,13 +330,15 @@ export const AddPdfModal = ({ open, onOpenChange }: AddPdfModalProps) => {
                         <Button
                             className="w-full"
                             onClick={handleLink}
-                            disabled={!url.trim() || !urlTitle.trim() || isLinking || !checkResult?.valid}
+                            disabled={!url.trim() || !urlTitle.trim() || isLinking || (!checkResult?.valid && !checkResult?.can_force_link)}
                         >
                             {isLinking ? (
                                 <>
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                     Adding...
                                 </>
+                            ) : checkResult?.can_force_link && !checkResult?.valid ? (
+                                'Add PDF Anyway'
                             ) : (
                                 'Add PDF'
                             )}

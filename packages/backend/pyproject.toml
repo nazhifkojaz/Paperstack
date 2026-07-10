@@ -21,6 +21,9 @@ dependencies = [
     "uvicorn>=0.41.0",
     "pgvector>=0.3.6",
     "tiktoken>=0.7.0",
+    # Phase C — structured extraction + markdown-aware chunking
+    "pymupdf4llm>=0.0.17", # lightweight Markdown extractor (no torch); sibling of PyMuPDF
+    "markdown-it-py>=3.0.0", # token-stream parser for the markdown chunker/extractor
 ]
 
 [project.optional-dependencies]

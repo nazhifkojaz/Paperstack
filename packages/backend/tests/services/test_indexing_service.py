@@ -16,6 +16,8 @@ from app.services.exceptions import (
     TextExtractionError,
 )
 from app.services.pdf_download_service import PdfDownloadService
+from app.services.chunking_service import Chunk
+from app.services.extractors.base import ExtractedDocument, RawBlock
 from app.db.models import PdfChunk, PdfIndexStatus
 
 
@@ -68,6 +70,50 @@ def sample_index_status():
         pdf_id=str(uuid.uuid4()),
         user_id=str(uuid.uuid4()),
         status="not_indexed",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers — the indexer now drives extraction through get_extractor and
+# chunking through chunk_document (Phase 4 wiring). Tests patch at those seams
+# rather than at the legacy extract_text_with_pages / chunk_text_with_pages.
+# ---------------------------------------------------------------------------
+
+
+def _make_doc(
+    backend: str = "pymupdf", content: str = "extracted text block long enough to pass"
+) -> ExtractedDocument:
+    """Minimal ExtractedDocument for the indexer's join + extraction_backend reads."""
+    return ExtractedDocument(
+        title=None,
+        blocks=[RawBlock(block_type="paragraph", content=content, page_number=1)],
+        page_count=1,
+        extraction_backend=backend,
+    )
+
+
+def _patch_extractor(doc: ExtractedDocument):
+    """Patch get_extractor to return a mock extractor yielding ``doc``."""
+    extractor = MagicMock()
+    extractor.extract = MagicMock(return_value=doc)
+    return patch("app.services.indexing_service.get_extractor", return_value=extractor)
+
+
+def _chunk(
+    index: int = 0,
+    content: str = "chunk content",
+    section_title: str | None = "Introduction",
+    section_level: int | None = 1,
+    chunk_type: str = "paragraph",
+) -> Chunk:
+    return Chunk(
+        chunk_index=index,
+        page_number=1,
+        end_page_number=1,
+        content=content,
+        section_title=section_title,
+        section_level=section_level,
+        chunk_type=chunk_type,
     )
 
 
@@ -200,21 +246,14 @@ class TestEnsureIndexed:
 
         try:
             with (
-                patch(
-                    "app.services.indexing_service.extract_text_with_pages",
-                    return_value=(
-                        "--- PAGE 1 ---\n\n"
-                        + " ".join(
-                            f"This is sentence {i} on page one with enough content to create chunks."
-                            for i in range(25)
-                        ),
-                        1,
-                        1,
-                    ),
-                ),
+                _patch_extractor(_make_doc()),
                 patch(
                     "app.services.indexing_service.validate_extraction",
                     return_value=MagicMock(is_usable=True, warnings=[]),
+                ),
+                patch(
+                    "app.services.indexing_service.chunk_document",
+                    return_value=[_chunk()],
                 ),
             ):
                 result = await indexing_service.ensure_indexed(
@@ -251,21 +290,14 @@ class TestEnsureIndexed:
 
         try:
             with (
-                patch(
-                    "app.services.indexing_service.extract_text_with_pages",
-                    return_value=(
-                        "--- PAGE 1 ---\n\n"
-                        + " ".join(
-                            f"Sentence {i} with enough content for chunking."
-                            for i in range(25)
-                        ),
-                        1,
-                        1,
-                    ),
-                ),
+                _patch_extractor(_make_doc()),
                 patch(
                     "app.services.indexing_service.validate_extraction",
                     return_value=MagicMock(is_usable=True, warnings=[]),
+                ),
+                patch(
+                    "app.services.indexing_service.chunk_document",
+                    return_value=[_chunk()],
                 ),
             ):
                 result = await indexing_service.ensure_indexed(
@@ -315,37 +347,22 @@ class TestIndexPdf:
 
         try:
             with (
-                patch(
-                    "app.services.indexing_service.extract_text_with_pages",
-                    return_value=(
-                        "--- PAGE 1 ---\n\n"
-                        + " ".join(
-                            f"This is sentence {i} with enough content for chunking."
-                            for i in range(25)
-                        ),
-                        1,
-                        1,
-                    ),
-                ),
+                _patch_extractor(_make_doc()),
                 patch(
                     "app.services.indexing_service.validate_extraction",
                     return_value=MagicMock(is_usable=True, warnings=[]),
                 ),
                 patch(
-                    "app.services.indexing_service.chunk_text_with_pages",
+                    "app.services.indexing_service.chunk_document",
                     return_value=[
-                        MagicMock(
-                            chunk_index=0,
-                            page_number=1,
-                            end_page_number=1,
+                        _chunk(
+                            index=0,
                             content="chunk 1 content",
                             section_title="Introduction",
                             section_level=1,
                         ),
-                        MagicMock(
-                            chunk_index=1,
-                            page_number=1,
-                            end_page_number=1,
+                        _chunk(
+                            index=1,
                             content="chunk 2 content",
                             section_title="Introduction",
                             section_level=1,
@@ -386,29 +403,22 @@ class TestIndexPdf:
 
         try:
             with (
-                patch(
-                    "app.services.indexing_service.extract_text_with_pages",
-                    return_value=("page 1 text", 1, 1),
-                ),
+                _patch_extractor(_make_doc()),
                 patch(
                     "app.services.indexing_service.validate_extraction",
                     return_value=MagicMock(is_usable=True, warnings=[]),
                 ),
                 patch(
-                    "app.services.indexing_service.chunk_text_with_pages",
+                    "app.services.indexing_service.chunk_document",
                     return_value=[
-                        MagicMock(
-                            chunk_index=0,
-                            page_number=1,
-                            end_page_number=1,
+                        _chunk(
+                            index=0,
                             content="Self-attention uses scaled dot-product.",
                             section_title="Methods",
                             section_level=2,
                         ),
-                        MagicMock(
-                            chunk_index=1,
-                            page_number=1,
-                            end_page_number=1,
+                        _chunk(
+                            index=1,
                             content="The model outperforms baselines.",
                             section_title=None,
                             section_level=None,
@@ -465,21 +475,16 @@ class TestIndexPdf:
 
         try:
             with (
-                patch(
-                    "app.services.indexing_service.extract_text_with_pages",
-                    return_value=("page 1 text", 1, 1),
-                ),
+                _patch_extractor(_make_doc()),
                 patch(
                     "app.services.indexing_service.validate_extraction",
                     return_value=MagicMock(is_usable=True, warnings=[]),
                 ),
                 patch(
-                    "app.services.indexing_service.chunk_text_with_pages",
+                    "app.services.indexing_service.chunk_document",
                     return_value=[
-                        MagicMock(
-                            chunk_index=0,
-                            page_number=1,
-                            end_page_number=1,
+                        _chunk(
+                            index=0,
                             content="Raw chunk body.",
                             section_title="Methods",
                             section_level=1,
@@ -520,16 +525,13 @@ class TestIndexPdf:
 
         try:
             with (
-                patch(
-                    "app.services.indexing_service.extract_text_with_pages",
-                    return_value=("some text", 1, 1),
-                ),
+                _patch_extractor(_make_doc()),
                 patch(
                     "app.services.indexing_service.validate_extraction",
                     return_value=MagicMock(is_usable=True, warnings=[]),
                 ),
                 patch(
-                    "app.services.indexing_service.chunk_text_with_pages",
+                    "app.services.indexing_service.chunk_document",
                     return_value=[],
                 ),
             ):
@@ -555,10 +557,7 @@ class TestIndexPdf:
 
         try:
             with (
-                patch(
-                    "app.services.indexing_service.extract_text_with_pages",
-                    return_value=("poor quality text", 1, 1),
-                ),
+                _patch_extractor(_make_doc(content="poor quality text")),
                 patch(
                     "app.services.indexing_service.validate_extraction",
                     return_value=MagicMock(
@@ -688,9 +687,13 @@ class TestIndexPdfUnexpectedError:
         tmp_path = self._setup_tmp_download(indexing_service)
 
         try:
+            extractor = MagicMock()
+            extractor.extract = MagicMock(
+                side_effect=RuntimeError("Unexpected filesystem error")
+            )
             with patch(
-                "app.services.indexing_service.extract_text_with_pages",
-                side_effect=RuntimeError("Unexpected filesystem error"),
+                "app.services.indexing_service.get_extractor",
+                return_value=extractor,
             ):
                 with pytest.raises(IndexingError, match="Unexpected filesystem error"):
                     await indexing_service.index_pdf(pdf_row, user, status, mock_db)
@@ -699,3 +702,166 @@ class TestIndexPdfUnexpectedError:
 
         assert status.status == "failed"
         assert "Unexpected filesystem error" in status.error_message
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — extraction wiring (get_extractor + chunk_document + chunk_type)
+# ---------------------------------------------------------------------------
+
+
+class TestPhase4ExtractionWiring:
+    """Phase 4: the indexer selects the extractor via EXTRACTION_BACKEND,
+    persists ``chunk_type`` on every PdfChunk, and records the backend used
+    on PdfIndexStatus. Default backend stays ``pymupdf`` (zero behavior change
+    until Phase 6)."""
+
+    @staticmethod
+    def _setup_tmp_download(svc):
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp.write(b"dummy pdf content")
+        tmp.close()
+        tmp_path = Path(tmp.name)
+        result = MagicMock()
+        result.file_path = tmp_path
+        svc.download_service.download_to_tempfile = AsyncMock(return_value=result)
+        return tmp_path
+
+    async def test_index_uses_configured_backend(
+        self, indexing_service, mock_db, mock_embedding
+    ):
+        """get_extractor is called with settings.EXTRACTION_BACKEND."""
+        mock_embedding.embed_texts = AsyncMock(return_value=[[0.1] * 384])
+
+        pdf_row = MagicMock()
+        pdf_row.id = uuid.uuid4()
+        pdf_row.title = "T"
+        pdf_row.source_url = "https://example.com/test.pdf"
+        pdf_row.github_sha = None
+        pdf_row.drive_file_id = None
+        pdf_row.filename = "test.pdf"
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        status = PdfIndexStatus(pdf_id="pdf-1", user_id="user-1", status="not_indexed")
+
+        tmp_path = self._setup_tmp_download(indexing_service)
+        extractor = MagicMock()
+        extractor.extract = MagicMock(return_value=_make_doc(backend="pymupdf4llm"))
+
+        try:
+            with (
+                patch(
+                    "app.services.indexing_service.settings.EXTRACTION_BACKEND",
+                    "pymupdf4llm",
+                ),
+                patch(
+                    "app.services.indexing_service.get_extractor",
+                    return_value=extractor,
+                ) as mock_get,
+                patch(
+                    "app.services.indexing_service.validate_extraction",
+                    return_value=MagicMock(is_usable=True, warnings=[]),
+                ),
+                patch(
+                    "app.services.indexing_service.chunk_document",
+                    return_value=[_chunk()],
+                ),
+            ):
+                await indexing_service.index_pdf(pdf_row, user, status, mock_db)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        mock_get.assert_called_once_with("pymupdf4llm")
+
+    async def test_index_persists_chunk_type(
+        self, indexing_service, mock_db, mock_embedding
+    ):
+        """Each PdfChunk row carries the chunk_type produced by chunk_document."""
+        mock_embedding.embed_texts = AsyncMock(
+            return_value=[[0.1] * 384, [0.2] * 384, [0.3] * 384]
+        )
+
+        pdf_row = MagicMock()
+        pdf_row.id = uuid.uuid4()
+        pdf_row.title = "T"
+        pdf_row.source_url = "https://example.com/test.pdf"
+        pdf_row.github_sha = None
+        pdf_row.drive_file_id = None
+        pdf_row.filename = "test.pdf"
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        status = PdfIndexStatus(pdf_id="pdf-1", user_id="user-1", status="not_indexed")
+
+        tmp_path = self._setup_tmp_download(indexing_service)
+
+        try:
+            with (
+                _patch_extractor(_make_doc()),
+                patch(
+                    "app.services.indexing_service.validate_extraction",
+                    return_value=MagicMock(is_usable=True, warnings=[]),
+                ),
+                patch(
+                    "app.services.indexing_service.chunk_document",
+                    return_value=[
+                        _chunk(index=0, content="a paragraph", chunk_type="paragraph"),
+                        _chunk(
+                            index=1,
+                            content="| col a | col b |\n|---|---|\n| 1 | 2 |",
+                            chunk_type="table",
+                        ),
+                        _chunk(
+                            index=2, content="Figure 1: thing", chunk_type="caption"
+                        ),
+                    ],
+                ),
+            ):
+                await indexing_service.index_pdf(pdf_row, user, status, mock_db)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        added = [c.args[0] for c in mock_db.add.call_args_list]
+        pdf_chunks = [c for c in added if isinstance(c, PdfChunk)]
+        assert len(pdf_chunks) == 3
+        assert [c.chunk_type for c in pdf_chunks] == [
+            "paragraph",
+            "table",
+            "caption",
+        ]
+
+    async def test_index_records_extraction_backend(
+        self, indexing_service, mock_db, mock_embedding
+    ):
+        """PdfIndexStatus.extraction_backend is set from doc.extraction_backend."""
+        mock_embedding.embed_texts = AsyncMock(return_value=[[0.1] * 384])
+
+        pdf_row = MagicMock()
+        pdf_row.id = uuid.uuid4()
+        pdf_row.title = "T"
+        pdf_row.source_url = "https://example.com/test.pdf"
+        pdf_row.github_sha = None
+        pdf_row.drive_file_id = None
+        pdf_row.filename = "test.pdf"
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        status = PdfIndexStatus(pdf_id="pdf-1", user_id="user-1", status="not_indexed")
+
+        tmp_path = self._setup_tmp_download(indexing_service)
+
+        try:
+            with (
+                _patch_extractor(_make_doc(backend="pymupdf4llm")),
+                patch(
+                    "app.services.indexing_service.validate_extraction",
+                    return_value=MagicMock(is_usable=True, warnings=[]),
+                ),
+                patch(
+                    "app.services.indexing_service.chunk_document",
+                    return_value=[_chunk()],
+                ),
+            ):
+                await indexing_service.index_pdf(pdf_row, user, status, mock_db)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        assert status.status == "indexed"
+        assert status.extraction_backend == "pymupdf4llm"

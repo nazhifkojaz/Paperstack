@@ -84,7 +84,7 @@ export function CollectionChatContent({
             onStop={onStop}
             onKeyDown={onInputKeyDown}
             placeholder="Ask about papers in this collection... (Enter to send)"
-            textareaClassName="min-h-[72px] max-h-[160px]"
+            textareaClassName="min-h-[72px] max-h-[40vh]"
             buttonClassName="h-10 w-10"
             wrapperClassName="border-t-0"
             innerClassName="p-4 gap-3"

@@ -75,14 +75,14 @@ class TestResolveApiKeyOpenRouter:
         result = await svc.resolve_for_chat(
             mock_user,
             mock_db,
-            preferred_model="openrouter/owl-alpha",
+            preferred_model="openai/gpt-oss-120b:free",
             openrouter_key_mode="byok",
         )
 
         assert result.provider == "openrouter"
         assert result.api_key == "user-own-key"
         assert result.is_in_house is False
-        assert result.model == "openrouter/owl-alpha"
+        assert result.model == "openai/gpt-oss-120b:free"
 
     @pytest.mark.asyncio
     async def test_free_preferred_model_uses_in_house_key(
@@ -95,13 +95,13 @@ class TestResolveApiKeyOpenRouter:
             result = await svc.resolve_for_chat(
                 mock_user,
                 mock_db,
-                preferred_model="openrouter/owl-alpha",
+                preferred_model="openai/gpt-oss-120b:free",
             )
 
         assert result.provider == "openrouter"
         assert result.api_key == "openrouter-key"
         assert result.is_in_house is True
-        assert result.model == "openrouter/owl-alpha"
+        assert result.model == "openai/gpt-oss-120b:free"
 
     @pytest.mark.asyncio
     async def test_byok_preferred_model_uses_user_openrouter_key(

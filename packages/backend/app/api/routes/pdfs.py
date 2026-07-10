@@ -229,9 +229,26 @@ async def check_pdf_url(
             return PdfUrlCheckResponse(valid=False, error=f"Failed to connect: {exc}")
 
         if head_resp.status_code != 200:
+            # 404 is a definitive "not found"; other non-200 status codes
+            # (403, 468, 429, 503, …) often indicate server-side blocking such
+            # as a WAF challenge that only a real browser can pass.  In those
+            # cases the URL may still be a valid PDF, so let the user opt to
+            # add it directly.
+            can_force = head_resp.status_code != 404
+            if can_force:
+                error_msg = (
+                    f"Server returned HTTP {head_resp.status_code}. "
+                    "The site may be blocking automated access (e.g. WAF / bot protection). "
+                    "You can try adding the URL anyway — indexing will attempt to download it."
+                )
+            else:
+                error_msg = (
+                    "Server returned HTTP 404. The file does not exist at this URL."
+                )
             return PdfUrlCheckResponse(
                 valid=False,
-                error=f"Server returned HTTP {head_resp.status_code}. The file may not exist at this URL.",
+                can_force_link=can_force,
+                error=error_msg,
             )
 
         content_type = head_resp.headers.get("content-type", "").lower()
@@ -241,7 +258,11 @@ async def check_pdf_url(
         ):
             return PdfUrlCheckResponse(
                 valid=False,
-                error=f"URL does not point to a PDF file (Content-Type: {content_type or 'unknown'})",
+                can_force_link=True,
+                error=(
+                    f"URL does not point to a PDF file (Content-Type: {content_type or 'unknown'}). "
+                    "The server may be serving a block page. You can try adding the URL anyway."
+                ),
             )
 
         # Phase 2: GET to check CORS and extract metadata
@@ -255,7 +276,9 @@ async def check_pdf_url(
         file_bytes = get_resp.content
         if not file_bytes.startswith(b"%PDF-"):
             return PdfUrlCheckResponse(
-                valid=False, error="Content is not a valid PDF file."
+                valid=False,
+                can_force_link=True,
+                error="Content is not a valid PDF file. The server may be serving a block page.",
             )
 
         # CORS check

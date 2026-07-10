@@ -192,6 +192,30 @@ describe('AnnotationContextMenu', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('calls onAskInChat and closes when Ask in Chat is clicked', () => {
+    const annotation = createMockAnnotation({
+      type: 'highlight',
+      selected_text: 'test text',
+    })
+    const onAskInChat = vi.fn()
+    const onClose = vi.fn()
+
+    render(
+      <AnnotationContextMenu
+        annotation={annotation}
+        position={{ x: 100, y: 200 }}
+        onClose={onClose}
+        onEditNote={vi.fn()}
+        onAskInChat={onAskInChat}
+      />
+    )
+
+    fireEvent.click(screen.getByText(/ask in chat/i))
+
+    expect(onAskInChat).toHaveBeenCalledWith(annotation.id)
+    expect(onClose).toHaveBeenCalled()
+  })
+
   it('shows disabled AI actions for highlight annotations without selected text', () => {
     const annotation = createMockAnnotation({
       type: 'highlight',
@@ -199,6 +223,7 @@ describe('AnnotationContextMenu', () => {
     })
     const onExplainThis = vi.fn()
     const onParaphraseThis = vi.fn()
+    const onAskInChat = vi.fn()
 
     render(
       <AnnotationContextMenu
@@ -208,19 +233,23 @@ describe('AnnotationContextMenu', () => {
         onEditNote={vi.fn()}
         onExplainThis={onExplainThis}
         onParaphraseThis={onParaphraseThis}
+        onAskInChat={onAskInChat}
       />
     )
 
     const explainButton = screen.getByRole('button', { name: /explain this/i })
     const paraphraseButton = screen.getByRole('button', { name: /paraphrase this/i })
+    const askInChatButton = screen.getByRole('button', { name: /ask in chat/i })
 
     expect(explainButton).toBeDisabled()
     expect(paraphraseButton).toBeDisabled()
+    expect(askInChatButton).toBeDisabled()
 
-    fireEvent.click(paraphraseButton)
+    fireEvent.click(askInChatButton)
 
     expect(onExplainThis).not.toHaveBeenCalled()
     expect(onParaphraseThis).not.toHaveBeenCalled()
+    expect(onAskInChat).not.toHaveBeenCalled()
   })
 
   it('calls deleteAnnotation and onClose on Delete click', () => {

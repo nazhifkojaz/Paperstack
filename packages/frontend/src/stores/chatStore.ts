@@ -10,6 +10,11 @@ interface StreamingMessage {
     error: string | null;
 }
 
+export interface AskInChatQuote {
+    text: string;
+    pageNumber: number;
+}
+
 interface ChatStore {
     isChatPanelOpen: boolean;
     toggleChatPanel: () => void;
@@ -28,6 +33,9 @@ interface ChatStore {
     finalizeStreaming: (messageId: string, chunks: ContextChunk[]) => void;
     streamingFailed: (error: string) => void;
     clearStreaming: () => void;
+
+    pendingAskQuote: AskInChatQuote | null;
+    setPendingAskQuote: (quote: AskInChatQuote | null) => void;
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
@@ -64,4 +72,7 @@ export const useChatStore = create<ChatStore>((set) => ({
                 : null,
         })),
     clearStreaming: () => set({ streamingMessage: null }),
+
+    pendingAskQuote: null,
+    setPendingAskQuote: (quote) => set({ pendingAskQuote: quote }),
 }));

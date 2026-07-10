@@ -209,19 +209,27 @@ function MessageBubble({ message, userAvatarUrl, onChunkClick, onChunkClickUrl, 
                                     <span className="text-xs">Thinking…</span>
                                 </div>
                             )
-                            : isUser
-                                ? <span className="whitespace-pre-wrap">{message.content}</span>
-                                : (
-                                    <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0">
-                                        <Markdown
-                                            remarkPlugins={remarkPlugins}
-                                            components={markdownComponents}
-                                            urlTransform={urlTransform}
-                                        >
-                                            {message.content}
-                                        </Markdown>
-                                    </div>
-                                )
+                            : (
+                                <div
+                                    className={`prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0 ${isUser ? '' : 'dark:prose-invert'}`}
+                                    style={isUser ? {
+                                        '--tw-prose-body': 'var(--color-primary-foreground)',
+                                        '--tw-prose-headings': 'var(--color-primary-foreground)',
+                                        '--tw-prose-bold': 'var(--color-primary-foreground)',
+                                        '--tw-prose-links': 'var(--color-primary-foreground)',
+                                        '--tw-prose-quotes': 'var(--color-primary-foreground)',
+                                        '--tw-prose-quote-borders': 'color-mix(in hsl, var(--color-primary-foreground) 50%, transparent)',
+                                    } as React.CSSProperties : undefined}
+                                >
+                                    <Markdown
+                                        remarkPlugins={remarkPlugins}
+                                        components={markdownComponents}
+                                        urlTransform={urlTransform}
+                                    >
+                                        {message.content}
+                                    </Markdown>
+                                </div>
+                            )
                     }
                     {message.isStreaming && message.content && (
                         <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />

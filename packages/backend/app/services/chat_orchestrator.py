@@ -30,6 +30,7 @@ from app.services.exceptions import (
     IndexInProgressError,
     IndexingError,
     LLMRateLimitError,
+    RerankError,
 )
 from app.services.indexing_service import IndexingService, get_indexing_service
 from app.services.llm_service import LLMService
@@ -147,14 +148,43 @@ class ChatOrchestrator:
             await db.commit()
             raise
 
-        top_chunks = await vector_search_service.search_pdf(
-            query_vector=query_vector,
-            pdf_id=pdf_id,
-            user_id=user.id,
-            top_k=settings.CHAT_TOP_K_SINGLE_PDF,
-            db=db,
-            query_text=query_text,
-        )
+        # Two-stage retrieval (hybrid pool → cross-encoder rerank) when enabled.
+        # Falls back to plain hybrid retrieval on any rerank failure so a
+        # Cohere/OpenRouter blip never breaks chat.
+        top_chunks: list | None = None
+        if settings.RERANKER_MODEL:
+            from app.services.reranker_service import get_reranker, retrieve_with_rerank
+
+            reranker = get_reranker()
+            if reranker is not None:
+                try:
+                    top_chunks = await retrieve_with_rerank(
+                        vector_search_service,
+                        reranker,
+                        query_text,
+                        query_vector,
+                        pdf_id,
+                        user.id,
+                        settings.CHAT_TOP_K_SINGLE_PDF,
+                        db,
+                    )
+                except RerankError:
+                    logger.warning(
+                        "Rerank failed for pdf %s; falling back to hybrid retrieval",
+                        pdf_id,
+                    )
+        # ``not top_chunks`` (rather than ``is None``) also covers an empty
+        # result returned by a *successful* rerank (e.g. an empty candidate
+        # pool) — give plain hybrid retrieval a chance before serving no context.
+        if not top_chunks:
+            top_chunks = await vector_search_service.search_pdf(
+                query_vector=query_vector,
+                pdf_id=pdf_id,
+                user_id=user.id,
+                top_k=settings.CHAT_TOP_K_SINGLE_PDF,
+                db=db,
+                query_text=query_text,
+            )
         context_input = [
             {
                 "chunk_id": c.chunk_id,

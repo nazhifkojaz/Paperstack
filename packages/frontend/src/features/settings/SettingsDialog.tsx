@@ -268,7 +268,7 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
                     <div>
                         <h3 className="text-sm font-medium">AI Models</h3>
                         <p className="text-xs text-muted-foreground mt-1">
-                            App key mode supports free and Owl Alpha models. BYOK mode uses
+                            App key mode supports free models. BYOK mode uses
                             your OpenRouter key for every LLM request.
                         </p>
                     </div>

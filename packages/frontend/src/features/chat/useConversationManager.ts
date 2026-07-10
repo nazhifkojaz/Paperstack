@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -41,7 +41,10 @@ export function useConversationManager({
   );
   const createConversation = useCreateConversation();
   const deleteConversation = useDeleteConversation();
-  const conversationQueryKey = ['chat-conversations', pdfId, collectionId] as const;
+  const conversationQueryKey = useMemo(
+    () => ['chat-conversations', pdfId, collectionId] as const,
+    [pdfId, collectionId],
+  );
 
   useEffect(() => {
     if (!autoSelectEnabled || isLoading || activeConversationId) return;
@@ -56,17 +59,17 @@ export function useConversationManager({
     setActiveConversationId,
   ]);
 
-  const resetStreaming = () => {
+  const resetStreaming = useCallback(() => {
     clearStreaming();
     onConversationReset?.();
-  };
+  }, [clearStreaming, onConversationReset]);
 
-  const selectConversation = (conversationId: string) => {
+  const selectConversation = useCallback((conversationId: string) => {
     setActiveConversationId(conversationId);
     clearStreaming();
-  };
+  }, [setActiveConversationId, clearStreaming]);
 
-  const createNewConversation = async () => {
+  const createNewConversation = useCallback(async () => {
     if (!pdfId && !collectionId) return;
 
     try {
@@ -86,13 +89,21 @@ export function useConversationManager({
     } catch {
       toast.error('Failed to create conversation');
     }
-  };
+  }, [
+    pdfId,
+    collectionId,
+    createConversation,
+    queryClient,
+    conversationQueryKey,
+    setActiveConversationId,
+    resetStreaming,
+  ]);
 
   const requestDeleteConversation = (conversationId: string, title: string) => {
     setDeletingConversation({ id: conversationId, title });
   };
 
-  const confirmDeleteConversation = async () => {
+  const confirmDeleteConversation = useCallback(async () => {
     if (!deletingConversation) return;
 
     const { id } = deletingConversation;
@@ -110,7 +121,15 @@ export function useConversationManager({
     } finally {
       setDeletingConversation(null);
     }
-  };
+  }, [
+    deletingConversation,
+    deleteConversation,
+    queryClient,
+    conversationQueryKey,
+    activeConversationId,
+    setActiveConversationId,
+    resetStreaming,
+  ]);
 
   return {
     cancelDeleteConversation: () => setDeletingConversation(null),

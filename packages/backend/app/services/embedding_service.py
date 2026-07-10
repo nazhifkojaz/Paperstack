@@ -120,6 +120,15 @@ class EmbeddingService:
                 raise last_error from exc
             except httpx.TimeoutException as exc:
                 raise EmbeddingError("OpenRouter embedding API timed out") from exc
+            except httpx.HTTPError as exc:
+                # Other transport-level failures (ConnectError, ReadError,
+                # RemoteProtocolError, …) are subclasses of HTTPError but not
+                # TimeoutException. Surface them as EmbeddingError so the route
+                # handler (which expects EmbeddingError) returns a clean 502
+                # instead of crashing with a raw httpx exception.
+                raise EmbeddingError(
+                    f"OpenRouter embedding request failed: {exc}"
+                ) from exc
 
     async def _post_embedding_with_key(
         self,

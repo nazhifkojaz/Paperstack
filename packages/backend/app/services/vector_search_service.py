@@ -118,6 +118,24 @@ class VectorSearchService:
             select_pdf_cols=scope.select_pdf_cols,
         )
 
+    def _apply_chunk_type_filter(
+        self,
+        where_extra: str,
+        scope_params: dict,
+        chunk_type_filter: list[str] | None,
+    ) -> tuple[str, dict]:
+        """Append a chunk_type filter clause when requested."""
+        if not chunk_type_filter:
+            return where_extra, scope_params
+
+        clause = "AND pc.chunk_type = ANY(:chunk_types)"
+        if where_extra:
+            where_extra += f"\n          {clause}"
+        else:
+            where_extra = clause
+        scope_params["chunk_types"] = list(chunk_type_filter)
+        return where_extra, scope_params
+
     async def search_pdf(
         self,
         query_vector: list[float],
@@ -127,17 +145,24 @@ class VectorSearchService:
         db: AsyncSession,
         current_page: int | None = None,
         query_text: str | None = None,
+        chunk_type_filter: list[str] | None = None,
     ) -> list[SearchResult]:
         """Search within a single PDF for semantically similar chunks."""
         vec_str = f"[{','.join(str(x) for x in query_vector)}]"
 
+        where_extra = "AND pc.pdf_id = :pdf_id"
+        scope_params: dict = {"pdf_id": str(pdf_id)}
+        where_extra, scope_params = self._apply_chunk_type_filter(
+            where_extra, scope_params, chunk_type_filter
+        )
+
         scope = _SearchScope(
             extra_joins="",
-            where_extra="AND pc.pdf_id = :pdf_id",
+            where_extra=where_extra,
             select_pdf_cols="",
             coalesce_pdf_cols="",
             hybrid_join_on="ON v.id = k.id",
-            scope_params={"pdf_id": str(pdf_id)},
+            scope_params=scope_params,
         )
 
         if query_text:
@@ -198,17 +223,24 @@ class VectorSearchService:
         top_k: int,
         db: AsyncSession,
         query_text: str | None = None,
+        chunk_type_filter: list[str] | None = None,
     ) -> list[SearchResult]:
         """Search across all indexed PDFs in a collection."""
         vec_str = f"[{','.join(str(x) for x in query_vector)}]"
 
+        where_extra = "AND pcol.collection_id = :collection_id"
+        scope_params: dict = {"collection_id": str(collection_id)}
+        where_extra, scope_params = self._apply_chunk_type_filter(
+            where_extra, scope_params, chunk_type_filter
+        )
+
         scope = _SearchScope(
             extra_joins="JOIN pdfs p ON p.id = pc.pdf_id\n        JOIN pdf_collections pcol ON pcol.pdf_id = pc.pdf_id",
-            where_extra="AND pcol.collection_id = :collection_id",
+            where_extra=where_extra,
             select_pdf_cols=", pc.pdf_id, p.title AS pdf_title",
             coalesce_pdf_cols=",\n           COALESCE(v.pdf_id, k.pdf_id) as pdf_id,\n           COALESCE(v.pdf_title, k.pdf_title) as pdf_title",
             hybrid_join_on="ON v.id = k.id",
-            scope_params={"collection_id": str(collection_id)},
+            scope_params=scope_params,
         )
 
         if query_text:
@@ -258,6 +290,7 @@ class VectorSearchService:
         limit: int,
         db: AsyncSession,
         query_text: str | None = None,
+        chunk_type_filter: list[str] | None = None,
     ) -> list[SearchResult]:
         """Search across all of the user's indexed PDFs.
 
@@ -265,13 +298,19 @@ class VectorSearchService:
         """
         vec_str = f"[{','.join(str(x) for x in query_vector)}]"
 
+        where_extra = ""
+        scope_params: dict = {}
+        where_extra, scope_params = self._apply_chunk_type_filter(
+            where_extra, scope_params, chunk_type_filter
+        )
+
         scope = _SearchScope(
             extra_joins="JOIN pdfs p ON p.id = pc.pdf_id",
-            where_extra="",
+            where_extra=where_extra,
             select_pdf_cols=", pc.pdf_id, p.title AS pdf_title",
             coalesce_pdf_cols=",\n           COALESCE(v.pdf_id, k.pdf_id) as pdf_id,\n           COALESCE(v.pdf_title, k.pdf_title) as pdf_title",
             hybrid_join_on="ON v.pdf_id = k.pdf_id",
-            scope_params={},
+            scope_params=scope_params,
         )
 
         if query_text:
@@ -285,6 +324,7 @@ class VectorSearchService:
                     "query": query_text,
                     "sem_weight": settings.HYBRID_SEMANTIC_WEIGHT,
                     "kw_weight": settings.HYBRID_KEYWORD_WEIGHT,
+                    **scope.scope_params,
                 },
             )
         else:
@@ -294,6 +334,7 @@ class VectorSearchService:
                     "vec": vec_str,
                     "user_id": str(user_id),
                     "limit1": limit * 3,
+                    **scope.scope_params,
                 },
             )
 

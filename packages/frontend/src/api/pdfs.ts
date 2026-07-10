@@ -119,6 +119,7 @@ export interface PdfUrlCheckResponse {
     file_size?: number | null;
     title?: string | null;
     cors_blocked: boolean;
+    can_force_link?: boolean;
     error?: string | null;
     suggestions?: string[] | null;
 }

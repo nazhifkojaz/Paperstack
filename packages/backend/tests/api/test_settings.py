@@ -206,8 +206,10 @@ class TestLLMSettings:
         assert resp.status_code == 200
         models = {m["id"]: m for m in resp.json()["models"]}
         assert models["anthropic/claude-fable-5"]["requires_byok"] is True
-        assert models["openrouter/owl-alpha"]["requires_byok"] is False
-        assert models["moonshotai/kimi-k2.6:free"]["requires_byok"] is False
+        assert models["openai/gpt-oss-120b:free"]["requires_byok"] is False
+        assert (
+            models["nvidia/nemotron-3-ultra-550b-a55b:free"]["requires_byok"] is False
+        )
 
     async def test_rejects_byok_model_without_openrouter_key(
         self, client: AsyncClient, auth_headers: dict
@@ -270,16 +272,16 @@ class TestLLMSettings:
         resp = await client.patch(
             "/v1/settings/llm-preferences",
             json={
-                "chat_model": "openrouter/owl-alpha",
-                "explain_model": "moonshotai/kimi-k2.6:free",
+                "chat_model": "openai/gpt-oss-120b:free",
+                "explain_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
             },
             headers=auth_headers,
         )
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["chat_model"] == "openrouter/owl-alpha"
-        assert data["explain_model"] == "moonshotai/kimi-k2.6:free"
+        assert data["chat_model"] == "openai/gpt-oss-120b:free"
+        assert data["explain_model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
         assert data["openrouter_key_mode"] == "app"
 
     async def test_can_switch_to_app_mode_when_byok_models_are_cleared(

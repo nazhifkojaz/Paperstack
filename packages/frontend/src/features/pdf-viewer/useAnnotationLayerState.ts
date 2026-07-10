@@ -7,6 +7,7 @@ import {
 } from 'react';
 import type { RefObject } from 'react';
 import { useAnnotationStore } from '@/stores/annotationStore';
+import { useChatStore } from '@/stores/chatStore';
 import { useAnnotationsContext } from '@/features/annotations/AnnotationsContext';
 import { useAnnotationExplain } from '@/features/annotations/useAnnotationExplain';
 import { useAnnotationParaphrase } from '@/features/annotations/useAnnotationParaphrase';
@@ -218,6 +219,21 @@ export function useAnnotationLayerState({
     annotationParaphrase.paraphrase(ann, pdfId, level);
   };
 
+  const setChatPanelOpen = useChatStore((s) => s.setChatPanelOpen);
+  const setPendingAskQuote = useChatStore((s) => s.setPendingAskQuote);
+
+  const handleAskInChat = (annotationId: string) => {
+    const ann = pageAnnotations.find((a) => a.id === annotationId);
+    if (!ann || !ann.selected_text) return;
+
+    setSelectedAnnotationId(annotationId);
+    setPendingAskQuote({
+      text: ann.selected_text,
+      pageNumber: ann.page_number,
+    });
+    setChatPanelOpen(true);
+  };
+
   return {
     annotationExplain,
     annotationParaphrase,
@@ -230,6 +246,7 @@ export function useAnnotationLayerState({
     editingNoteId,
     handleExplainThis,
     handleParaphraseThis,
+    handleAskInChat,
     isDrawingRect,
     openContextMenu,
     pageAnnotations,

@@ -317,6 +317,56 @@ describe('NotePopover', () => {
         expect(onExplainThis).toHaveBeenCalledWith('ann-1')
     })
 
+    it('renders Ask in Chat and calls handler when clicked', () => {
+        const annotation = createMockAnnotation({
+            id: 'ann-1',
+            type: 'highlight',
+            selected_text: 'selected text',
+            note_content: 'existing note',
+        })
+        const onAskInChat = vi.fn()
+
+        render(
+            <NotePopover
+                annotation={annotation}
+                containerDims={mockContainerDims}
+                onClose={mockOnClose}
+                onAskInChat={onAskInChat}
+            />
+        )
+
+        const askButton = screen.getByRole('button', { name: /ask in chat/i })
+        expect(askButton).toBeInTheDocument()
+
+        fireEvent.click(askButton)
+        expect(onAskInChat).toHaveBeenCalledWith('ann-1')
+    })
+
+    it('disables Ask in Chat when highlight has no selected text', () => {
+        const annotation = createMockAnnotation({
+            id: 'ann-1',
+            type: 'highlight',
+            selected_text: '',
+            note_content: 'existing note',
+        })
+        const onAskInChat = vi.fn()
+
+        render(
+            <NotePopover
+                annotation={annotation}
+                containerDims={mockContainerDims}
+                onClose={mockOnClose}
+                onAskInChat={onAskInChat}
+            />
+        )
+
+        const askButton = screen.getByRole('button', { name: /ask in chat/i })
+        expect(askButton).toBeDisabled()
+
+        fireEvent.click(askButton)
+        expect(onAskInChat).not.toHaveBeenCalled()
+    })
+
     it('only shows Edit Note on the note tab', () => {
         const annotation = createMockAnnotation({
             id: 'ann-1',

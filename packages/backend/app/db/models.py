@@ -403,6 +403,7 @@ class PdfIndexStatus(Base):
         String(20), nullable=False, server_default=text("'not_indexed'")
     )
     # 'not_indexed' | 'indexing' | 'indexed' | 'failed'
+    extraction_backend: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     chunk_count: Mapped[Optional[int]] = mapped_column(Integer)
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     indexed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -415,6 +416,7 @@ class PdfChunk(Base):
     __tablename__ = "pdf_chunks"
     __table_args__ = (
         UniqueConstraint("pdf_id", "chunk_index", name="uq_pdf_chunks_pdf_idx"),
+        Index("idx_pdf_chunks_pdf_type", "pdf_id", "chunk_type"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -434,6 +436,10 @@ class PdfChunk(Base):
     embedding: Mapped[Optional[list[float]]] = mapped_column(HALFVEC(1024))
     section_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     section_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 'paragraph' | 'heading' | 'table' | 'caption' | 'code' | 'equation'
+    chunk_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="paragraph"
+    )
     search_vector = Column(
         TSVECTOR, Computed("to_tsvector('english', content)"), nullable=True
     )

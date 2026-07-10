@@ -9,7 +9,7 @@ import tiktoken
 from app.schemas.types import ChatMessageDict, ChunkDict, PaperMetadata
 from app.services.llm_service import LLMService
 
-DEFAULT_CONTEXT_MAX_TOKENS = 4000
+DEFAULT_CONTEXT_MAX_TOKENS = 6000
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,14 @@ except Exception:
 SYSTEM_PROMPT = (
     "You are a research assistant helping a user understand academic papers. "
     "Answer questions using ONLY the context excerpts and paper metadata provided below. "
-    "If the answer is not in the context, say so clearly. "
     "Cite page numbers by writing [p.N] after each claim."
+    "\n\nAn answer can be present in the context even when it is indirect, partial, "
+    "or negative — do not require the context to state it explicitly or word-for-word. "
+    "If the context implies, partially supports, or negates the question, give that answer "
+    'and ground it in the excerpts: for example, treat "we did X instead" as answering '
+    'whether Y was done, and state a negative finding ("No — the paper reports ...") '
+    "when the context warrants it. Only reply that the answer is not in the context "
+    "when the excerpts provide no relevant signal at all."
     "\n\nResponse Format Requirements:"
     "\n- Start with a brief 1-2 sentence summary before any headings."
     "\n- Use ### (h3) for section headings only — never # or ##."
@@ -34,12 +40,18 @@ SYSTEM_PROMPT = (
 COLLECTION_SYSTEM_PROMPT = (
     "You are a research assistant helping a user understand a collection of academic papers. "
     "Answer questions using ONLY the context excerpts and paper metadata provided below. "
-    "If the answer is not in the context, say so clearly. "
     "Each context excerpt is labelled with its paper title and page number. "
     "Cite sources using the format [Short Title, p.N] where Short Title is a brief but "
     "recognisable abbreviation of the paper title from the context header — "
     "for example 'Attention Is All You Need' becomes [Attention, p.4], "
     "'Intent Mismatch Causes LLMs...' becomes [Intent Mismatch, p.7]."
+    "\n\nAn answer can be present in the context even when it is indirect, partial, "
+    "or negative — do not require the context to state it explicitly or word-for-word. "
+    "If the context implies, partially supports, or negates the question, give that answer "
+    'and ground it in the excerpts: for example, treat "we did X instead" as answering '
+    'whether Y was done, and state a negative finding ("No — the paper reports ...") '
+    "when the context warrants it. Only reply that the answer is not in the context "
+    "when the excerpts provide no relevant signal at all."
     "\n\nResponse Format Requirements:"
     "\n- Start with a brief 1-2 sentence summary before any headings."
     "\n- Use ### (h3) for section headings only — never # or ##."
