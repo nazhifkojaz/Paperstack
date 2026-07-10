@@ -1,11 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { Sidebar } from './Sidebar';
 import { useLibraryStore } from '@/stores/libraryStore';
-import { useCollections, useCreateCollection } from '@/api/collections';
+import { useCollections, useCreateCollection, useUpdateCollection, useDeleteCollection, useExportCollection } from '@/api/collections';
 import { BrowserRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock the stores and hooks
 vi.mock('@/stores/libraryStore');
 vi.mock('@/api/collections');
 
@@ -13,6 +12,9 @@ describe('Sidebar', () => {
   const mockLibraryStore = vi.mocked(useLibraryStore);
   const mockUseCollections = vi.mocked(useCollections);
   const mockUseCreateCollection = vi.mocked(useCreateCollection);
+  const mockUseUpdateCollection = vi.mocked(useUpdateCollection);
+  const mockUseDeleteCollection = vi.mocked(useDeleteCollection);
+  const mockUseExportCollection = vi.mocked(useExportCollection);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -25,6 +27,9 @@ describe('Sidebar', () => {
 
     mockUseCollections.mockReturnValue({ data: [] } as unknown as ReturnType<typeof useCollections>);
     mockUseCreateCollection.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as unknown as ReturnType<typeof useCreateCollection>);
+    mockUseUpdateCollection.mockReturnValue({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false } as unknown as ReturnType<typeof useUpdateCollection>);
+    mockUseDeleteCollection.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as unknown as ReturnType<typeof useDeleteCollection>);
+    mockUseExportCollection.mockReturnValue({ mutate: vi.fn(), isPending: false } as unknown as ReturnType<typeof useExportCollection>);
   });
 
   it('renders the sidebar with All Documents button', () => {

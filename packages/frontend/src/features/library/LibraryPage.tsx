@@ -1,4 +1,5 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import { usePdfs, useDeletePdf, useBulkDeletePdfs, type Pdf } from '@/api/pdfs';
 import { useLibraryStore } from '@/stores/libraryStore';
 import { useSemanticSearch } from '@/api/chat';
@@ -22,6 +23,7 @@ export function LibraryPage() {
     const {
         viewMode,
         selectedProjectId,
+        setSelectedProjectId,
         searchQuery,
         sortOption,
         isSelectionMode,
@@ -30,6 +32,16 @@ export function LibraryPage() {
         setSelectionMode,
         isDeepSearch,
     } = useLibraryStore();
+
+    const { collectionId } = useParams<{ collectionId?: string }>();
+
+    useEffect(() => {
+        if (collectionId && collectionId !== selectedProjectId) {
+            setSelectedProjectId(collectionId);
+        } else if (!collectionId && selectedProjectId) {
+            setSelectedProjectId(null);
+        }
+    }, [collectionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const semanticSearch = useSemanticSearch();
 
@@ -137,7 +149,10 @@ export function LibraryPage() {
     };
 
     // Citation export
-    const selectedPdfs = pdfs.filter(pdf => selectedPdfIds.has(pdf.id));
+    const selectedPdfs = useMemo(
+        () => pdfs.filter((pdf) => selectedPdfIds.has(pdf.id)),
+        [pdfs, selectedPdfIds],
+    );
 
     const handleExportClick = async () => {
         const pdfIds = Array.from(selectedPdfIds);
