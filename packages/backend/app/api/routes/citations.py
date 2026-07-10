@@ -189,7 +189,7 @@ async def auto_extract_citation(
     return citation
 
 
-def _build_bibtex_export(citations: list[Citation]) -> str:
+def build_bibtex_export(citations: list[Citation]) -> str:
     """Build a BibTeX export string from a list of Citation objects.
 
     Shared by the bulk export route and the collection export route.
@@ -215,7 +215,7 @@ async def export_citations(
         )
 
     if export_req.format.lower() == "bibtex":
-        export_text = _build_bibtex_export(citations)
+        export_text = build_bibtex_export(citations)
         return Response(
             content=export_text,
             media_type="text/plain",
