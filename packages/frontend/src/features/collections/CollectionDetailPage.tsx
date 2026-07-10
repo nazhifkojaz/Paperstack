@@ -5,6 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
+import { ComparisonMatrix } from './ComparisonMatrix';
 
 function ComingSoon({ name }: { name: string }) {
     return (
@@ -31,7 +32,7 @@ export function CollectionDetailPage() {
 
     return (
         <div className="flex-1 overflow-auto bg-background/50 h-full">
-            <div className="container mx-auto p-4 md:p-8 max-w-4xl">
+            <div className="container mx-auto p-4 md:p-8 max-w-6xl">
                 <div className="mb-6 flex items-center gap-4">
                     <Button variant="ghost" size="icon" asChild>
                         <Link to={`/library/collection/${collectionId}`}>
@@ -137,7 +138,7 @@ export function CollectionDetailPage() {
                     </TabsContent>
 
                     <TabsContent value="compare">
-                        <ComingSoon name="Compare" />
+                        <ComparisonMatrix collectionId={collectionId!} />
                     </TabsContent>
 
                     <TabsContent value="graph">
