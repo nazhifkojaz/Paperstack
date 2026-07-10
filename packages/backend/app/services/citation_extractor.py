@@ -3,9 +3,11 @@ Citation extraction service.
 
 Pipeline:
 1. extract_pdf_metadata() — read pypdf info dict / XMP for title, author, DOI etc.
-2. extract_doi_from_text() — regex scan first 3 pages for a DOI pattern
-3. lookup_doi_crossref() — fetch BibTeX + CSL-JSON from CrossRef via DOI
-4. auto_extract_citation() — orchestrate the full pipeline and return a dict
+2. extract_arxiv_id_from_text() — scan page 1 for an arXiv stamp
+3. extract_doi_from_text() — regex scan first 3 pages for a DOI pattern
+4. extract_title_from_layout() — font-size heuristic title extraction from page 1
+5. lookup_doi_crossref() — fetch BibTeX + CSL-JSON from CrossRef via DOI
+6. auto_extract_citation() — orchestrate the full pipeline and return a dict
 """
 
 import logging
@@ -14,6 +16,7 @@ from io import BytesIO
 from typing import Optional
 
 import httpx
+import pymupdf
 from pypdf import PdfReader
 
 logger = logging.getLogger(__name__)
@@ -34,6 +37,32 @@ DOI_REGEX = re.compile(
     r"\b(10\.\d{4,9}/[-._;()/:A-Z0-9]+)\b",
     re.IGNORECASE,
 )
+
+ARXIV_REGEX = re.compile(r"arXiv:\s*(\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
+
+_JUNK_TITLE = re.compile(r"\.(docx?|indd|dvi|tex|qxd)\b|^untitled$", re.I)
+
+
+def _looks_like_junk_title(title: str) -> bool:
+    """Return True for embedded titles that are clearly not real paper titles."""
+    return bool(_JUNK_TITLE.search(title)) or len(title.split()) < 2
+
+
+def _clean_doi_match(doi: str) -> str:
+    """Strip trailing sentence punctuation greedily captured by DOI_REGEX.
+
+    Strips ``.,;:`` unconditionally; strips a trailing ``)``/``]`` only when
+    it is unbalanced within the match (so ``10.1000/foo(bar)`` is preserved).
+    """
+    doi = doi.rstrip(".,;:")
+    while doi.endswith((")", "]")):
+        if doi.endswith(")") and doi.count("(") < doi.count(")"):
+            doi = doi[:-1].rstrip(".,;:")
+        elif doi.endswith("]") and doi.count("[") < doi.count("]"):
+            doi = doi[:-1].rstrip(".,;:")
+        else:
+            break
+    return doi
 
 
 def validate_doi(doi: str) -> str:
@@ -153,8 +182,63 @@ def extract_doi_from_text(pdf_bytes: bytes, max_pages: int = 3) -> Optional[str]
         text = page.extract_text() or ""
         match = DOI_REGEX.search(text)
         if match:
-            return match.group(1)
+            return _clean_doi_match(match.group(1))
     return None
+
+
+def extract_arxiv_id_from_text(pdf_bytes: bytes) -> Optional[str]:
+    """Scan **page 1 only** for an arXiv identifier.
+
+    Returns the bare id (e.g. ``2106.09685``) with any version suffix
+    stripped, or ``None``. Page-1-only scoping avoids matching arXiv ids that
+    appear in reference lists on later pages.
+    """
+    reader = PdfReader(BytesIO(pdf_bytes))
+    if not reader.pages:
+        return None
+    text = reader.pages[0].extract_text() or ""
+    match = ARXIV_REGEX.search(text)
+    return match.group(1) if match else None
+
+
+def extract_title_from_layout(pdf_bytes: bytes) -> Optional[str]:
+    """Heuristically extract the paper title from page 1's font layout.
+
+    Finds the largest-font text spans in the top 60% of page 1, joins
+    same-size spans, and rejects junk (too short/long, filenames, etc.).
+    Returns ``None`` when no confident candidate exists (e.g. scanned PDFs
+    with no text layer), preserving the caller's existing fallback behavior.
+    """
+    try:
+        with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+            if not len(doc):
+                return None
+            page = doc[0]
+            page_height = page.rect.height
+            spans = [
+                (s["size"], s["text"].strip(), s["bbox"][1])
+                for b in page.get_text("dict")["blocks"]
+                if b.get("lines")
+                for line in b["lines"]
+                for s in line["spans"]
+                if s["text"].strip()
+            ]
+    except Exception as exc:
+        logger.debug("extract_title_from_layout failed: %s", exc)
+        return None
+
+    # Keep only spans in the top 60% of the page (titles sit near the top)
+    spans = [s for s in spans if s[2] < page_height * 0.6]
+    if not spans:
+        return None
+
+    max_size = max(s[0] for s in spans)
+    title = " ".join(t for size, t, _ in spans if size >= max_size - 0.5)
+    title = re.sub(r"\s+", " ", title).strip()
+
+    if not (10 <= len(title) <= 300) or _looks_like_junk_title(title):
+        return None
+    return title
 
 
 async def lookup_doi_crossref(doi: str) -> dict:
@@ -316,6 +400,22 @@ async def lookup_isbn_openlibrary(isbn: str) -> dict:
         }
 
 
+def _title_similarity(a: str, b: str) -> float:
+    """Word-token Jaccard similarity between two titles (0.0 – 1.0).
+
+    Normalizes by lowercasing and stripping non-alphanumeric chars before
+    tokenizing on whitespace.
+    """
+
+    def normalize(s: str) -> list[str]:
+        return re.sub(r"[^a-z0-9 ]", "", s.lower()).split()
+
+    ta, tb = set(normalize(a)), set(normalize(b))
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
 async def search_semantic_scholar(
     title: str, authors: Optional[str] = None
 ) -> Optional[dict]:
@@ -327,11 +427,8 @@ async def search_semantic_scholar(
     url = "https://api.semanticscholar.org/graph/v1/paper/search/match"
     params = {
         "query": title,
-        "fields": "title,authors,year,externalIds",
+        "fields": "title,authors,year,externalIds,matchScore",
     }
-
-    def normalize(s: str) -> str:
-        return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -347,8 +444,8 @@ async def search_semantic_scholar(
         paper = items[0]
         paper_title = paper.get("title", "")
 
-        # Verify title similarity
-        if normalize(paper_title) != normalize(title):
+        # Verify title similarity via word-token Jaccard (fuzzy match)
+        if _title_similarity(paper_title, title) < 0.8:
             return None
 
         # Verify author overlap if we have local authors
@@ -414,19 +511,42 @@ async def auto_extract_citation(
     # Embedded metadata (fast, synchronous)
     meta = extract_pdf_metadata(pdf_bytes)
 
-    # Determine DOI — prefer hint, then embedded, then text scan
-    doi = doi_hint or meta.get("doi") or extract_doi_from_text(pdf_bytes)
+    # Clean embedded title — reject obvious junk (filenames, "untitled", etc.)
+    meta_title = meta.get("title")
+    if meta_title and _looks_like_junk_title(meta_title):
+        meta_title = None
 
-    # Normalize: strip URL prefixes like https://doi.org/
+    # Layout title candidate — font-size heuristic on page 1
+    layout_title = extract_title_from_layout(pdf_bytes)
+
+    # Prefer a clean embedded title, fall back to the layout-extracted one
+    title_candidate = meta_title or layout_title
+
+    # Determine DOI — prefer hint, then embedded, then arXiv scan, then text scan.
+    # Uses walrus assignment so arXiv/text scans are only run when earlier
+    # candidates are falsy (matching the original short-circuit behavior).
+    doi = (
+        doi_hint
+        or meta.get("doi")
+        or (
+            f"10.48550/arXiv.{aid}"
+            if (aid := extract_arxiv_id_from_text(pdf_bytes))
+            else None
+        )
+        or extract_doi_from_text(pdf_bytes)
+    )
+
+    # Normalize: strip URL prefixes like https://doi.org/ and trailing punctuation
     if doi:
         doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi)
+        doi = _clean_doi_match(doi)
 
     if doi:
         try:
             crossref = await lookup_doi_crossref(doi)
             return {
                 "doi": doi,
-                "title": crossref.get("title") or meta.get("title"),
+                "title": crossref.get("title") or title_candidate,
                 "authors": crossref.get("authors") or meta.get("authors"),
                 "year": crossref.get("year") or meta.get("year"),
                 "bibtex": crossref.get("bibtex") or _generate_minimal_bibtex(doi),
@@ -448,8 +568,8 @@ async def auto_extract_citation(
             # Fall through to next strategy
 
     # No DOI — try Semantic Scholar title search
-    if meta.get("title"):
-        s2_result = await search_semantic_scholar(meta["title"], meta.get("authors"))
+    if title_candidate:
+        s2_result = await search_semantic_scholar(title_candidate, meta.get("authors"))
         if s2_result:
             s2_doi = s2_result.get("doi")
             # Try CrossRef with the discovered DOI for BibTeX
@@ -460,7 +580,7 @@ async def auto_extract_citation(
                         "doi": s2_doi,
                         "title": crossref.get("title")
                         or s2_result.get("title")
-                        or meta.get("title"),
+                        or title_candidate,
                         "authors": crossref.get("authors")
                         or s2_result.get("authors")
                         or meta.get("authors"),
@@ -489,7 +609,7 @@ async def auto_extract_citation(
                 # CrossRef lookup failed, use S2 data directly
 
             # Return Semantic Scholar data with generated BibTeX
-            s2_title = s2_result.get("title") or meta.get("title") or "Unknown Title"
+            s2_title = s2_result.get("title") or title_candidate or "Unknown Title"
             s2_authors = (
                 s2_result.get("authors") or meta.get("authors") or "Unknown Author"
             )
@@ -506,8 +626,8 @@ async def auto_extract_citation(
                 "source": "semantic_scholar",
             }
 
-    # No DOI, no S2 match — build citation from embedded metadata only
-    title = meta.get("title") or "Unknown Title"
+    # No DOI, no S2 match — build citation from metadata/layout only
+    title = title_candidate or "Unknown Title"
     authors = meta.get("authors") or "Unknown Author"
     year = meta.get("year")
     bibtex = _generate_minimal_bibtex_from_meta(title, authors, year)

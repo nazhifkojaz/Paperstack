@@ -1,4 +1,6 @@
 import logging
+import re
+from typing import Optional
 from uuid import UUID, uuid4
 
 import httpx
@@ -22,6 +24,38 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 global_router = APIRouter()
+
+# Fields whose manual edit should trigger bibtex regeneration (when no
+# explicit bibtex is provided in the same request).
+_META_FIELDS = {"title", "authors", "year", "doi"}
+
+
+def _regenerate_bibtex_skeleton(
+    title: Optional[str],
+    authors: Optional[str],
+    year: Optional[int],
+    doi: Optional[str],
+) -> str:
+    """Build a clean skeleton BibTeX entry from merged citation fields.
+
+    Used when the user edits title/authors/year/doi without touching bibtex,
+    so the stored bibtex (what export emits) stays in sync with the fields.
+    """
+    first_author_last = authors.split(",")[0].split()[-1] if authors else "unknown"
+    key = re.sub(r"[^a-zA-Z0-9]", "", first_author_last)
+    if year:
+        key = f"{key}{year}"
+    entry = f"@article{{{key},\n"
+    if title:
+        entry += f"  title  = {{{title}}},\n"
+    if authors:
+        entry += f"  author = {{{authors}}},\n"
+    if year:
+        entry += f"  year   = {{{year}}},\n"
+    if doi:
+        entry += f"  doi    = {{{doi}}},\n"
+    entry += "}"
+    return entry
 
 
 @router.get("/{pdf_id}/citation", response_model=CitationResponse)
@@ -64,14 +98,27 @@ async def create_or_update_citation(
         # Update existing
         for field, value in update_data.items():
             setattr(citation, field, value)
+
+        # When meta fields changed but no explicit bibtex was provided,
+        # regenerate a skeleton bibtex entry from the merged fields so the
+        # stored bibtex (used by export) stays consistent. If the user
+        # provided explicit bibtex, it is always respected as-is.
+        if "bibtex" not in update_data and (_META_FIELDS & update_data.keys()):
+            citation.bibtex = _regenerate_bibtex_skeleton(
+                title=citation.title,
+                authors=citation.authors,
+                year=citation.year,
+                doi=citation.doi,
+            )
+            citation.source = "manual"
     else:
         # Create new - ensure bibtex is provided for new citations
         if not update_data.get("bibtex"):
-            # Generate minimal bibtex if not provided
-            title = update_data.get("title", "Unknown")
-            authors = update_data.get("authors", "Unknown")
-            update_data["bibtex"] = (
-                f"@misc{{auto,\n  title = {{{title}}},\n  author = {{{authors}}},\n}}"
+            update_data["bibtex"] = _regenerate_bibtex_skeleton(
+                title=update_data.get("title"),
+                authors=update_data.get("authors"),
+                year=update_data.get("year"),
+                doi=update_data.get("doi"),
             )
 
         citation = Citation(
@@ -142,6 +189,14 @@ async def auto_extract_citation(
     return citation
 
 
+def _build_bibtex_export(citations: list[Citation]) -> str:
+    """Build a BibTeX export string from a list of Citation objects.
+
+    Shared by the bulk export route and the collection export route.
+    """
+    return "\n\n".join([c.bibtex for c in citations if c.bibtex])
+
+
 @global_router.post("/export")
 async def export_citations(
     export_req: BulkExportRequest,
@@ -160,7 +215,7 @@ async def export_citations(
         )
 
     if export_req.format.lower() == "bibtex":
-        export_text = "\n\n".join([c.bibtex for c in citations if c.bibtex])
+        export_text = _build_bibtex_export(citations)
         return Response(
             content=export_text,
             media_type="text/plain",

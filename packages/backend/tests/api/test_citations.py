@@ -113,6 +113,113 @@ class TestCreateOrUpdateCitation:
 
         assert response.status_code == 404
 
+    async def test_update_title_regenerates_bibtex(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Updating title without explicit bibtex regenerates the skeleton entry."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            bibtex="@article{old2024,\n  title = {Old Title},\n}",
+            title="Old Title",
+            authors="Doe, John",
+        )
+        await db_session.commit()
+
+        response = await client.put(
+            f"/v1/pdfs/{pdf.id}/citation",
+            json={"title": "Brand New Title"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"] == "Brand New Title"
+        # Bibtex should be regenerated to contain the new title
+        assert "Brand New Title" in data["bibtex"]
+        assert "Old Title" not in data["bibtex"]
+        assert data["source"] == "manual"
+
+    async def test_update_authors_regenerates_bibtex(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Updating authors without explicit bibtex regenerates the skeleton entry."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            bibtex="@article{old,\n  author = {Old Author},\n}",
+            title="Some Title",
+            authors="Old Author",
+        )
+        await db_session.commit()
+
+        response = await client.put(
+            f"/v1/pdfs/{pdf.id}/citation",
+            json={"authors": "New Author, Second Author"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "New Author" in data["bibtex"]
+        assert data["source"] == "manual"
+
+    async def test_update_with_explicit_bibtex_untouched(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """When explicit bibtex is provided alongside meta fields, it is used as-is."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            bibtex="@article{old2024}",
+            title="Old Title",
+        )
+        await db_session.commit()
+
+        explicit_bibtex = "@article{custom,\n  title = {Hand Edited},\n}"
+        response = await client.put(
+            f"/v1/pdfs/{pdf.id}/citation",
+            json={"title": "New Title", "bibtex": explicit_bibtex},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        # Explicit bibtex must be stored verbatim
+        assert data["bibtex"] == explicit_bibtex
+        assert "New Title" not in data["bibtex"]
+
+    async def test_update_non_meta_field_keeps_bibtex(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        """Updating a non-meta field (e.g. source) should not touch bibtex."""
+        pdf = await create_test_pdf(db_session, user_id=test_user.id)
+        original_bibtex = "@article{keep2024,\n  title = {Keep Me},\n}"
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            bibtex=original_bibtex,
+            title="Keep Me",
+        )
+        await db_session.commit()
+
+        response = await client.put(
+            f"/v1/pdfs/{pdf.id}/citation",
+            json={"source": "manual"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["bibtex"] == original_bibtex
+
 
 class TestAutoExtractCitation:
     """Tests for POST /v1/pdfs/{pdf_id}/citation/auto"""

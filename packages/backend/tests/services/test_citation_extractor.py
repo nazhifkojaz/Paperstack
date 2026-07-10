@@ -1,6 +1,31 @@
 """Tests for citation extractor service."""
 
+import pymupdf
 import pytest
+import respx
+from httpx import Response
+
+
+# -- Helpers for generating synthetic PDFs with real text layers --
+
+
+def _make_pdf_with_title(title_text: str, body_text: str = "") -> bytes:
+    """Create a single-page PDF where *title_text* uses the largest font."""
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), title_text, fontsize=20)
+    if body_text:
+        page.insert_text((72, 200), body_text, fontsize=10)
+    return doc.tobytes()
+
+
+def _make_multipage_pdf(page_texts: list[str]) -> bytes:
+    """Create a multi-page PDF with the given text on each page."""
+    doc = pymupdf.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_text((72, 72), text, fontsize=12)
+    return doc.tobytes()
 
 
 class TestExtractPdfMetadata:
@@ -530,3 +555,270 @@ class TestLookupIsbnOpenlibrary:
 
         with pytest.raises(ValueError, match="Invalid ISBN"):
             await lookup_isbn_openlibrary("not-an-isbn")
+
+
+class TestCleanDoiMatch:
+    """Tests for _clean_doi_match (Task 0.3)."""
+
+    def test_strips_trailing_period(self) -> None:
+        from app.services.citation_extractor import _clean_doi_match
+
+        assert _clean_doi_match("10.1234/test.doi.") == "10.1234/test.doi"
+
+    def test_strips_trailing_semicolon(self) -> None:
+        from app.services.citation_extractor import _clean_doi_match
+
+        assert _clean_doi_match("10.1234/test.doi;") == "10.1234/test.doi"
+
+    def test_strips_trailing_comma_and_colon(self) -> None:
+        from app.services.citation_extractor import _clean_doi_match
+
+        assert _clean_doi_match("10.1234/test,") == "10.1234/test"
+        assert _clean_doi_match("10.1234/test:") == "10.1234/test"
+
+    def test_preserves_balanced_parens(self) -> None:
+        from app.services.citation_extractor import _clean_doi_match
+
+        assert _clean_doi_match("10.1000/foo(bar)") == "10.1000/foo(bar)"
+
+    def test_strips_unbalanced_trailing_paren(self) -> None:
+        from app.services.citation_extractor import _clean_doi_match
+
+        assert _clean_doi_match("10.1000/foo)") == "10.1000/foo"
+
+    def test_strips_unbalanced_trailing_paren_with_punct(self) -> None:
+        from app.services.citation_extractor import _clean_doi_match
+
+        assert _clean_doi_match("10.1000/foo.).") == "10.1000/foo"
+
+    def test_no_change_on_clean_doi(self) -> None:
+        from app.services.citation_extractor import _clean_doi_match
+
+        assert _clean_doi_match("10.1234/test.doi.5678") == "10.1234/test.doi.5678"
+
+
+class TestExtractDoiTrailingPunct:
+    """Tests that extract_doi_from_text strips trailing punctuation."""
+
+    def test_doi_extraction_strips_trailing_dot(self) -> None:
+        """DOI ending a sentence should have trailing punctuation stripped."""
+        from app.services.citation_extractor import extract_doi_from_text
+
+        pdf_bytes = _make_multipage_pdf(["See https://doi.org/10.1234/test.doi."])
+        result = extract_doi_from_text(pdf_bytes)
+        assert result == "10.1234/test.doi"
+
+
+class TestExtractArxivId:
+    """Tests for extract_arxiv_id_from_text (Task 0.2)."""
+
+    def test_extract_arxiv_id_from_page1(self) -> None:
+        from app.services.citation_extractor import extract_arxiv_id_from_text
+
+        pdf_bytes = _make_multipage_pdf(["arXiv:2106.09685"])
+        assert extract_arxiv_id_from_text(pdf_bytes) == "2106.09685"
+
+    def test_strips_version_suffix(self) -> None:
+        from app.services.citation_extractor import extract_arxiv_id_from_text
+
+        pdf_bytes = _make_multipage_pdf(["arXiv:2106.09685v2"])
+        assert extract_arxiv_id_from_text(pdf_bytes) == "2106.09685"
+
+    def test_page1_only_scoping(self) -> None:
+        """arXiv id on page 3 (references) should NOT be matched."""
+        from app.services.citation_extractor import extract_arxiv_id_from_text
+
+        pdf_bytes = _make_multipage_pdf(["Introduction", "Methods", "arXiv:1900.99999"])
+        assert extract_arxiv_id_from_text(pdf_bytes) is None
+
+    def test_returns_none_when_no_arxiv(self) -> None:
+        from app.services.citation_extractor import extract_arxiv_id_from_text
+
+        pdf_bytes = _make_multipage_pdf(["Just a regular paper"])
+        assert extract_arxiv_id_from_text(pdf_bytes) is None
+
+    def test_case_insensitive(self) -> None:
+        from app.services.citation_extractor import extract_arxiv_id_from_text
+
+        pdf_bytes = _make_multipage_pdf(["ARXIV:2106.09685"])
+        assert extract_arxiv_id_from_text(pdf_bytes) == "2106.09685"
+
+
+class TestLooksLikeJunkTitle:
+    """Tests for _looks_like_junk_title (Task 0.1)."""
+
+    def test_rejects_docx_filename(self) -> None:
+        from app.services.citation_extractor import _looks_like_junk_title
+
+        assert _looks_like_junk_title("Microsoft Word - draft.docx")
+
+    def test_rejects_untitled(self) -> None:
+        from app.services.citation_extractor import _looks_like_junk_title
+
+        assert _looks_like_junk_title("untitled")
+
+    def test_rejects_single_word(self) -> None:
+        from app.services.citation_extractor import _looks_like_junk_title
+
+        assert _looks_like_junk_title("Draft")
+
+    def test_accepts_real_title(self) -> None:
+        from app.services.citation_extractor import _looks_like_junk_title
+
+        assert not _looks_like_junk_title("Attention Is All You Need")
+
+
+class TestExtractTitleFromLayout:
+    """Tests for extract_title_from_layout (Task 0.1)."""
+
+    def test_extracts_largest_font_title(self) -> None:
+        from app.services.citation_extractor import extract_title_from_layout
+
+        pdf_bytes = _make_pdf_with_title(
+            "Attention Is All You Need",
+            body_text="We propose a new architecture...",
+        )
+        title = extract_title_from_layout(pdf_bytes)
+        assert title == "Attention Is All You Need"
+
+    def test_returns_none_for_no_text(self) -> None:
+        from app.services.citation_extractor import extract_title_from_layout
+
+        # Minimal PDF with no content stream (from fixtures)
+        from tests.fixtures.pdf import MINIMAL_PDF
+
+        assert extract_title_from_layout(MINIMAL_PDF) is None
+
+    def test_rejects_junk_title(self) -> None:
+        from app.services.citation_extractor import extract_title_from_layout
+
+        # Single word is junk (< 2 words)
+        pdf_bytes = _make_pdf_with_title("Draft", body_text="Some body text here")
+        assert extract_title_from_layout(pdf_bytes) is None
+
+
+class TestTitleSimilarity:
+    """Tests for _title_similarity (Task 0.4)."""
+
+    def test_identical_titles(self) -> None:
+        from app.services.citation_extractor import _title_similarity
+
+        assert _title_similarity("Deep Learning", "Deep Learning") == 1.0
+
+    def test_high_similarity_accepts(self) -> None:
+        from app.services.citation_extractor import _title_similarity
+
+        sim = _title_similarity(
+            "Attention Is All You Need",
+            "Attention is All You Need",
+        )
+        assert sim >= 0.8
+
+    def test_low_similarity_rejects(self) -> None:
+        from app.services.citation_extractor import _title_similarity
+
+        sim = _title_similarity(
+            "Attention Is All You Need",
+            "A Completely Different Paper About Cats",
+        )
+        assert sim < 0.8
+
+    def test_subtitle_truncation_still_matches(self) -> None:
+        from app.services.citation_extractor import _title_similarity
+
+        sim = _title_similarity(
+            "Neural Machine Translation by Jointly Learning to Align and Translate",
+            "Neural Machine Translation by Jointly Learning to Align",
+        )
+        assert sim >= 0.8
+
+
+@pytest.fixture
+def mock_semantic_scholar_api():
+    """Mock Semantic Scholar /match endpoint."""
+    respx.start()
+
+    def side_effect(request):
+        # Return a matching paper
+        return Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "title": "Attention Is All You Need",
+                        "authors": [
+                            {"name": "Ashish Vaswani"},
+                            {"name": "Noam Shazeer"},
+                        ],
+                        "year": 2017,
+                        "externalIds": {"DOI": "10.5555/3295222.3295349"},
+                        "matchScore": 0.95,
+                    }
+                ]
+            },
+        )
+
+    respx.get("https://api.semanticscholar.org/graph/v1/paper/search/match").mock(
+        side_effect=side_effect
+    )
+
+    yield respx
+    respx.stop()
+
+
+@pytest.fixture
+def mock_semantic_scholar_different_title():
+    """Mock S2 returning a paper with a very different title."""
+    respx.start()
+
+    respx.get("https://api.semanticscholar.org/graph/v1/paper/search/match").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "title": "A Study on Marine Biology",
+                        "authors": [{"name": "Jane Doe"}],
+                        "year": 2020,
+                        "externalIds": {"DOI": "10.9999/different"},
+                    }
+                ]
+            },
+        )
+    )
+
+    yield respx
+    respx.stop()
+
+
+class TestSearchSemanticScholarFuzzy:
+    """Tests for fuzzy Semantic Scholar matching (Task 0.4)."""
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_accept_similar_title(self, mock_semantic_scholar_api) -> None:
+        from app.services.citation_extractor import search_semantic_scholar
+
+        result = await search_semantic_scholar(
+            "Attention Is All You Need", "Ashish Vaswani"
+        )
+        assert result is not None
+        assert result["doi"] == "10.5555/3295222.3295349"
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_reject_different_title(
+        self, mock_semantic_scholar_different_title
+    ) -> None:
+        from app.services.citation_extractor import search_semantic_scholar
+
+        result = await search_semantic_scholar("Attention Is All You Need", None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_rejects_wrong_authors(self, mock_semantic_scholar_api) -> None:
+        """Even with a good title match, wrong authors must reject."""
+        from app.services.citation_extractor import search_semantic_scholar
+
+        result = await search_semantic_scholar(
+            "Attention Is All You Need", "Completely Different Author"
+        )
+        assert result is None
