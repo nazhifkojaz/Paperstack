@@ -399,10 +399,15 @@ async def get_index_status(
     if not pdf or pdf.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    svc = IndexingService(download_service=pdf_download_service)
-    row = await svc.get_or_create_status(str(pdf_id), str(current_user.id), db)
-    await db.commit()
-    return row
+    try:
+        svc = IndexingService(download_service=pdf_download_service)
+        row = await svc.get_or_create_status(str(pdf_id), str(current_user.id), db)
+        await db.commit()
+        return row
+    except Exception:
+        logger.exception("Failed to get index status for pdf %s", pdf_id)
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to retrieve index status")
 
 
 @router.post("/{pdf_id}/reindex", status_code=202)

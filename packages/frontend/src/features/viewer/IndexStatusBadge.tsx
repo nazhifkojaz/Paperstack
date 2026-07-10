@@ -15,10 +15,24 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 };
 
 export function IndexStatusBadge({ pdfId }: IndexStatusBadgeProps) {
-    const { data, isLoading } = useIndexStatus(pdfId);
+    const { data, isLoading, isError } = useIndexStatus(pdfId);
     const reindex = useReindexPdf(pdfId);
 
-    if (isLoading || !data) return null;
+    if (isLoading) return null;
+
+    if (isError || !data) {
+        return (
+            <div className="flex items-center gap-1.5" title="Could not load index status">
+                <Badge
+                    variant="outline"
+                    className="text-xs gap-1 font-normal cursor-default text-destructive bg-destructive/10"
+                >
+                    <AlertCircle className="h-3 w-3" />
+                    Index status unavailable
+                </Badge>
+            </div>
+        );
+    }
 
     const config = STATUS_CONFIG[data.status] ?? STATUS_CONFIG.not_indexed;
 
