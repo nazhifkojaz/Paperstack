@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from './client';
+import { apiFetch, apiFetchBlob } from './client';
+import { downloadBlob } from '@/lib/download-utils';
+import { toast } from 'sonner';
 
 interface Collection {
     id: string;
@@ -8,6 +10,17 @@ interface Collection {
     parent_id: string | null;
     position: number;
     created_at: string;
+}
+
+export interface CreateCollectionInput {
+    name: string;
+    parent_id?: string | null;
+    position?: number;
+}
+
+interface PdfCollectionInput {
+    pdfId: string;
+    collectionId: string;
 }
 
 export const useCollections = () => {
@@ -21,7 +34,7 @@ export const useCreateCollection = () => {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async (data: Partial<Collection>): Promise<Collection> => {
+        mutationFn: async (data: CreateCollectionInput): Promise<Collection> => {
             return apiFetch('/collections', {
                 method: 'POST',
                 body: JSON.stringify(data),
@@ -37,11 +50,13 @@ export const useAddPdfToCollection = () => {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({ pdfId, collectionId }: { pdfId: string; collectionId: string }): Promise<void> => {
+        mutationFn: async ({ pdfId, collectionId }: PdfCollectionInput): Promise<void> => {
             await apiFetch(`/collections/${collectionId}/pdfs?pdf_id=${pdfId}`, { method: 'POST' });
         },
-        onSuccess: () => {
+        onSuccess: (_data, variables) => {
             queryClient.invalidateQueries({ queryKey: ['pdfs'] });
+            queryClient.invalidateQueries({ queryKey: ['collections'] });
+            queryClient.invalidateQueries({ queryKey: ['collection-overview', variables.collectionId] });
         },
     });
 };
@@ -50,13 +65,82 @@ export const useRemovePdfFromCollection = () => {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({ pdfId, collectionId }: { pdfId: string; collectionId: string }): Promise<void> => {
+        mutationFn: async ({ pdfId, collectionId }: PdfCollectionInput): Promise<void> => {
             await apiFetch(`/collections/${collectionId}/pdfs/${pdfId}`, {
                 method: 'DELETE',
             });
         },
-        onSuccess: () => {
+        onSuccess: (_data, variables) => {
             queryClient.invalidateQueries({ queryKey: ['pdfs'] });
+            queryClient.invalidateQueries({ queryKey: ['collections'] });
+            queryClient.invalidateQueries({ queryKey: ['collection-overview', variables.collectionId] });
         },
+    });
+};
+
+export const useUpdateCollection = () => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async ({
+            id,
+            ...data
+        }: { id: string; name?: string; parent_id?: string | null; position?: number }): Promise<Collection> => {
+            return apiFetch(`/collections/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify(data),
+            });
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['collections'] });
+        },
+    });
+};
+
+export const useDeleteCollection = () => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (id: string): Promise<void> => {
+            await apiFetch(`/collections/${id}`, {
+                method: 'DELETE',
+            });
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['collections'] });
+            queryClient.invalidateQueries({ queryKey: ['pdfs'] });
+            queryClient.invalidateQueries({ queryKey: ['collection-overview'] });
+        },
+    });
+};
+
+export const useExportCollection = () => {
+    return useMutation<Blob, Error, { id: string; format?: 'bibtex' | 'markdown' }>({
+        mutationFn: async ({ id, format = 'bibtex' }) => {
+            return apiFetchBlob(`/collections/${id}/export?format=${format}`);
+        },
+        onSuccess: (blob, { format }) => {
+            const ext = format === 'markdown' ? 'md' : 'bib';
+            downloadBlob(blob, `collection.${ext}`);
+        },
+        onError: (error) => {
+            toast.error(error.message || 'Export failed');
+        },
+    });
+};
+
+interface CollectionOverview {
+    paper_count: number;
+    indexed_count: number;
+    year_distribution: Record<string, number>;
+    top_authors: { name: string; count: number }[];
+    recent_papers: { id: string; title: string; filename: string }[];
+}
+
+export const useCollectionOverview = (collectionId: string | null) => {
+    return useQuery<CollectionOverview>({
+        queryKey: ['collection-overview', collectionId],
+        queryFn: () => apiFetch(`/collections/${collectionId}/overview`),
+        enabled: !!collectionId,
     });
 };
