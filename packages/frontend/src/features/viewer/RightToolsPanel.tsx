@@ -1,8 +1,7 @@
-import { BookOpen, MessageSquare, Download, RotateCw, Square, Maximize, Minimize, Loader2 } from 'lucide-react';
+import { BookOpen, MessageSquare, FileText, Download, RotateCw, Square, Maximize, Minimize, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { useCitationStore } from '@/stores/citationStore';
-import { useChatStore } from '@/stores/chatStore';
+import { useInfoPanelCoordinator } from '@/hooks/useInfoPanelCoordinator';
 import { useAnnotationStore } from '@/stores/annotationStore';
 import { useNewPdfViewerStore } from '@/features/pdf-viewer/pdfViewerStore';
 import { useState } from 'react';
@@ -72,10 +71,20 @@ export const RightToolsPanel = () => {
                 variant={isChatPanelOpen ? 'default' : 'ghost'}
                 size="icon"
                 className="h-9 w-9"
-                onClick={handleToggleChat}
+                onClick={toggleChat}
                 title="Chat with paper"
             >
                 <MessageSquare className="h-4 w-4" />
+            </Button>
+
+            <Button
+                variant={isSummaryPanelOpen ? 'default' : 'ghost'}
+                size="icon"
+                className="h-9 w-9"
+                onClick={toggleSummary}
+                title="AI Summary"
+            >
+                <FileText className="h-4 w-4" />
             </Button>
 
             <Separator orientation="horizontal" className="w-6 my-1" />

@@ -16,6 +16,7 @@ import { FpsCounter } from './FpsCounter';
 import { IndexStatusBadge } from './IndexStatusBadge';
 import { AnnotationSidebar } from '../annotations/AnnotationSidebar';
 import { CitationPanel } from '../citations/CitationPanel';
+import { SummaryPanel } from '../summaries/SummaryPanel';
 import { ChatPanel } from '../chat/ChatPanel';
 import { RightToolsPanel } from './RightToolsPanel';
 import { PdfViewer } from '@/features/pdf-viewer/PdfViewer';
@@ -238,6 +239,7 @@ export function ViewerPage() {
             </div>
 
             <CitationPanel />
+            <SummaryPanel />
             <ChatPanel pdfId={id!} jumpToPage={jumpToPage} />
 
             <AnnotationTooltip />

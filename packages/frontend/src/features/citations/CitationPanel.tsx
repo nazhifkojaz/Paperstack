@@ -9,7 +9,6 @@ import {
     CitationUpdate,
     LookupResponse,
 } from '@/api/citations';
-import { usePdfSummary, useGeneratePdfSummary } from '@/api/summaries';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
@@ -18,22 +17,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Sparkles, Copy, Check, Pencil, X, Search } from 'lucide-react';
 import { useClipboard } from '@/hooks/useClipboard';
 import { CitationHelp } from '@/features/onboarding/CitationHelp';
-
-const SUMMARY_FIELD_ROWS: { label: string; key: keyof SummaryFields }[] = [
-    { label: 'Problem', key: 'problem' },
-    { label: 'Method', key: 'method' },
-    { label: 'Dataset', key: 'dataset' },
-    { label: 'Result', key: 'result' },
-    { label: 'Contribution', key: 'contribution' },
-];
-
-interface SummaryFields {
-    problem: string | null;
-    method: string | null;
-    dataset: string | null;
-    result: string | null;
-    contribution: string | null;
-}
 
 function parseLookupInput(input: string): { doi?: string; isbn?: string } {
     let cleaned = input.trim();
@@ -61,8 +44,6 @@ export const CitationPanel = () => {
     const autoExtract = useAutoExtractCitation(pdfId || '');
     const updateCitation = useUpdateCitation(pdfId || '');
     const lookupCitation = useLookupCitation();
-    const { data: summary } = usePdfSummary(pdfId || '', true);
-    const generateSummary = useGeneratePdfSummary();
 
     const { copied, copyToClipboard } = useClipboard();
     const [editForm, setEditForm] = useState<CitationUpdate>({});
@@ -366,113 +347,6 @@ export const CitationPanel = () => {
                                         Cancel
                                     </Button>
                                 </div>
-                            </div>
-                        )}
-
-                        {/* AI Summary */}
-                        {pdfId && (
-                            <div className="border-t pt-4 mt-2">
-                                <div className="flex items-center justify-between mb-2">
-                                    <h3 className="text-sm font-semibold">AI Summary</h3>
-                                    {(summary?.status === 'complete' ||
-                                        summary?.status === 'failed') && (
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            className="h-7 gap-1 text-xs"
-                                            onClick={() => generateSummary.mutate(pdfId)}
-                                            disabled={generateSummary.isPending}
-                                        >
-                                            <Loader2
-                                                className={
-                                                    generateSummary.isPending
-                                                        ? 'h-3 w-3 animate-spin'
-                                                        : 'hidden'
-                                                }
-                                            />
-                                            Regenerate
-                                        </Button>
-                                    )}
-                                </div>
-
-                                {summary?.status === 'complete' && (
-                                    <div className="space-y-3">
-                                        <p className="text-sm">{summary.tldr}</p>
-                                        <div className="space-y-1.5">
-                                            {SUMMARY_FIELD_ROWS.map(({ label, key }) => {
-                                                const value = summary[key];
-                                                if (!value) return null;
-                                                return (
-                                                    <div
-                                                        key={key}
-                                                        className="grid grid-cols-[6rem_1fr] gap-2"
-                                                    >
-                                                        <span className="text-xs text-muted-foreground shrink-0">
-                                                            {label}
-                                                        </span>
-                                                        <span className="text-sm">{value}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                        {summary.key_claims &&
-                                            summary.key_claims.length > 0 && (
-                                                <div className="space-y-1">
-                                                    <span className="text-xs text-muted-foreground">
-                                                        Key claims
-                                                    </span>
-                                                    <ul className="space-y-1">
-                                                        {summary.key_claims.map((claim, i) => (
-                                                            <li
-                                                                key={i}
-                                                                className="text-sm flex gap-1.5"
-                                                            >
-                                                                <span className="text-muted-foreground">
-                                                                    •
-                                                                </span>
-                                                                <span>{claim}</span>
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                </div>
-                                            )}
-                                    </div>
-                                )}
-
-                                {summary?.status === 'generating' && (
-                                    <p className="text-sm text-muted-foreground flex items-center gap-1.5">
-                                        <Loader2 className="h-3 w-3 animate-spin" />
-                                        Summarizing… {summary.progress_pct}%
-                                    </p>
-                                )}
-
-                                {summary?.status === 'failed' && (
-                                    <p className="text-sm text-muted-foreground">
-                                        Failed: {summary.error_message}
-                                    </p>
-                                )}
-
-                                {!summary && (
-                                    <div className="space-y-2">
-                                        <p className="text-sm text-muted-foreground">
-                                            No summary yet.
-                                        </p>
-                                        <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="gap-1"
-                                            onClick={() => generateSummary.mutate(pdfId)}
-                                            disabled={generateSummary.isPending}
-                                        >
-                                            {generateSummary.isPending ? (
-                                                <Loader2 className="h-3 w-3 animate-spin" />
-                                            ) : (
-                                                <Sparkles className="h-3 w-3" />
-                                            )}
-                                            Generate
-                                        </Button>
-                                    </div>
-                                )}
                             </div>
                         )}
                     </div>
