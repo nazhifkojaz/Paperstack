@@ -1,5 +1,6 @@
 import uuid
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -27,3 +28,16 @@ class CollectionResponse(CollectionBase):
 
 class PdfCollectionCreate(BaseModel):
     pdf_id: uuid.UUID
+
+
+class CollectionInsightResponse(BaseModel):
+    collection_id: uuid.UUID
+    kind: str
+    status: str
+    progress_pct: int
+    is_stale: bool
+    payload: Optional[dict[str, Any]] = None
+    error_message: Optional[str] = None
+    model: Optional[str] = None
+    generated_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)

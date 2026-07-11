@@ -465,6 +465,48 @@ class PdfSummary(Base):
     )
 
 
+class CollectionInsight(Base):
+    __tablename__ = "collection_insights"
+    __table_args__ = (
+        UniqueConstraint("collection_id", "kind", name="uq_collection_insight_kind"),
+        CheckConstraint(
+            "kind IN ('synthesis', 'gaps', 'graph', 'comparison')",
+            name="ck_collection_insight_kind",
+        ),
+        CheckConstraint(
+            "status IN ('generating', 'complete', 'failed')",
+            name="ck_collection_insight_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("collections.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'generating'")
+    )
+    progress_pct: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    is_stale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    payload: Mapped[Optional[dict]] = mapped_column(JSONB)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    model: Mapped[Optional[str]] = mapped_column(String(100))
+    generated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
+    )
+
+
 class PdfChunk(Base):
     __tablename__ = "pdf_chunks"
     __table_args__ = (

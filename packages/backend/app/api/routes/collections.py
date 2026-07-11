@@ -3,10 +3,11 @@ import logging
 import re
 import uuid
 from collections import Counter
-from typing import List
+from datetime import datetime, timedelta, timezone
+from typing import List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text as sql_text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -14,6 +15,7 @@ from app.api.deps import resolve_api_key_with_quota
 from app.core.http_client import HTTPClientState
 from app.db.models import (
     Collection,
+    CollectionInsight,
     Pdf,
     PdfCollection,
     PdfSummary,
@@ -23,6 +25,7 @@ from app.db.models import (
 )
 from app.schemas.collection import (
     CollectionCreate,
+    CollectionInsightResponse,
     CollectionResponse,
     CollectionUpdate,
 )
@@ -32,7 +35,7 @@ from app.schemas.summary import (
     ComparisonRow,
     PdfSummaryResponse,
 )
-from app.services import summary_service
+from app.services import insight_service, summary_service
 from app.services.exceptions import QuotaExhaustedError
 from app.services.quota_service import quota_service
 from app.utils.db_utils import handle_unique_violation
@@ -195,6 +198,11 @@ async def add_pdf_to_collection(
             "collection_id": str(collection_id),
         },
     ):
+        await db.execute(
+            update(CollectionInsight)
+            .where(CollectionInsight.collection_id == collection_id)
+            .values(is_stale=True)
+        )
         await db.commit()
 
     return {"message": "PDF added to collection"}
@@ -217,6 +225,11 @@ async def remove_pdf_from_collection(
         raise HTTPException(status_code=404, detail="PDF is not in this collection")
 
     await db.delete(pdf_collection)
+    await db.execute(
+        update(CollectionInsight)
+        .where(CollectionInsight.collection_id == collection_id)
+        .values(is_stale=True)
+    )
     await db.commit()
     return {"message": "PDF removed from collection"}
 
@@ -331,12 +344,15 @@ async def get_collection_overview(
     year_distribution: dict[int, int] = {}
     top_authors: list[dict] = []
     recent_papers: list[dict] = []
+    papers: list[dict] = []
 
     if pdf_ids:
         citation_rows = await db.execute(
             select(Citation).where(Citation.pdf_id.in_(pdf_ids))
         )
         citations = citation_rows.scalars().all()
+
+        citation_by_pdf_id = {c.pdf_id: c for c in citations}
 
         year_counts = Counter()
         author_counts = Counter()
@@ -371,12 +387,29 @@ async def get_collection_overview(
             for p, _ in recent
         ]
 
+        for p in pdfs:
+            c = citation_by_pdf_id.get(p.id)
+            year = c.year if c else None
+            first_author = None
+            if c and c.authors:
+                first_seg = c.authors.split(",")[0].strip()
+                first_author = first_seg or None
+            papers.append(
+                {
+                    "id": str(p.id),
+                    "title": p.title,
+                    "year": year,
+                    "first_author": first_author,
+                }
+            )
+
     return {
         "paper_count": paper_count,
         "indexed_count": indexed_count,
         "year_distribution": year_distribution,
         "top_authors": top_authors,
         "recent_papers": recent_papers,
+        "papers": papers,
     }
 
 
@@ -570,3 +603,211 @@ async def get_collection_comparison(
     comparison_rows.sort(key=lambda r: (r.year is None, r.year or 0, r.title.lower()))
 
     return ComparisonResponse(rows=comparison_rows, missing_count=missing_count)
+
+
+# --- Phase 3: Collection insights (synthesis + gaps) ---
+
+_INSIGHT_STALE_THRESHOLD = timedelta(minutes=10)
+
+
+async def _trigger_insight(
+    collection_id: uuid.UUID,
+    current_user: User,
+    db: AsyncSession,
+    request: Request,
+    kind: str,
+) -> CollectionInsightResponse:
+    """Shared implementation for POST synthesize / gaps."""
+    collection = await _load_owned_collection(db, collection_id, current_user.id)
+
+    # Step 1: load complete member summaries ordered by title (stable index).
+    rows = await db.execute(
+        select(Pdf, Citation, PdfSummary)
+        .join(PdfCollection, PdfCollection.pdf_id == Pdf.id)
+        .outerjoin(Citation, Citation.pdf_id == Pdf.id)
+        .join(
+            PdfSummary,
+            (PdfSummary.pdf_id == Pdf.id) & (PdfSummary.user_id == current_user.id),
+        )
+        .where(
+            PdfCollection.collection_id == collection_id,
+            Pdf.user_id == current_user.id,
+            PdfSummary.status == "complete",
+        )
+        .order_by(Pdf.title)
+    )
+    complete_members = rows.all()
+    if len(complete_members) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Generate summaries for at least 2 papers first.",
+        )
+
+    paper_refs = [
+        (pdf.id, pdf.title, citation.year if citation else None)
+        for pdf, citation, _ in complete_members
+    ]
+
+    # Total member count (for skipped_no_summary in the payload).
+    total_result = await db.execute(
+        select(func.count(PdfCollection.pdf_id)).where(
+            PdfCollection.collection_id == collection_id
+        )
+    )
+    total_members = total_result.scalar() or 0
+
+    # Step 2: staleness / in-flight guard.
+    existing = await insight_service._get_insight_row(db, collection_id, kind)
+    if existing and existing.status == "generating":
+        if existing.updated_at and existing.updated_at < (
+            datetime.now(timezone.utc) - _INSIGHT_STALE_THRESHOLD
+        ):
+            pass  # stale generating row — allow re-trigger
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="Insight generation already in progress.",
+            )
+
+    # Step 3: resolve API key (reuse the "summary" quota bucket).
+    resolution, _ = await resolve_api_key_with_quota(current_user, db, "summary")
+
+    # Step 4: upsert the row to 'generating'.
+    if existing:
+        existing.status = "generating"
+        existing.progress_pct = 0
+        existing.is_stale = False
+        existing.error_message = None
+        existing.payload = None
+        row = existing
+    else:
+        row = CollectionInsight(
+            collection_id=collection_id,
+            user_id=current_user.id,
+            kind=kind,
+            status="generating",
+        )
+        db.add(row)
+    await db.commit()
+    await db.refresh(row)
+
+    # Step 5: spawn background task.
+    llm_client = HTTPClientState.get_llm_client(request.app)
+    asyncio.create_task(
+        insight_service.run_insight(
+            collection_id=collection_id,
+            user_id=current_user.id,
+            collection_name=collection.name,
+            kind=kind,
+            paper_refs=paper_refs,
+            total_members=total_members,
+            provider=resolution.provider,
+            api_key=resolution.api_key,
+            model=resolution.model,
+            llm_client=llm_client,
+        )
+    )
+    return row
+
+
+@router.post(
+    "/{collection_id}/synthesize",
+    response_model=CollectionInsightResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def synthesize_collection(
+    collection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> CollectionInsightResponse:
+    """Trigger (or re-trigger) cross-paper synthesis generation."""
+    return await _trigger_insight(
+        collection_id, current_user, db, request, kind="synthesis"
+    )
+
+
+@router.post(
+    "/{collection_id}/insights/gaps",
+    response_model=CollectionInsightResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def generate_collection_gaps(
+    collection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> CollectionInsightResponse:
+    """Trigger (or re-trigger) gap/contradiction/lineage analysis."""
+    return await _trigger_insight(collection_id, current_user, db, request, kind="gaps")
+
+
+@router.get(
+    "/{collection_id}/insights/{kind}", response_model=CollectionInsightResponse
+)
+async def get_collection_insight(
+    collection_id: uuid.UUID,
+    kind: Literal["synthesis", "gaps"],
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> CollectionInsightResponse:
+    """Fetch the insight row for a collection (404 when none exists)."""
+    await _load_owned_collection(db, collection_id, current_user.id)
+    row = await insight_service._get_insight_row(db, collection_id, kind)
+    if not row:
+        raise HTTPException(status_code=404, detail="No insight for this collection")
+    return row
+
+
+_DUPLICATES_SQL = sql_text(
+    """
+    SELECT a.pdf_id AS pdf_a_id, b.pdf_id AS pdf_b_id,
+           pa.title AS pdf_a_title, pb.title AS pdf_b_title,
+           1 - (a.paper_embedding <=> b.paper_embedding) AS similarity
+    FROM pdf_summaries a
+    JOIN pdf_collections pca ON pca.pdf_id = a.pdf_id
+        AND pca.collection_id = :cid
+    JOIN pdf_summaries b ON b.user_id = a.user_id
+        AND a.pdf_id < b.pdf_id
+    JOIN pdf_collections pcb ON pcb.pdf_id = b.pdf_id
+        AND pcb.collection_id = :cid
+    JOIN pdfs pa ON pa.id = a.pdf_id
+    JOIN pdfs pb ON pb.id = b.pdf_id
+    WHERE a.user_id = :uid
+      AND a.paper_embedding IS NOT NULL
+      AND b.paper_embedding IS NOT NULL
+      AND 1 - (a.paper_embedding <=> b.paper_embedding) >= :threshold
+    ORDER BY similarity DESC
+    LIMIT 20
+    """
+)
+
+
+@router.get("/{collection_id}/duplicates")
+async def get_collection_duplicates(
+    collection_id: uuid.UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict:
+    """Return near-duplicate paper pairs within a collection."""
+    await _load_owned_collection(db, collection_id, current_user.id)
+
+    from app.core.config import settings
+
+    result = await db.execute(
+        _DUPLICATES_SQL,
+        {
+            "cid": str(collection_id),
+            "uid": str(current_user.id),
+            "threshold": settings.DUPLICATE_SIMILARITY_THRESHOLD,
+        },
+    )
+    pairs = [
+        {
+            "pdf_a": {"id": str(r.pdf_a_id), "title": r.pdf_a_title},
+            "pdf_b": {"id": str(r.pdf_b_id), "title": r.pdf_b_title},
+            "similarity": float(r.similarity),
+        }
+        for r in result.all()
+    ]
+    return {"pairs": pairs}
