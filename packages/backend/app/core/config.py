@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     # 2 vCPU — mirror the auto-highlight thorough cap rationale).
     SUMMARY_BULK_CONCURRENCY: int = 2
 
+    # Near-duplicate detection threshold (cosine similarity) for collections.
+    DUPLICATE_SIMILARITY_THRESHOLD: float = 0.95
+
     # OpenRouter reasoning (thinking) mode
     OPENROUTER_REASONING_ENABLED: bool = True
     OPENROUTER_REASONING_EFFORT: str = "medium"  # "low" | "medium" | "high"
