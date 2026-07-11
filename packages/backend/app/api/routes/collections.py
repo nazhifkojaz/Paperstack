@@ -811,3 +811,148 @@ async def get_collection_duplicates(
         for r in result.all()
     ]
     return {"pairs": pairs}
+
+
+_OPENALEX_NOT_FOUND = "!"  # sentinel: DOI checked against OpenAlex, no match
+
+
+@router.get("/{collection_id}/recommendations")
+async def get_collection_recommendations(
+    collection_id: uuid.UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict:
+    """Suggest works frequently cited by this collection but not in it."""
+    import httpx
+
+    from app.core.config import settings
+    from app.services import openalex_client
+
+    await _load_owned_collection(db, collection_id, current_user.id)
+
+    # 1. Members with their DOI (Citation.doi, falling back to Pdf.doi when
+    #    citation extraction hasn't been run) and PdfSummary row. One query
+    #    over pdf_collections -> pdfs.
+    rows = (
+        await db.execute(
+            select(Pdf.id, func.coalesce(Citation.doi, Pdf.doi), PdfSummary)
+            .join(PdfCollection, PdfCollection.pdf_id == Pdf.id)
+            .outerjoin(
+                Citation,
+                (Citation.pdf_id == Pdf.id) & (Citation.user_id == current_user.id),
+            )
+            .outerjoin(
+                PdfSummary,
+                (PdfSummary.pdf_id == Pdf.id) & (PdfSummary.user_id == current_user.id),
+            )
+            .where(
+                PdfCollection.collection_id == collection_id,
+                Pdf.user_id == current_user.id,
+            )
+        )
+    ).all()
+
+    paper_count = len(rows)
+    members: list[tuple] = [(r[0], r[1], r[2]) for r in rows]
+    summaries: dict[uuid.UUID, PdfSummary | None] = {pid: s for pid, _, s in members}
+
+    # 2. Backfill: resolve DOIs that have no openalex_id yet (real id or
+    #    sentinel), capped per request. Get-or-create the PdfSummary row so
+    #    the result is cached across requests; status stays 'not_generated'.
+    backfill_count = 0
+    for pdf_id, doi, summary in members:
+        if backfill_count >= settings.RECOMMENDATIONS_MAX_BACKFILL:
+            break
+        if not doi:
+            continue
+        if summary is not None and summary.openalex_id is not None:
+            continue
+        backfill_count += 1
+        if summary is None:
+            summary = PdfSummary(
+                pdf_id=pdf_id,
+                user_id=current_user.id,
+                status="not_generated",
+            )
+            db.add(summary)
+            summaries[pdf_id] = summary
+        try:
+            work = await openalex_client.fetch_work_by_doi(doi)
+        except httpx.HTTPError:
+            logger.warning(
+                "OpenAlex lookup failed for pdf %s (doi %s); skipping",
+                pdf_id,
+                doi,
+            )
+            continue
+        if work is None:
+            summary.openalex_id = _OPENALEX_NOT_FOUND
+        else:
+            summary.openalex_id = work.openalex_id
+            summary.referenced_openalex_ids = work.referenced_works
+        await db.flush()
+    await db.commit()
+
+    # 3. Frequency map over referenced_works of every member, excluding works
+    #    that are themselves members (by openalex_id or DOI) and below the
+    #    min-citing threshold.
+    member_openalex_ids = {
+        s.openalex_id
+        for s in summaries.values()
+        if s and s.openalex_id and s.openalex_id != _OPENALEX_NOT_FOUND
+    }
+    member_dois = {doi.lower() for _, doi, _ in members if doi}
+
+    counter: Counter = Counter()
+    with_refs_count = 0
+    no_doi_count = 0
+    for pdf_id, doi, _ in members:
+        if not doi:
+            no_doi_count += 1
+            continue
+        summary = summaries.get(pdf_id)
+        refs = (summary.referenced_openalex_ids if summary else None) or []
+        if refs:
+            with_refs_count += 1
+        for ref in refs:
+            if ref in member_openalex_ids:
+                continue
+            counter[ref] += 1
+
+    top = [
+        (wid, k)
+        for wid, k in counter.most_common()
+        if k >= settings.RECOMMENDATIONS_MIN_CITING
+    ][: settings.RECOMMENDATIONS_MAX_RESULTS]
+
+    # 4. Batch-resolve display metadata for the top suggested ids, ordered by
+    #    the counter ranking; drop any that fail to resolve or that match a
+    #    member's DOI.
+    works = await openalex_client.fetch_works_batch([wid for wid, _ in top])
+    works_by_id = {w.openalex_id: w for w in works}
+    ranked: list[tuple] = []
+    for wid, k in top:
+        w = works_by_id.get(wid)
+        if w is None:
+            continue
+        if w.doi and w.doi.lower() in member_dois:
+            continue
+        ranked.append((w, k))
+
+    # 5. Response — EXACTLY this shape (frontend types depend on it).
+    return {
+        "suggestions": [
+            {
+                "openalex_id": w.openalex_id,
+                "title": w.title,
+                "authors": w.authors,
+                "year": w.year,
+                "doi": w.doi,
+                "cited_by_count": k,
+            }
+            for w, k in ranked
+        ],
+        "papers_total": paper_count,
+        "papers_with_refs": with_refs_count,
+        "papers_without_doi": no_doi_count,
+    }

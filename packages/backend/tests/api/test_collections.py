@@ -3,6 +3,7 @@
 import asyncio
 import uuid
 from datetime import date
+import httpx
 from httpx import AsyncClient
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1336,3 +1337,417 @@ class TestOverviewPapersList:
         assert by_title["Paper 1"]["first_author"] == "Doe"
         assert by_title["Paper 2"]["year"] is None
         assert by_title["Paper 2"]["first_author"] is None
+
+
+class TestCollectionRecommendations:
+    """Tests for GET /collections/{id}/recommendations."""
+
+    async def test_frequency_ranking_and_min_citing_filter(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        # Three members: two cite W1, one cites W2. With min_citing=2, only W1
+        # should be suggested with cited_by_count == 2.
+        pdf_a = await create_test_pdf(
+            db_session, user_id=test_user.id, title="A", filename="a.pdf"
+        )
+        pdf_b = await create_test_pdf(
+            db_session, user_id=test_user.id, title="B", filename="b.pdf"
+        )
+        pdf_c = await create_test_pdf(
+            db_session, user_id=test_user.id, title="C", filename="c.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Recs", position=0
+        )
+        for p in (pdf_a, pdf_b, pdf_c):
+            await create_test_pdf_collection(
+                db_session, pdf_id=p.id, collection_id=col.id
+            )
+            await create_test_citation(
+                db_session,
+                pdf_id=p.id,
+                user_id=test_user.id,
+                doi=f"10.1/{p.id.hex[:4]}",
+            )
+        # Pre-populate summaries with openalex_id + referenced_works so no
+        # backfill is needed.
+        db_session.add(
+            PdfSummary(
+                pdf_id=pdf_a.id,
+                user_id=test_user.id,
+                status="complete",
+                openalex_id="MA",
+                referenced_openalex_ids=["W1", "W9"],
+            )
+        )
+        db_session.add(
+            PdfSummary(
+                pdf_id=pdf_b.id,
+                user_id=test_user.id,
+                status="complete",
+                openalex_id="MB",
+                referenced_openalex_ids=["W1"],
+            )
+        )
+        db_session.add(
+            PdfSummary(
+                pdf_id=pdf_c.id,
+                user_id=test_user.id,
+                status="complete",
+                openalex_id="MC",
+                referenced_openalex_ids=["W2"],
+            )
+        )
+        await db_session.commit()
+
+        with patch(
+            "app.services.openalex_client.fetch_works_batch",
+            new_callable=AsyncMock,
+            return_value=[
+                MagicMock(
+                    openalex_id="W1",
+                    title="Paper One",
+                    authors=["Author A"],
+                    year=2020,
+                    doi="10.2/w1",
+                ),
+                MagicMock(
+                    openalex_id="W2",
+                    title="Paper Two",
+                    authors=["Author B"],
+                    year=2021,
+                    doi="10.2/w2",
+                ),
+            ],
+        ):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        # Only W1 meets min_citing=2.
+        suggestions = body["suggestions"]
+        assert len(suggestions) == 1
+        assert suggestions[0]["openalex_id"] == "W1"
+        assert suggestions[0]["cited_by_count"] == 2
+        assert body["papers_total"] == 3
+        assert body["papers_with_refs"] == 3
+
+    async def test_member_openalex_id_excluded(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        # A referenced work that is itself a member (by openalex_id) must
+        # never be suggested, even if cited by many members.
+        pdf_a = await create_test_pdf(
+            db_session, user_id=test_user.id, title="A", filename="a.pdf"
+        )
+        pdf_b = await create_test_pdf(
+            db_session, user_id=test_user.id, title="B", filename="b.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Recs", position=0
+        )
+        for p in (pdf_a, pdf_b):
+            await create_test_pdf_collection(
+                db_session, pdf_id=p.id, collection_id=col.id
+            )
+            await create_test_citation(
+                db_session,
+                pdf_id=p.id,
+                user_id=test_user.id,
+                doi=f"10.1/{p.id.hex[:4]}",
+            )
+        # Both cite W_MEMBER, which is pdf_b's own openalex_id.
+        db_session.add(
+            PdfSummary(
+                pdf_id=pdf_a.id,
+                user_id=test_user.id,
+                status="complete",
+                openalex_id="MA",
+                referenced_openalex_ids=["W_MEMBER"],
+            )
+        )
+        db_session.add(
+            PdfSummary(
+                pdf_id=pdf_b.id,
+                user_id=test_user.id,
+                status="complete",
+                openalex_id="W_MEMBER",
+                referenced_openalex_ids=[],
+            )
+        )
+        await db_session.commit()
+
+        with patch(
+            "app.services.openalex_client.fetch_works_batch",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        assert response.json()["suggestions"] == []
+        # W_MEMBER was filtered by the counter (member openalex_id), so the
+        # batch was called with an empty id list (no real resolution needed).
+
+    async def test_backfill_creates_summary_row_and_caches(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        # Member with a DOI but no PdfSummary row -> row created and refs
+        # stored; second call does no DOI fetch.
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="A", filename="a.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Recs", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf.id, collection_id=col.id
+        )
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            doi="10.1/abc",
+        )
+        await db_session.commit()
+
+        fetch_by_doi = AsyncMock(
+            return_value=MagicMock(
+                openalex_id="W_NEW",
+                referenced_works=["W_EXT1", "W_EXT2"],
+            )
+        )
+        with patch(
+            "app.services.openalex_client.fetch_work_by_doi",
+            new=fetch_by_doi,
+        ):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+            assert response.status_code == 200
+
+        # The summary row was created and cached.
+        assert fetch_by_doi.call_count == 1
+        # Reload the row from the DB to verify persistence.
+        await db_session.commit()  # ensure the route's commit is visible
+        from sqlalchemy import select
+
+        row = (
+            await db_session.execute(
+                select(PdfSummary).where(
+                    PdfSummary.pdf_id == pdf.id,
+                    PdfSummary.user_id == test_user.id,
+                )
+            )
+        ).scalar_one()
+        assert row.openalex_id == "W_NEW"
+        assert row.referenced_openalex_ids == ["W_EXT1", "W_EXT2"]
+
+        # Second call: openalex_id is set, so no DOI fetch this time.
+        fetch_by_doi2 = AsyncMock(return_value=MagicMock())
+        with patch(
+            "app.services.openalex_client.fetch_work_by_doi",
+            new=fetch_by_doi2,
+        ):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+            assert response.status_code == 200
+        assert fetch_by_doi2.call_count == 0
+
+    async def test_not_found_doi_stores_sentinel(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        # fetch_work_by_doi returns None -> sentinel stored; next call skips.
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="A", filename="a.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Recs", position=0
+        )
+        await create_test_pdf_collection(
+            db_session, pdf_id=pdf.id, collection_id=col.id
+        )
+        await create_test_citation(
+            db_session,
+            pdf_id=pdf.id,
+            user_id=test_user.id,
+            doi="10.1/missing",
+        )
+        await db_session.commit()
+
+        fetch_by_doi = AsyncMock(return_value=None)
+        with patch(
+            "app.services.openalex_client.fetch_work_by_doi",
+            new=fetch_by_doi,
+        ):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+            assert response.status_code == 200
+        assert fetch_by_doi.call_count == 1
+
+        # Second call: sentinel is set, so no DOI fetch.
+        fetch_by_doi2 = AsyncMock(return_value=None)
+        with patch(
+            "app.services.openalex_client.fetch_work_by_doi",
+            new=fetch_by_doi2,
+        ):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+            assert response.status_code == 200
+        assert fetch_by_doi2.call_count == 0
+
+    async def test_http_error_skips_member_but_keeps_200(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        # fetch_work_by_doi raises httpx.HTTPError for one member -> response
+        # still 200, that member just missing from papers_with_refs.
+        pdf_a = await create_test_pdf(
+            db_session, user_id=test_user.id, title="A", filename="a.pdf"
+        )
+        pdf_b = await create_test_pdf(
+            db_session, user_id=test_user.id, title="B", filename="b.pdf"
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Recs", position=0
+        )
+        for p in (pdf_a, pdf_b):
+            await create_test_pdf_collection(
+                db_session, pdf_id=p.id, collection_id=col.id
+            )
+            await create_test_citation(
+                db_session,
+                pdf_id=p.id,
+                user_id=test_user.id,
+                doi=f"10.1/{p.id.hex[:4]}",
+            )
+        await db_session.commit()
+
+        call_count = {"n": 0}
+
+        async def _side_effect(doi):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise httpx.ConnectError("refused")
+            return MagicMock(
+                openalex_id="W_OK",
+                referenced_works=["W_SUG"],
+            )
+
+        with (
+            patch(
+                "app.services.openalex_client.fetch_work_by_doi",
+                new=_side_effect,
+            ),
+            patch(
+                "app.services.openalex_client.fetch_works_batch",
+                new_callable=AsyncMock,
+                return_value=[
+                    MagicMock(
+                        openalex_id="W_SUG",
+                        title="Suggested",
+                        authors=["X"],
+                        year=2019,
+                        doi="10.2/sug",
+                    )
+                ],
+            ),
+        ):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        # The non-erroring member contributed references; the other did not.
+        assert body["papers_with_refs"] == 1
+        assert body["papers_total"] == 2
+
+    async def test_pdf_doi_used_when_no_citation_row(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        # A paper with Pdf.doi but no Citation row (extraction not run) should
+        # still contribute references via the Pdf.doi fallback.
+        pdf_a = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="A",
+            filename="a.pdf",
+            doi="10.1/from-pdf-a",
+        )
+        pdf_b = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            title="B",
+            filename="b.pdf",
+            doi="10.1/from-pdf-b",
+        )
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Recs", position=0
+        )
+        for p in (pdf_a, pdf_b):
+            await create_test_pdf_collection(
+                db_session, pdf_id=p.id, collection_id=col.id
+            )
+        # NOTE: no create_test_citation calls — DOIs live on Pdf only.
+        # Pre-populate summaries so no backfill is needed.
+        db_session.add(
+            PdfSummary(
+                pdf_id=pdf_a.id,
+                user_id=test_user.id,
+                status="complete",
+                openalex_id="MA",
+                referenced_openalex_ids=["W_SHARED"],
+            )
+        )
+        db_session.add(
+            PdfSummary(
+                pdf_id=pdf_b.id,
+                user_id=test_user.id,
+                status="complete",
+                openalex_id="MB",
+                referenced_openalex_ids=["W_SHARED"],
+            )
+        )
+        await db_session.commit()
+
+        with patch(
+            "app.services.openalex_client.fetch_works_batch",
+            new_callable=AsyncMock,
+            return_value=[
+                MagicMock(
+                    openalex_id="W_SHARED",
+                    title="Shared Ref",
+                    authors=["Author"],
+                    year=2019,
+                    doi="10.2/shared",
+                ),
+            ],
+        ):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        # Both papers contributed references despite having no Citation rows.
+        assert body["papers_with_refs"] == 2
+        assert body["papers_without_doi"] == 0
+        suggestions = body["suggestions"]
+        assert len(suggestions) == 1
+        assert suggestions[0]["openalex_id"] == "W_SHARED"
+        assert suggestions[0]["cited_by_count"] == 2
