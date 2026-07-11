@@ -5,6 +5,11 @@ import { useCollectionOverview, useCollections } from '@/api/collections';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/api/collections');
+vi.mock('@/api/collectionInsights', () => ({
+  useCollectionDuplicates: vi.fn(() => ({ data: { pairs: [] } })),
+  useCollectionInsight: vi.fn(() => ({ data: null })),
+  useGenerateInsight: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
+}));
 
 describe('CollectionDetailPage', () => {
   const mockUseCollectionOverview = vi.mocked(useCollectionOverview);
@@ -41,7 +46,7 @@ describe('CollectionDetailPage', () => {
     expect(screen.getByText('Overview')).toBeInTheDocument();
   });
 
-  it('shows tabs for Overview, Compare, Graph, Insights', () => {
+  it('shows tabs for Overview, Compare, Timeline, Graph, Insights', () => {
     mockUseCollectionOverview.mockReturnValue({
       data: undefined,
       isLoading: true,
@@ -52,6 +57,7 @@ describe('CollectionDetailPage', () => {
 
     expect(screen.getByRole('tab', { name: 'Overview' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Compare' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Timeline' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Graph' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Insights' })).toBeInTheDocument();
   });
