@@ -335,3 +335,49 @@ async def retrieve_with_rerank(
     # index would raise IndexError (not RerankError) and bypass the orchestrator's
     # graceful fallback. Drop such entries and return the surviving best-first.
     return [pool[i] for i in order[:top_k] if isinstance(i, int) and 0 <= i < n]
+
+
+async def retrieve_collection_with_rerank(
+    vector_search,
+    reranker: RerankServiceProtocol,
+    query_text: str,
+    query_vector: list[float],
+    collection_id,
+    user_id,
+    top_k: int,
+    db,
+):
+    """Two-stage collection retrieval: wide hybrid pool -> per-PDF cap ->
+    cross-encoder rerank -> global top_k.
+
+    The per-PDF cap (settings.COLLECTION_RERANK_PER_PDF_CAP) keeps a single
+    long paper from filling the candidate pool, so the reranked context can
+    draw on every member paper that has relevant chunks.
+    """
+    pool = await vector_search.search_collection(
+        query_vector=query_vector,
+        collection_id=collection_id,
+        user_id=user_id,
+        top_k=reranker.pool_k,
+        db=db,
+        query_text=query_text,
+    )
+    if not pool:
+        return []
+
+    # Diversity guard: pool is already best-first; keep at most N per PDF.
+    cap = settings.COLLECTION_RERANK_PER_PDF_CAP
+    per_pdf: dict = {}
+    capped = []
+    for r in pool:
+        count = per_pdf.get(r.pdf_id, 0)
+        if count < cap:
+            per_pdf[r.pdf_id] = count + 1
+            capped.append(r)
+
+    order = await reranker.order(query_text, [r.content for r in capped])
+    n = len(capped)
+    # Same malformed-index guard as retrieve_with_rerank: an out-of-range
+    # index would raise IndexError (not RerankError) and bypass the
+    # orchestrator's graceful fallback.
+    return [capped[i] for i in order[:top_k] if isinstance(i, int) and 0 <= i < n]
