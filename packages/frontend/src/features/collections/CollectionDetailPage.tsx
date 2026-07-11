@@ -10,6 +10,7 @@ import { ComparisonMatrix } from './ComparisonMatrix';
 import { InsightsTab } from './InsightsTab';
 import { CollectionTimeline } from './CollectionTimeline';
 import { DuplicatesBanner } from './DuplicatesBanner';
+import { DiscoverTab } from './DiscoverTab';
 
 function ComingSoon({ name }: { name: string }) {
     return (
@@ -59,6 +60,7 @@ export function CollectionDetailPage() {
                         <TabsTrigger value="timeline">Timeline</TabsTrigger>
                         <TabsTrigger value="graph">Graph</TabsTrigger>
                         <TabsTrigger value="insights">Insights</TabsTrigger>
+                        <TabsTrigger value="discover">Discover</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="overview">
@@ -168,6 +170,10 @@ export function CollectionDetailPage() {
                             collectionId={collectionId!}
                             onGoToCompare={() => setActiveTab('compare')}
                         />
+                    </TabsContent>
+
+                    <TabsContent value="discover">
+                        <DiscoverTab collectionId={collectionId!} />
                     </TabsContent>
                 </Tabs>
             </div>
