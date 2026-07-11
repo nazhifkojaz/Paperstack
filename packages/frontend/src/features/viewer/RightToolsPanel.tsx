@@ -12,8 +12,14 @@ import { toast } from 'sonner';
 
 export const RightToolsPanel = () => {
     const { pdfId } = useParams<{ pdfId: string }>();
-    const { isCitationPanelOpen, toggleCitationPanel, setCitationPanelOpen } = useCitationStore();
-    const { isChatPanelOpen, toggleChatPanel, setChatPanelOpen } = useChatStore();
+    const {
+        isCitationPanelOpen,
+        isChatPanelOpen,
+        isSummaryPanelOpen,
+        toggleCitation,
+        toggleChat,
+        toggleSummary,
+    } = useInfoPanelCoordinator();
     const isDrawingRect = useAnnotationStore(s => s.isDrawingRect);
     const setIsDrawingRect = useAnnotationStore(s => s.setIsDrawingRect);
     const zoom = useNewPdfViewerStore(s => s.zoom);
@@ -22,20 +28,6 @@ export const RightToolsPanel = () => {
     const setRotation = useNewPdfViewerStore(s => s.setRotation);
 
     const [isExporting, setIsExporting] = useState(false);
-
-    const handleToggleChat = () => {
-        toggleChatPanel();
-        if (!isChatPanelOpen) {
-            setCitationPanelOpen(false);
-        }
-    };
-
-    const handleToggleCitation = () => {
-        toggleCitationPanel();
-        if (!isCitationPanelOpen) {
-            setChatPanelOpen(false);
-        }
-    };
 
     const handleExport = async () => {
         if (!pdfId || isExporting) return;
@@ -61,7 +53,7 @@ export const RightToolsPanel = () => {
                 variant={isCitationPanelOpen ? 'default' : 'ghost'}
                 size="icon"
                 className="h-9 w-9"
-                onClick={handleToggleCitation}
+                onClick={toggleCitation}
                 title="Citation"
             >
                 <BookOpen className="h-4 w-4" />
