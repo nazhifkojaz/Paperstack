@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useCollectionOverview, useCollections } from '@/api/collections';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -6,6 +7,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
 import { ComparisonMatrix } from './ComparisonMatrix';
+import { InsightsTab } from './InsightsTab';
+import { CollectionTimeline } from './CollectionTimeline';
+import { DuplicatesBanner } from './DuplicatesBanner';
 
 function ComingSoon({ name }: { name: string }) {
     return (
@@ -21,6 +25,7 @@ export function CollectionDetailPage() {
     const { data: overview, isLoading, isError } = useCollectionOverview(collectionId ?? null);
     const { data: allCollections = [] } = useCollections();
     const collection = allCollections.find((c) => c.id === collectionId);
+    const [activeTab, setActiveTab] = useState('overview');
 
     if (isError) {
         return (
@@ -47,10 +52,11 @@ export function CollectionDetailPage() {
                     </div>
                 </div>
 
-                <Tabs defaultValue="overview">
+                <Tabs value={activeTab} onValueChange={setActiveTab}>
                     <TabsList>
                         <TabsTrigger value="overview">Overview</TabsTrigger>
                         <TabsTrigger value="compare">Compare</TabsTrigger>
+                        <TabsTrigger value="timeline">Timeline</TabsTrigger>
                         <TabsTrigger value="graph">Graph</TabsTrigger>
                         <TabsTrigger value="insights">Insights</TabsTrigger>
                     </TabsList>
@@ -64,6 +70,7 @@ export function CollectionDetailPage() {
                             </div>
                         ) : overview ? (
                             <div className="space-y-6 mt-4">
+                                <DuplicatesBanner collectionId={collectionId!} />
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="rounded-lg border bg-card p-4">
                                         <p className="text-sm text-muted-foreground">Papers</p>
@@ -141,12 +148,26 @@ export function CollectionDetailPage() {
                         <ComparisonMatrix collectionId={collectionId!} />
                     </TabsContent>
 
+                    <TabsContent value="timeline">
+                        {isLoading || !overview ? (
+                            <div className="space-y-4 mt-4">
+                                <Skeleton className="h-8 w-48" />
+                                <Skeleton className="h-32 w-full" />
+                            </div>
+                        ) : (
+                            <CollectionTimeline papers={overview.papers} />
+                        )}
+                    </TabsContent>
+
                     <TabsContent value="graph">
                         <ComingSoon name="Graph" />
                     </TabsContent>
 
                     <TabsContent value="insights">
-                        <ComingSoon name="Insights" />
+                        <InsightsTab
+                            collectionId={collectionId!}
+                            onGoToCompare={() => setActiveTab('compare')}
+                        />
                     </TabsContent>
                 </Tabs>
             </div>

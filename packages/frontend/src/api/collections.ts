@@ -129,12 +129,20 @@ export const useExportCollection = () => {
     });
 };
 
+export interface CollectionOverviewPaper {
+    id: string;
+    title: string;
+    year: number | null;
+    first_author: string | null;
+}
+
 interface CollectionOverview {
     paper_count: number;
     indexed_count: number;
     year_distribution: Record<string, number>;
     top_authors: { name: string; count: number }[];
     recent_papers: { id: string; title: string; filename: string }[];
+    papers: CollectionOverviewPaper[];
 }
 
 export const useCollectionOverview = (collectionId: string | null) => {
