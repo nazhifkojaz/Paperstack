@@ -411,6 +411,41 @@ startxref
         assert result["authors"] == "Fallback Author"
         assert result["source"] == "auto"
 
+    @pytest.mark.asyncio
+    async def test_auto_extract_preserves_doi_when_crossref_fails(
+        self, mock_crossref_api_not_found, sample_pdf_bytes
+    ) -> None:
+        """DOI found via hint must survive even when CrossRef and S2 both fail.
+
+        Previously the final fallback hardcoded ``"doi": None``, discarding a
+        valid arXiv DOI that was found but couldn't be enriched via CrossRef.
+        This broke downstream features (OpenAlex recommendations) that only
+        need the DOI string.
+        """
+        from app.services.citation_extractor import auto_extract_citation
+
+        # Minimal PDF with no text layer — no arXiv stamp, no layout title,
+        # so S2 won't match and the final fallback path is taken.
+        result = await auto_extract_citation(
+            pdf_bytes=sample_pdf_bytes, doi_hint="10.9999/nonexistent"
+        )
+
+        # CrossRef is mocked to 404; S2 won't match (no title text in PDF).
+        # The DOI must still be preserved in the final fallback.
+        assert result["doi"] == "10.9999/nonexistent"
+        assert result["source"] == "auto"
+
+    def test_arxiv_stamp_detected_as_junk_title(self) -> None:
+        """arXiv watermarks extracted by the layout heuristic must be rejected."""
+        from app.services.citation_extractor import _looks_like_junk_title
+
+        assert _looks_like_junk_title("arXiv:2211.16319v1 [eess.AS] 22 Nov 2022")
+        assert _looks_like_junk_title("arXiv:1906.08220")
+        # Real titles must still pass.
+        assert not _looks_like_junk_title(
+            "Benchmarking Evaluation Metrics for Code-Switching ASR"
+        )
+
 
 class TestBibtexHelpers:
     """Tests for BibTeX generation helper functions."""

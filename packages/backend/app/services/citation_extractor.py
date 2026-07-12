@@ -40,7 +40,10 @@ DOI_REGEX = re.compile(
 
 ARXIV_REGEX = re.compile(r"arXiv:\s*(\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
 
-_JUNK_TITLE = re.compile(r"\.(docx?|indd|dvi|tex|qxd)\b|^untitled$", re.I)
+_JUNK_TITLE = re.compile(
+    r"\.(docx?|indd|dvi|tex|qxd)\b|^untitled$|^arXiv:\s*\d{4}\.\d{4,5}",
+    re.I,
+)
 
 
 def _looks_like_junk_title(title: str) -> bool:
@@ -518,6 +521,8 @@ async def auto_extract_citation(
 
     # Layout title candidate — font-size heuristic on page 1
     layout_title = extract_title_from_layout(pdf_bytes)
+    if layout_title and _looks_like_junk_title(layout_title):
+        layout_title = None
 
     # Prefer a clean embedded title, fall back to the layout-extracted one
     title_candidate = meta_title or layout_title
@@ -626,13 +631,16 @@ async def auto_extract_citation(
                 "source": "semantic_scholar",
             }
 
-    # No DOI, no S2 match — build citation from metadata/layout only
+    # No DOI, no S2 match — build citation from metadata/layout only.
+    # Preserve any DOI that was found via arXiv/text scan even when CrossRef
+    # and S2 both failed, so downstream features (e.g. OpenAlex recommendations)
+    # can still use it.
     title = title_candidate or "Unknown Title"
     authors = meta.get("authors") or "Unknown Author"
     year = meta.get("year")
     bibtex = _generate_minimal_bibtex_from_meta(title, authors, year)
     return {
-        "doi": None,
+        "doi": doi,
         "title": title,
         "authors": authors,
         "year": year,
