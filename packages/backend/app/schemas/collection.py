@@ -20,6 +20,11 @@ class CollectionUpdate(BaseModel):
     position: Optional[int] = None
 
 
+class CollectionPositionSwap(BaseModel):
+    first_id: uuid.UUID
+    second_id: uuid.UUID
+
+
 class CollectionResponse(CollectionBase):
     id: uuid.UUID
     user_id: uuid.UUID

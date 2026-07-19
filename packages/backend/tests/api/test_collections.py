@@ -4,7 +4,9 @@ import asyncio
 import uuid
 from datetime import date
 import httpx
+import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.db.models import (
@@ -14,6 +16,7 @@ from app.db.models import (
     PdfSummary,
     UserUsageQuota,
 )
+from app.core.security import create_access_token
 from app.services.exceptions import QuotaExhaustedError
 from app.services.quota_service import quota_service
 from tests.fixtures import (
@@ -22,42 +25,15 @@ from tests.fixtures import (
     create_test_pdf_collection,
     create_test_citation,
 )
-
-
-def _make_create_task_stub(real_create_task):
-    """Capture (and close) background coroutines spawned by a route."""
-    background_tasks = []
-
-    def _create_task(coro):
-        coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
-        if coro_name == "run_bulk_generation":
-            background_tasks.append(coro)
-            coro.close()
-            return MagicMock()
-        return real_create_task(coro)
-
-    _create_task.background_tasks = background_tasks
-    return _create_task
-
-
-def _make_insight_create_task_stub(real_create_task):
-    """Capture (and close) run_insight coroutines spawned by insight routes."""
-    background_tasks = []
-
-    def _create_task(coro):
-        coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
-        if coro_name == "run_insight":
-            background_tasks.append(coro)
-            coro.close()
-            return MagicMock()
-        return real_create_task(coro)
-
-    _create_task.background_tasks = background_tasks
-    return _create_task
+from tests.helpers import (
+    GatedSummaryResolver,
+    make_create_task_stub,
+    setup_http_client_mocks,
+)
 
 
 def _make_resolve(unlimited: bool = False):
-    async def _resolve(user, db, feature):
+    async def _resolve(user, db, feature, *, commit=True):
         resolution = MagicMock(
             provider="openrouter",
             api_key="test-key",
@@ -225,6 +201,115 @@ class TestUpdateCollection:
         )
 
         assert response.status_code == 404
+
+
+class TestSwapCollectionPositions:
+    async def test_swaps_same_parent_positions(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        parent = await create_test_collection(
+            db_session, user_id=test_user.id, name="Parent", position=0
+        )
+        first = await create_test_collection(
+            db_session,
+            user_id=test_user.id,
+            name="First",
+            parent_id=parent.id,
+            position=1,
+        )
+        second = await create_test_collection(
+            db_session,
+            user_id=test_user.id,
+            name="Second",
+            parent_id=parent.id,
+            position=2,
+        )
+        await db_session.commit()
+
+        response = await client.post(
+            "/v1/collections/swap-positions",
+            json={"first_id": str(first.id), "second_id": str(second.id)},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        await db_session.refresh(first)
+        await db_session.refresh(second)
+        assert (first.position, second.position) == (2, 1)
+
+    async def test_rejects_cross_parent_without_partial_update(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        parent = await create_test_collection(
+            db_session, user_id=test_user.id, name="Parent", position=0
+        )
+        first = await create_test_collection(
+            db_session, user_id=test_user.id, name="Root", position=1
+        )
+        second = await create_test_collection(
+            db_session,
+            user_id=test_user.id,
+            name="Child",
+            parent_id=parent.id,
+            position=2,
+        )
+        await db_session.commit()
+
+        response = await client.post(
+            "/v1/collections/swap-positions",
+            json={"first_id": str(first.id), "second_id": str(second.id)},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400
+        await db_session.refresh(first)
+        await db_session.refresh(second)
+        assert (first.position, second.position) == (1, 2)
+
+    async def test_rejects_missing_collection_without_partial_update(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        first = await create_test_collection(
+            db_session, user_id=test_user.id, name="First", position=1
+        )
+        await db_session.commit()
+
+        response = await client.post(
+            "/v1/collections/swap-positions",
+            json={"first_id": str(first.id), "second_id": str(uuid.uuid4())},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404
+        await db_session.refresh(first)
+        assert first.position == 1
+
+    async def test_rejects_other_users_collection_without_partial_update(
+        self,
+        client: AsyncClient,
+        auth_headers,
+        db_session,
+        test_user,
+        test_user_2,
+    ) -> None:
+        first = await create_test_collection(
+            db_session, user_id=test_user.id, name="First", position=1
+        )
+        other = await create_test_collection(
+            db_session, user_id=test_user_2.id, name="Other", position=2
+        )
+        await db_session.commit()
+
+        response = await client.post(
+            "/v1/collections/swap-positions",
+            json={"first_id": str(first.id), "second_id": str(other.id)},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404
+        await db_session.refresh(first)
+        await db_session.refresh(other)
+        assert (first.position, other.position) == (1, 2)
 
 
 class TestDeleteCollection:
@@ -670,8 +755,6 @@ class TestBulkSummarizeCollection:
     async def test_bulk_skips_complete_members(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        from tests.helpers import setup_http_client_mocks
-
         setup_http_client_mocks()
 
         complete_pdf = await create_test_pdf(
@@ -699,7 +782,9 @@ class TestBulkSummarizeCollection:
         )
         await db_session.commit()
 
-        create_task_stub = _make_create_task_stub(asyncio.create_task)
+        create_task_stub = make_create_task_stub(
+            asyncio.create_task, "run_bulk_generation"
+        )
         with (
             patch(
                 "app.api.routes.collections.resolve_api_key_with_quota",
@@ -724,8 +809,6 @@ class TestBulkSummarizeCollection:
     async def test_bulk_quota_caps_queued(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        from tests.helpers import setup_http_client_mocks
-
         setup_http_client_mocks()
 
         pdfs = [
@@ -753,7 +836,9 @@ class TestBulkSummarizeCollection:
         )
         await db_session.commit()
 
-        create_task_stub = _make_create_task_stub(asyncio.create_task)
+        create_task_stub = make_create_task_stub(
+            asyncio.create_task, "run_bulk_generation"
+        )
         with (
             patch(
                 "app.api.routes.collections.resolve_api_key_with_quota",
@@ -774,6 +859,138 @@ class TestBulkSummarizeCollection:
         assert len(data["queued"]) == 1
         assert data["skipped_quota"] == 2
         assert data["total_papers"] == 3
+        quota = (
+            await db_session.execute(
+                select(UserUsageQuota).where(UserUsageQuota.user_id == test_user.id)
+            )
+        ).scalar_one()
+        assert quota.summary_uses_remaining == 0
+
+    async def test_concurrent_bulk_reserves_disjoint_rows(
+        self,
+        concurrent_clients,
+        concurrent_session_factory,
+        concurrent_user,
+    ) -> None:
+        setup_http_client_mocks()
+        async with concurrent_session_factory() as session:
+            complete = await create_test_pdf(
+                session,
+                user_id=concurrent_user.id,
+                title="Complete",
+                filename="complete.pdf",
+            )
+            failed = await create_test_pdf(
+                session,
+                user_id=concurrent_user.id,
+                title="Failed",
+                filename="failed.pdf",
+            )
+            missing = await create_test_pdf(
+                session,
+                user_id=concurrent_user.id,
+                title="Missing",
+                filename="missing.pdf",
+            )
+            collection = await create_test_collection(
+                session,
+                user_id=concurrent_user.id,
+                name="Concurrent bulk",
+                position=0,
+            )
+            for pdf in (complete, failed, missing):
+                await create_test_pdf_collection(
+                    session, pdf_id=pdf.id, collection_id=collection.id
+                )
+            session.add_all(
+                [
+                    PdfSummary(
+                        pdf_id=complete.id,
+                        user_id=concurrent_user.id,
+                        status="complete",
+                    ),
+                    PdfSummary(
+                        pdf_id=failed.id,
+                        user_id=concurrent_user.id,
+                        status="failed",
+                    ),
+                    UserUsageQuota(
+                        user_id=concurrent_user.id,
+                        summary_uses_remaining=2,
+                        reset_at=date.today(),
+                    ),
+                ]
+            )
+            await session.commit()
+            collection_id = collection.id
+            complete_id = complete.id
+            candidate_ids = {failed.id, missing.id}
+
+        gated_resolver = GatedSummaryResolver()
+        real_create_task = asyncio.create_task
+        task_stub = make_create_task_stub(real_create_task, "run_bulk_generation")
+        headers = {"Authorization": f"Bearer {create_access_token(concurrent_user.id)}"}
+        url = f"/v1/collections/{collection_id}/summaries"
+        first_client, second_client = concurrent_clients
+        with (
+            patch(
+                "app.api.routes.collections.resolve_api_key_with_quota",
+                new=gated_resolver,
+            ),
+            patch(
+                "app.api.routes.collections.asyncio.create_task",
+                side_effect=task_stub,
+            ),
+        ):
+            first_request = real_create_task(first_client.post(url, headers=headers))
+            await asyncio.wait_for(gated_resolver.first_entered.wait(), timeout=2)
+            second_request = real_create_task(second_client.post(url, headers=headers))
+            try:
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        gated_resolver.second_entered.wait(), timeout=0.1
+                    )
+            finally:
+                gated_resolver.release_first.set()
+            responses = await asyncio.wait_for(
+                asyncio.gather(first_request, second_request), timeout=5
+            )
+
+        assert [response.status_code for response in responses] == [202, 202]
+        queued = [
+            uuid.UUID(pdf_id)
+            for response in responses
+            for pdf_id in response.json()["queued"]
+        ]
+        assert set(queued) == candidate_ids
+        assert len(queued) == len(candidate_ids)
+        assert all(response.json()["skipped_complete"] == 1 for response in responses)
+        assert gated_resolver.call_count == 1
+        assert len(task_stub.background_tasks) == 1
+
+        async with concurrent_session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PdfSummary).where(
+                            PdfSummary.user_id == concurrent_user.id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            quota = (
+                await session.execute(
+                    select(UserUsageQuota).where(
+                        UserUsageQuota.user_id == concurrent_user.id
+                    )
+                )
+            ).scalar_one()
+        by_id = {row.pdf_id: row for row in rows}
+        assert by_id[complete_id].status == "complete"
+        assert all(by_id[pdf_id].status == "generating" for pdf_id in candidate_ids)
+        assert quota.summary_uses_remaining == 0
 
 
 class TestCollectionSummariesList:
@@ -923,12 +1140,10 @@ class TestCollectionInsights:
     async def test_synthesize_returns_202(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        from tests.helpers import setup_http_client_mocks
-
         setup_http_client_mocks()
         col = await self._seed_collection_with_summaries(db_session, test_user, n=2)
 
-        stub = _make_insight_create_task_stub(asyncio.create_task)
+        stub = make_create_task_stub(asyncio.create_task, "run_insight")
         with (
             patch(
                 "app.api.routes.collections.resolve_api_key_with_quota",
@@ -953,12 +1168,10 @@ class TestCollectionInsights:
     async def test_gaps_returns_202(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        from tests.helpers import setup_http_client_mocks
-
         setup_http_client_mocks()
         col = await self._seed_collection_with_summaries(db_session, test_user, n=2)
 
-        stub = _make_insight_create_task_stub(asyncio.create_task)
+        stub = make_create_task_stub(asyncio.create_task, "run_insight")
         with (
             patch(
                 "app.api.routes.collections.resolve_api_key_with_quota",
@@ -977,6 +1190,114 @@ class TestCollectionInsights:
         data = response.json()
         assert data["kind"] == "gaps"
         assert data["status"] == "generating"
+
+    @pytest.mark.parametrize(
+        ("kind", "path"),
+        [
+            ("synthesis", "synthesize"),
+            ("gaps", "insights/gaps"),
+        ],
+    )
+    async def test_concurrent_insight_reserves_once(
+        self,
+        kind,
+        path,
+        concurrent_clients,
+        concurrent_session_factory,
+        concurrent_user,
+    ) -> None:
+        setup_http_client_mocks()
+        async with concurrent_session_factory() as session:
+            collection = await create_test_collection(
+                session,
+                user_id=concurrent_user.id,
+                name="Concurrent insight",
+                position=0,
+            )
+            for index in range(2):
+                pdf = await create_test_pdf(
+                    session,
+                    user_id=concurrent_user.id,
+                    title=f"Insight {index}",
+                    filename=f"insight-{index}.pdf",
+                )
+                await create_test_pdf_collection(
+                    session, pdf_id=pdf.id, collection_id=collection.id
+                )
+                session.add(
+                    PdfSummary(
+                        pdf_id=pdf.id,
+                        user_id=concurrent_user.id,
+                        status="complete",
+                        tldr=f"summary {index}",
+                    )
+                )
+            session.add(
+                UserUsageQuota(
+                    user_id=concurrent_user.id,
+                    summary_uses_remaining=5,
+                    reset_at=date.today(),
+                )
+            )
+            await session.commit()
+            collection_id = collection.id
+
+        gated_resolver = GatedSummaryResolver()
+        real_create_task = asyncio.create_task
+        task_stub = make_create_task_stub(real_create_task, "run_insight")
+        headers = {"Authorization": f"Bearer {create_access_token(concurrent_user.id)}"}
+        url = f"/v1/collections/{collection_id}/{path}"
+        first_client, second_client = concurrent_clients
+        with (
+            patch(
+                "app.api.routes.collections.resolve_api_key_with_quota",
+                new=gated_resolver,
+            ),
+            patch(
+                "app.api.routes.collections.asyncio.create_task",
+                side_effect=task_stub,
+            ),
+        ):
+            first_request = real_create_task(first_client.post(url, headers=headers))
+            await asyncio.wait_for(gated_resolver.first_entered.wait(), timeout=2)
+            second_request = real_create_task(second_client.post(url, headers=headers))
+            try:
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        gated_resolver.second_entered.wait(), timeout=0.1
+                    )
+            finally:
+                gated_resolver.release_first.set()
+            responses = await asyncio.wait_for(
+                asyncio.gather(first_request, second_request), timeout=5
+            )
+
+        assert sorted(response.status_code for response in responses) == [202, 409]
+        assert gated_resolver.call_count == 1
+        assert len(task_stub.background_tasks) == 1
+        async with concurrent_session_factory() as session:
+            insights = (
+                (
+                    await session.execute(
+                        select(CollectionInsight).where(
+                            CollectionInsight.collection_id == collection_id,
+                            CollectionInsight.kind == kind,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            quota = (
+                await session.execute(
+                    select(UserUsageQuota).where(
+                        UserUsageQuota.user_id == concurrent_user.id
+                    )
+                )
+            ).scalar_one()
+        assert len(insights) == 1
+        assert insights[0].status == "generating"
+        assert quota.summary_uses_remaining == 4
 
     async def test_synthesize_400_when_fewer_than_2_summaries(
         self, client: AsyncClient, auth_headers, db_session, test_user
@@ -1517,15 +1838,14 @@ class TestCollectionRecommendations:
         )
         await db_session.commit()
 
-        fetch_by_doi = AsyncMock(
-            return_value=MagicMock(
-                openalex_id="W_NEW",
-                referenced_works=["W_EXT1", "W_EXT2"],
-            )
+        work = MagicMock(
+            openalex_id="W_NEW",
+            referenced_works=["W_EXT1", "W_EXT2"],
         )
+        fetch_batch = AsyncMock(return_value={"10.1/abc": work})
         with patch(
-            "app.services.openalex_client.fetch_work_by_doi",
-            new=fetch_by_doi,
+            "app.services.openalex_client.fetch_works_by_dois",
+            new=fetch_batch,
         ):
             response = await client.get(
                 f"/v1/collections/{col.id}/recommendations",
@@ -1534,11 +1854,8 @@ class TestCollectionRecommendations:
             assert response.status_code == 200
 
         # The summary row was created and cached.
-        assert fetch_by_doi.call_count == 1
+        assert fetch_batch.call_count == 1
         # Reload the row from the DB to verify persistence.
-        await db_session.commit()  # ensure the route's commit is visible
-        from sqlalchemy import select
-
         row = (
             await db_session.execute(
                 select(PdfSummary).where(
@@ -1551,22 +1868,22 @@ class TestCollectionRecommendations:
         assert row.referenced_openalex_ids == ["W_EXT1", "W_EXT2"]
 
         # Second call: openalex_id is set, so no DOI fetch this time.
-        fetch_by_doi2 = AsyncMock(return_value=MagicMock())
+        fetch_batch_again = AsyncMock(return_value={})
         with patch(
-            "app.services.openalex_client.fetch_work_by_doi",
-            new=fetch_by_doi2,
+            "app.services.openalex_client.fetch_works_by_dois",
+            new=fetch_batch_again,
         ):
             response = await client.get(
                 f"/v1/collections/{col.id}/recommendations",
                 headers=auth_headers,
             )
             assert response.status_code == 200
-        assert fetch_by_doi2.call_count == 0
+        assert fetch_batch_again.call_count == 0
 
     async def test_not_found_doi_stores_sentinel(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        # fetch_work_by_doi returns None -> sentinel stored; next call skips.
+        # A DOI absent from a successful batch gets a sentinel; next call skips.
         pdf = await create_test_pdf(
             db_session, user_id=test_user.id, title="A", filename="a.pdf"
         )
@@ -1584,36 +1901,35 @@ class TestCollectionRecommendations:
         )
         await db_session.commit()
 
-        fetch_by_doi = AsyncMock(return_value=None)
+        fetch_batch = AsyncMock(return_value={})
         with patch(
-            "app.services.openalex_client.fetch_work_by_doi",
-            new=fetch_by_doi,
+            "app.services.openalex_client.fetch_works_by_dois",
+            new=fetch_batch,
         ):
             response = await client.get(
                 f"/v1/collections/{col.id}/recommendations",
                 headers=auth_headers,
             )
             assert response.status_code == 200
-        assert fetch_by_doi.call_count == 1
+        assert fetch_batch.call_count == 1
 
         # Second call: sentinel is set, so no DOI fetch.
-        fetch_by_doi2 = AsyncMock(return_value=None)
+        fetch_batch_again = AsyncMock(return_value={})
         with patch(
-            "app.services.openalex_client.fetch_work_by_doi",
-            new=fetch_by_doi2,
+            "app.services.openalex_client.fetch_works_by_dois",
+            new=fetch_batch_again,
         ):
             response = await client.get(
                 f"/v1/collections/{col.id}/recommendations",
                 headers=auth_headers,
             )
             assert response.status_code == 200
-        assert fetch_by_doi2.call_count == 0
+        assert fetch_batch_again.call_count == 0
 
-    async def test_http_error_skips_member_but_keeps_200(
+    async def test_batch_http_error_keeps_members_retryable_and_returns_200(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ) -> None:
-        # fetch_work_by_doi raises httpx.HTTPError for one member -> response
-        # still 200, that member just missing from papers_with_refs.
+        # A failed batch keeps all unresolved members retryable and returns 200.
         pdf_a = await create_test_pdf(
             db_session, user_id=test_user.id, title="A", filename="a.pdf"
         )
@@ -1635,21 +1951,10 @@ class TestCollectionRecommendations:
             )
         await db_session.commit()
 
-        call_count = {"n": 0}
-
-        async def _side_effect(doi):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                raise httpx.ConnectError("refused")
-            return MagicMock(
-                openalex_id="W_OK",
-                referenced_works=["W_SUG"],
-            )
-
         with (
             patch(
-                "app.services.openalex_client.fetch_work_by_doi",
-                new=_side_effect,
+                "app.services.openalex_client.fetch_works_by_dois",
+                new=AsyncMock(side_effect=httpx.ConnectError("refused")),
             ),
             patch(
                 "app.services.openalex_client.fetch_works_batch",
@@ -1672,9 +1977,51 @@ class TestCollectionRecommendations:
 
         assert response.status_code == 200
         body = response.json()
-        # The non-erroring member contributed references; the other did not.
-        assert body["papers_with_refs"] == 1
+        assert body["papers_with_refs"] == 0
         assert body["papers_total"] == 2
+        rows = (
+            (
+                await db_session.execute(
+                    select(PdfSummary).where(
+                        PdfSummary.pdf_id.in_([pdf_a.id, pdf_b.id]),
+                        PdfSummary.user_id == test_user.id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert rows == []
+
+    async def test_backfill_batches_25_unresolved_members(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        col = await create_test_collection(
+            db_session, user_id=test_user.id, name="Batch", position=0
+        )
+        for i in range(25):
+            pdf = await create_test_pdf(
+                db_session,
+                user_id=test_user.id,
+                title=f"P{i}",
+                filename=f"p{i}.pdf",
+                doi=f"10.1234/{i}",
+            )
+            await create_test_pdf_collection(
+                db_session, pdf_id=pdf.id, collection_id=col.id
+            )
+        await db_session.commit()
+
+        fetch_batch = AsyncMock(return_value={})
+        with patch("app.services.openalex_client.fetch_works_by_dois", new=fetch_batch):
+            response = await client.get(
+                f"/v1/collections/{col.id}/recommendations",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        fetch_batch.assert_awaited_once()
+        assert len(fetch_batch.await_args.args[0]) == 25
 
     async def test_pdf_doi_used_when_no_citation_row(
         self, client: AsyncClient, auth_headers, db_session, test_user

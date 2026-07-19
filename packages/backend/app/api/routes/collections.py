@@ -8,6 +8,7 @@ from typing import List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select, func, text as sql_text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -26,6 +27,7 @@ from app.db.models import (
 from app.schemas.collection import (
     CollectionCreate,
     CollectionInsightResponse,
+    CollectionPositionSwap,
     CollectionResponse,
     CollectionUpdate,
 )
@@ -143,6 +145,50 @@ async def update_collection(
     await db.commit()
     await db.refresh(collection)
     return collection
+
+
+@router.post("/swap-positions", response_model=List[CollectionResponse])
+async def swap_collection_positions(
+    swap: CollectionPositionSwap,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> List[CollectionResponse]:
+    """Atomically exchange positions between two sibling collections."""
+    if swap.first_id == swap.second_id:
+        raise HTTPException(status_code=400, detail="Collections must be different")
+
+    collection_ids = sorted((swap.first_id, swap.second_id), key=str)
+    rows = (
+        (
+            await db.execute(
+                select(Collection)
+                .where(
+                    Collection.id.in_(collection_ids),
+                    Collection.user_id == current_user.id,
+                )
+                .order_by(Collection.id)
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(rows) != 2:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    by_id = {row.id: row for row in rows}
+    first = by_id[swap.first_id]
+    second = by_id[swap.second_id]
+    if first.parent_id != second.parent_id:
+        raise HTTPException(
+            status_code=400, detail="Collections must have the same parent"
+        )
+
+    first.position, second.position = second.position, first.position
+    await db.commit()
+    await db.refresh(first)
+    await db.refresh(second)
+    return [first, second]
 
 
 @router.delete("/{collection_id}")
@@ -456,16 +502,37 @@ async def bulk_summarize_collection(
             total_papers=0,
         )
 
+    ordered_member_ids = sorted(member_ids, key=str)
+    await db.execute(
+        pg_insert(PdfSummary)
+        .values(
+            [
+                {
+                    "pdf_id": pdf_id,
+                    "user_id": current_user.id,
+                    "status": "not_generated",
+                }
+                for pdf_id in ordered_member_ids
+            ]
+        )
+        .on_conflict_do_nothing(index_elements=["pdf_id", "user_id"])
+    )
     summary_rows = await db.execute(
-        select(PdfSummary).where(PdfSummary.pdf_id.in_(member_ids))
+        select(PdfSummary)
+        .where(
+            PdfSummary.pdf_id.in_(ordered_member_ids),
+            PdfSummary.user_id == current_user.id,
+        )
+        .order_by(PdfSummary.pdf_id)
+        .with_for_update()
     )
     summaries = {s.pdf_id: s for s in summary_rows.scalars().all()}
 
     candidates: list[uuid.UUID] = []
     skipped_complete = 0
     for pid in member_ids:
-        row = summaries.get(pid)
-        if row is None or row.status in ("not_generated", "failed"):
+        row = summaries[pid]
+        if row.status in ("not_generated", "failed"):
             candidates.append(pid)
         elif row.status == "complete":
             skipped_complete += 1
@@ -482,7 +549,7 @@ async def bulk_summarize_collection(
     # Resolve the key once (covers the first candidate). When the result is
     # unlimited (BYOK), no quota is consumed for any candidate.
     resolution, quota_result = await resolve_api_key_with_quota(
-        current_user, db, "summary"
+        current_user, db, "summary", commit=False
     )
     queued: list[uuid.UUID] = []
     skipped_quota = 0
@@ -503,32 +570,24 @@ async def bulk_summarize_collection(
     # Upsert queued rows to 'generating' in the request session, commit, then
     # spawn ONE background task for the whole collection.
     for pid in queued:
-        row = summaries.get(pid)
-        if row:
-            row.status = "generating"
-            row.progress_pct = 0
-            row.error_message = None
-        else:
-            db.add(
-                PdfSummary(
-                    pdf_id=pid,
-                    user_id=current_user.id,
-                    status="generating",
-                )
-            )
+        row = summaries[pid]
+        row.status = "generating"
+        row.progress_pct = 0
+        row.error_message = None
     await db.commit()
 
-    llm_client = HTTPClientState.get_llm_client(request.app)
-    asyncio.create_task(
-        summary_service.run_bulk_generation(
-            pdf_ids=queued,
-            user_id=current_user.id,
-            provider=resolution.provider,
-            api_key=resolution.api_key,
-            model=resolution.model,
-            llm_client=llm_client,
+    if queued:
+        llm_client = HTTPClientState.get_llm_client(request.app)
+        asyncio.create_task(
+            summary_service.run_bulk_generation(
+                pdf_ids=queued,
+                user_id=current_user.id,
+                provider=resolution.provider,
+                api_key=resolution.api_key,
+                model=resolution.model,
+                llm_client=llm_client,
+            )
         )
-    )
 
     return BulkSummarizeResponse(
         queued=queued,
@@ -656,10 +715,32 @@ async def _trigger_insight(
     )
     total_members = total_result.scalar() or 0
 
-    # Step 2: staleness / in-flight guard.
-    existing = await insight_service._get_insight_row(db, collection_id, kind)
-    if existing and existing.status == "generating":
-        if existing.updated_at and existing.updated_at < (
+    # Step 2: create the reservation row if needed, then lock and re-check it.
+    inserted_id = (
+        await db.execute(
+            pg_insert(CollectionInsight)
+            .values(
+                collection_id=collection_id,
+                user_id=current_user.id,
+                kind=kind,
+                status="generating",
+            )
+            .on_conflict_do_nothing(index_elements=["collection_id", "kind"])
+            .returning(CollectionInsight.id)
+        )
+    ).scalar_one_or_none()
+    row = (
+        await db.execute(
+            select(CollectionInsight)
+            .where(
+                CollectionInsight.collection_id == collection_id,
+                CollectionInsight.kind == kind,
+            )
+            .with_for_update()
+        )
+    ).scalar_one()
+    if inserted_id is None and row.status == "generating":
+        if row.updated_at and row.updated_at < (
             datetime.now(timezone.utc) - _INSIGHT_STALE_THRESHOLD
         ):
             pass  # stale generating row — allow re-trigger
@@ -670,24 +751,16 @@ async def _trigger_insight(
             )
 
     # Step 3: resolve API key (reuse the "summary" quota bucket).
-    resolution, _ = await resolve_api_key_with_quota(current_user, db, "summary")
+    resolution, _ = await resolve_api_key_with_quota(
+        current_user, db, "summary", commit=False
+    )
 
-    # Step 4: upsert the row to 'generating'.
-    if existing:
-        existing.status = "generating"
-        existing.progress_pct = 0
-        existing.is_stale = False
-        existing.error_message = None
-        existing.payload = None
-        row = existing
-    else:
-        row = CollectionInsight(
-            collection_id=collection_id,
-            user_id=current_user.id,
-            kind=kind,
-            status="generating",
-        )
-        db.add(row)
+    # Step 4: mark the locked row as the active generation reservation.
+    row.status = "generating"
+    row.progress_pct = 0
+    row.is_stale = False
+    row.error_message = None
+    row.payload = None
     await db.commit()
     await db.refresh(row)
 
@@ -856,41 +929,40 @@ async def get_collection_recommendations(
     members: list[tuple] = [(r[0], r[1], r[2]) for r in rows]
     summaries: dict[uuid.UUID, PdfSummary | None] = {pid: s for pid, _, s in members}
 
-    # 2. Backfill: resolve DOIs that have no openalex_id yet (real id or
-    #    sentinel), capped per request. Get-or-create the PdfSummary row so
-    #    the result is cached across requests; status stays 'not_generated'.
-    backfill_count = 0
+    # 2. Backfill unresolved member DOIs in one OpenAlex request.
+    backfill: list[tuple[uuid.UUID, str, PdfSummary | None]] = []
     for pdf_id, doi, summary in members:
-        if backfill_count >= settings.RECOMMENDATIONS_MAX_BACKFILL:
+        if len(backfill) >= settings.RECOMMENDATIONS_MAX_BACKFILL:
             break
         if not doi:
             continue
         if summary is not None and summary.openalex_id is not None:
             continue
-        backfill_count += 1
-        if summary is None:
-            summary = PdfSummary(
-                pdf_id=pdf_id,
-                user_id=current_user.id,
-                status="not_generated",
-            )
-            db.add(summary)
-            summaries[pdf_id] = summary
+        backfill.append((pdf_id, openalex_client.normalize_doi(doi), summary))
+
+    if backfill:
         try:
-            work = await openalex_client.fetch_work_by_doi(doi)
-        except httpx.HTTPError:
-            logger.warning(
-                "OpenAlex lookup failed for pdf %s (doi %s); skipping",
-                pdf_id,
-                doi,
+            works_by_doi = await openalex_client.fetch_works_by_dois(
+                [doi for _, doi, _ in backfill]
             )
-            continue
-        if work is None:
-            summary.openalex_id = _OPENALEX_NOT_FOUND
+        except httpx.HTTPError:
+            logger.warning("OpenAlex DOI backfill failed; leaving rows retryable")
         else:
-            summary.openalex_id = work.openalex_id
-            summary.referenced_openalex_ids = work.referenced_works
-        await db.flush()
+            for pdf_id, doi, summary in backfill:
+                if summary is None:
+                    summary = PdfSummary(
+                        pdf_id=pdf_id,
+                        user_id=current_user.id,
+                        status="not_generated",
+                    )
+                    db.add(summary)
+                    summaries[pdf_id] = summary
+                work = works_by_doi.get(doi)
+                if work is None:
+                    summary.openalex_id = _OPENALEX_NOT_FOUND
+                else:
+                    summary.openalex_id = work.openalex_id
+                    summary.referenced_openalex_ids = work.referenced_works
     await db.commit()
 
     # 3. Frequency map over referenced_works of every member, excluding works
@@ -901,7 +973,7 @@ async def get_collection_recommendations(
         for s in summaries.values()
         if s and s.openalex_id and s.openalex_id != _OPENALEX_NOT_FOUND
     }
-    member_dois = {doi.lower() for _, doi, _ in members if doi}
+    member_dois = {openalex_client.normalize_doi(doi) for _, doi, _ in members if doi}
 
     counter: Counter = Counter()
     with_refs_count = 0
@@ -935,7 +1007,7 @@ async def get_collection_recommendations(
         w = works_by_id.get(wid)
         if w is None:
             continue
-        if w.doi and w.doi.lower() in member_dois:
+        if w.doi and openalex_client.normalize_doi(w.doi) in member_dois:
             continue
         ranked.append((w, k))
 

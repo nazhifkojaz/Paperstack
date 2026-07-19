@@ -1,15 +1,14 @@
 """Tests for the OpenAlex client (C2 related-work recommender)."""
 
-import httpx
 import pytest
 import respx
 from httpx import Response
 
 from app.services.openalex_client import (
-    OpenAlexWork,
     _parse_work,
-    fetch_work_by_doi,
+    fetch_works_by_dois,
     fetch_works_batch,
+    normalize_doi,
 )
 
 _BASE_URL = "https://api.openalex.org"
@@ -88,32 +87,58 @@ class TestParseWork:
         w = _parse_work(_work_payload(doi="10.1234/abc"))
         assert w.doi == "10.1234/abc"
 
+    def test_normalize_doi(self):
+        assert normalize_doi(" HTTPS://DOI.ORG/10.1234/AbC ") == "10.1234/abc"
+        assert normalize_doi("doi:10.5555/X") == "10.5555/x"
+
 
 @pytest.mark.asyncio
-class TestFetchWorkByDoi:
+class TestFetchWorksByDois:
     @respx.mock
-    async def test_returns_parsed_work(self):
-        respx.get(f"{_BASE_URL}/works/doi:10.48550/arXiv.1706.03762").mock(
-            return_value=Response(200, json=_work_payload())
+    async def test_batch_maps_normalized_dois_and_deduplicates(self):
+        route = respx.get(f"{_BASE_URL}/works").mock(
+            return_value=Response(
+                200,
+                json={
+                    "results": [
+                        _work_payload(
+                            openalex_id="https://openalex.org/W1",
+                            doi="https://doi.org/10.1234/ABC",
+                        ),
+                        _work_payload(
+                            openalex_id="https://openalex.org/W2",
+                            doi="10.5555/Second",
+                        ),
+                    ]
+                },
+            )
         )
-        work = await fetch_work_by_doi("10.48550/arXiv.1706.03762")
-        assert isinstance(work, OpenAlexWork)
-        assert work.openalex_id == "W2741809807"
+
+        works = await fetch_works_by_dois(
+            ["10.1234/abc", "HTTPS://DOI.ORG/10.1234/ABC", "10.5555/SECOND"]
+        )
+
+        assert set(works) == {"10.1234/abc", "10.5555/second"}
+        assert works["10.1234/abc"].openalex_id == "W1"
+        assert route.call_count == 1
+        request_url = str(route.calls.last.request.url)
+        assert request_url.count("10.1234") == 1
 
     @respx.mock
-    async def test_404_returns_none(self):
-        respx.get(f"{_BASE_URL}/works/doi:10.9999/nope").mock(
-            return_value=Response(404, text="not found")
+    async def test_missing_doi_is_absent_from_mapping(self):
+        respx.get(f"{_BASE_URL}/works").mock(
+            return_value=Response(
+                200,
+                json={"results": [_work_payload(doi="10.1234/found")]},
+            )
         )
-        assert await fetch_work_by_doi("10.9999/nope") is None
 
-    @respx.mock
-    async def test_500_raises(self):
-        respx.get(f"{_BASE_URL}/works/doi:10.9999/boom").mock(
-            return_value=Response(500, text="server error")
-        )
-        with pytest.raises(httpx.HTTPStatusError):
-            await fetch_work_by_doi("10.9999/boom")
+        works = await fetch_works_by_dois(["10.1234/found", "10.1234/missing"])
+
+        assert set(works) == {"10.1234/found"}
+
+    async def test_empty_input_returns_empty_without_call(self):
+        assert await fetch_works_by_dois([]) == {}
 
 
 @pytest.mark.asyncio
