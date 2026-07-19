@@ -92,11 +92,15 @@ async def resolve_api_key_with_quota(
         "auto_highlight_thorough",
         "summary",
     ],
+    *,
+    commit: bool = True,
 ):
     """Resolve API key for a feature, check quotas, raise HTTPException on errors.
 
     Queries UserLLMPreferences for the preferred model, resolves the key
     via api_key_service, and decrements daily quotas for in-house OpenRouter.
+    With ``commit=False``, quota and global usage updates remain pending so the
+    caller can commit them atomically with its own reservation.
     """
     from app.services.api_key_service import api_key_service
     from app.services.exceptions import (
@@ -134,5 +138,6 @@ async def resolve_api_key_with_quota(
         raise HTTPException(status_code=402, detail=str(exc))
 
     global_status = await openrouter_usage_service.record_and_check(db)
-    await db.commit()
+    if commit:
+        await db.commit()
     return resolution, quota_result.with_global_warning(global_status.warning_message)

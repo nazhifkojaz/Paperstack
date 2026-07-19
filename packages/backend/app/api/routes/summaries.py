@@ -1,11 +1,11 @@
 """Per-paper structured summary routes (B1)."""
 
 import asyncio
-import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user, resolve_api_key_with_quota
@@ -15,7 +15,6 @@ from app.schemas.summary import PdfSummaryResponse, PdfSummaryUpdate
 from app.services import summary_service
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 
 async def _get_owned_pdf(
@@ -45,26 +44,37 @@ async def generate_summary(
     """Trigger (or re-trigger) summary generation for one PDF."""
     await _get_owned_pdf(db, pdf_id, current_user.id)
 
-    existing = await summary_service._get_summary_row(db, pdf_id, current_user.id)
-    if existing and existing.status == "generating":
+    await db.execute(
+        pg_insert(PdfSummary)
+        .values(
+            pdf_id=pdf_id,
+            user_id=current_user.id,
+            status="not_generated",
+        )
+        .on_conflict_do_nothing(index_elements=["pdf_id", "user_id"])
+    )
+    row = (
+        await db.execute(
+            select(PdfSummary)
+            .where(
+                PdfSummary.pdf_id == pdf_id,
+                PdfSummary.user_id == current_user.id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one()
+    if row.status == "generating":
         raise HTTPException(
             status_code=409, detail="Summary generation already in progress."
         )
 
-    resolution, _ = await resolve_api_key_with_quota(current_user, db, "summary")
+    resolution, _ = await resolve_api_key_with_quota(
+        current_user, db, "summary", commit=False
+    )
 
-    if existing:
-        existing.status = "generating"
-        existing.progress_pct = 0
-        existing.error_message = None
-        row = existing
-    else:
-        row = PdfSummary(
-            pdf_id=pdf_id,
-            user_id=current_user.id,
-            status="generating",
-        )
-        db.add(row)
+    row.status = "generating"
+    row.progress_pct = 0
+    row.error_message = None
 
     await db.commit()
     await db.refresh(row)

@@ -5,36 +5,26 @@ from datetime import date
 from httpx import AsyncClient
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
+from app.core.security import create_access_token
 from app.db.models import PdfSummary, UserUsageQuota
 from app.services.exceptions import QuotaExhaustedError
 from app.services.quota_service import quota_service
 from sqlalchemy import select
 from tests.fixtures import create_test_pdf
-from tests.helpers import setup_http_client_mocks
+from tests.helpers import (
+    GatedSummaryResolver,
+    make_create_task_stub,
+    setup_http_client_mocks,
+)
 
 
-def _make_create_task_stub(real_create_task):
-    """Capture (and close) background coroutines spawned by the route."""
-    background_tasks = []
-
-    def _create_task(coro):
-        coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
-        if coro_name in ("run_generation", "run_bulk_generation"):
-            background_tasks.append(coro)
-            coro.close()
-            return MagicMock()
-        return real_create_task(coro)
-
-    _create_task.background_tasks = background_tasks
-    return _create_task
-
-
-def _make_quota_decrementing_resolve(db_session):
+def _make_quota_decrementing_resolve():
     """Fake resolve that actually decrements the summary quota (observable)."""
 
-    async def _resolve(user, db, feature):
+    async def _resolve(user, db, feature, *, commit=True):
         try:
             quota_result = await quota_service.check_and_decrement(
                 user.id, db, "summary"
@@ -61,7 +51,7 @@ class TestGenerateSummary:
             db_session, user_id=test_user.id, title="Sum", filename="s.pdf"
         )
         await db_session.commit()
-        create_task_stub = _make_create_task_stub(asyncio.create_task)
+        create_task_stub = make_create_task_stub(asyncio.create_task, "run_generation")
 
         with (
             patch(
@@ -70,7 +60,7 @@ class TestGenerateSummary:
             ) as mock_resolve,
             patch("app.api.routes.summaries.asyncio.create_task") as mock_create_task,
         ):
-            mock_resolve.side_effect = _make_quota_decrementing_resolve(db_session)
+            mock_resolve.side_effect = _make_quota_decrementing_resolve()
             mock_create_task.side_effect = create_task_stub
 
             response = await client.post(
@@ -113,6 +103,45 @@ class TestGenerateSummary:
 
         assert response.status_code == 409
 
+    async def test_409_does_not_resolve_or_consume_quota(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ):
+        pdf = await create_test_pdf(
+            db_session, user_id=test_user.id, title="Busy", filename="busy.pdf"
+        )
+        db_session.add_all(
+            [
+                PdfSummary(
+                    pdf_id=pdf.id,
+                    user_id=test_user.id,
+                    status="generating",
+                ),
+                UserUsageQuota(
+                    user_id=test_user.id,
+                    summary_uses_remaining=5,
+                    reset_at=date.today(),
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        with patch(
+            "app.api.routes.summaries.resolve_api_key_with_quota",
+            new_callable=AsyncMock,
+        ) as mock_resolve:
+            response = await client.post(
+                f"/v1/pdfs/{pdf.id}/summary", headers=auth_headers
+            )
+
+        assert response.status_code == 409
+        mock_resolve.assert_not_awaited()
+        quota = (
+            await db_session.execute(
+                select(UserUsageQuota).where(UserUsageQuota.user_id == test_user.id)
+            )
+        ).scalar_one()
+        assert quota.summary_uses_remaining == 5
+
     async def test_post_quota_exhausted_returns_402(
         self, client: AsyncClient, auth_headers, db_session, test_user
     ):
@@ -133,7 +162,7 @@ class TestGenerateSummary:
             "app.api.routes.summaries.resolve_api_key_with_quota",
             new_callable=AsyncMock,
         ) as mock_resolve:
-            mock_resolve.side_effect = _make_quota_decrementing_resolve(db_session)
+            mock_resolve.side_effect = _make_quota_decrementing_resolve()
 
             response = await client.post(
                 f"/v1/pdfs/{pdf.id}/summary",
@@ -156,6 +185,98 @@ class TestGenerateSummary:
             headers=auth_headers,
         )
         assert response.status_code == 404
+
+    @pytest.mark.parametrize("initial_status", [None, "complete"])
+    async def test_concurrent_posts_reserve_once(
+        self,
+        initial_status,
+        concurrent_clients,
+        concurrent_session_factory,
+        concurrent_user,
+    ):
+        setup_http_client_mocks()
+        async with concurrent_session_factory() as session:
+            pdf = await create_test_pdf(
+                session,
+                user_id=concurrent_user.id,
+                title=f"Concurrent {initial_status}",
+                filename=f"concurrent-{initial_status}.pdf",
+            )
+            if initial_status:
+                session.add(
+                    PdfSummary(
+                        pdf_id=pdf.id,
+                        user_id=concurrent_user.id,
+                        status=initial_status,
+                    )
+                )
+            session.add(
+                UserUsageQuota(
+                    user_id=concurrent_user.id,
+                    summary_uses_remaining=5,
+                    reset_at=date.today(),
+                )
+            )
+            await session.commit()
+            pdf_id = pdf.id
+
+        gated_resolver = GatedSummaryResolver()
+        real_create_task = asyncio.create_task
+        create_task_stub = make_create_task_stub(real_create_task, "run_generation")
+        headers = {"Authorization": f"Bearer {create_access_token(concurrent_user.id)}"}
+        url = f"/v1/pdfs/{pdf_id}/summary"
+        first_client, second_client = concurrent_clients
+
+        with (
+            patch(
+                "app.api.routes.summaries.resolve_api_key_with_quota",
+                new=gated_resolver,
+            ),
+            patch(
+                "app.api.routes.summaries.asyncio.create_task",
+                side_effect=create_task_stub,
+            ),
+        ):
+            first_request = real_create_task(first_client.post(url, headers=headers))
+            await asyncio.wait_for(gated_resolver.first_entered.wait(), timeout=2)
+            second_request = real_create_task(second_client.post(url, headers=headers))
+            try:
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        gated_resolver.second_entered.wait(), timeout=0.1
+                    )
+            finally:
+                gated_resolver.release_first.set()
+            responses = await asyncio.wait_for(
+                asyncio.gather(first_request, second_request), timeout=5
+            )
+
+        assert sorted(response.status_code for response in responses) == [202, 409]
+        assert gated_resolver.call_count == 1
+        assert len(create_task_stub.background_tasks) == 1
+        async with concurrent_session_factory() as session:
+            summaries = (
+                (
+                    await session.execute(
+                        select(PdfSummary).where(
+                            PdfSummary.pdf_id == pdf_id,
+                            PdfSummary.user_id == concurrent_user.id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            quota = (
+                await session.execute(
+                    select(UserUsageQuota).where(
+                        UserUsageQuota.user_id == concurrent_user.id
+                    )
+                )
+            ).scalar_one()
+        assert len(summaries) == 1
+        assert summaries[0].status == "generating"
+        assert quota.summary_uses_remaining == 4
 
 
 class TestGetSummary:
