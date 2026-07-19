@@ -550,6 +550,23 @@ class TestIsbnValidation:
         with pytest.raises(ValueError, match="Invalid ISBN format"):
             validate_isbn("")
 
+    def test_validate_isbn13_with_internal_x_is_rejected(self):
+        """A 13-char string with an X not at the end must be rejected as a
+        format error (it is not a valid ISBN-13). Previously this slipped past
+        the format guard and crashed the checksum loop with ``int("X")``."""
+        from app.services.citation_extractor import validate_isbn
+
+        with pytest.raises(ValueError, match="Invalid ISBN format"):
+            validate_isbn("12X4567890123")
+
+    @pytest.mark.parametrize("bad", ["X", "1X3456789", "123456789XX", "ABCDEFGHI0"])
+    def test_validate_isbn10_misplaced_x_is_rejected(self, bad):
+        """X is only valid as the final check digit of a 10-char ISBN."""
+        from app.services.citation_extractor import validate_isbn
+
+        with pytest.raises(ValueError, match="Invalid ISBN format"):
+            validate_isbn(bad)
+
 
 class TestLookupIsbnOpenlibrary:
     """Tests for lookup_isbn_openlibrary function."""

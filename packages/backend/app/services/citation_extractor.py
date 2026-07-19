@@ -110,12 +110,13 @@ def validate_isbn(isbn: str) -> str:
     clean = isbn.replace("-", "").replace(" ", "").upper()
 
     # Check if it's valid format (digits only, or digits + X at end for ISBN-10)
-    # X is only valid as check digit in ISBN-10 (position 10)
-    if (
-        not clean.replace("X", "").isdigit()
-        or clean.count("X") > 1
-        or (clean.endswith("X") and len(clean) != 10)
-    ):
+    # X is valid ONLY as the check digit of an ISBN-10 (last char of a 10-char
+    # string); ISBN-13 is digits only. A stray X elsewhere used to slip past
+    # this guard and crash the ISBN-13 checksum loop with int("X").
+    if clean.endswith("X"):
+        if len(clean) != 10 or clean.count("X") != 1 or not clean[:9].isdigit():
+            raise ValueError(f"Invalid ISBN format: {isbn}")
+    elif not clean.isdigit():
         raise ValueError(f"Invalid ISBN format: {isbn}")
 
     # ISBN-10: 10 digits
