@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 
 from app.core.security import decrypt_token
+from app.core.url_safety import UrlSafetyError, ssrf_request_hook, validate_external_url
 from app.services.exceptions import (
     ExternalUrlError,
     GithubApiError,
@@ -259,11 +260,17 @@ class PdfDownloadService:
         if not url:
             raise InvalidPdfSourceError("URL download requires a url parameter")
 
+        try:
+            validate_external_url(url)
+        except UrlSafetyError as exc:
+            raise ExternalUrlError(url=url, detail=str(exc)) from exc
+
         logger.info("Downloading PDF from external URL: %s", url)
 
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=60.0,
+            event_hooks={"request": [ssrf_request_hook]},
         ) as client:
             async with client.stream("GET", url) as response:
                 if response.status_code != 200:
@@ -309,11 +316,17 @@ class PdfDownloadService:
         if not url:
             raise InvalidPdfSourceError("URL download requires a url parameter")
 
+        try:
+            validate_external_url(url)
+        except UrlSafetyError as exc:
+            raise ExternalUrlError(url=url, detail=str(exc)) from exc
+
         logger.info("Downloading PDF from external URL: %s", url)
 
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=60.0,
+            event_hooks={"request": [ssrf_request_hook]},
         ) as client:
             response = await client.get(url)
 

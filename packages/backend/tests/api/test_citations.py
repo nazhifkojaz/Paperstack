@@ -1,7 +1,13 @@
 """Tests for citation routes."""
 
 import uuid
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import pytest
 from httpx import AsyncClient
+
+from app.core.url_safety import UrlSafetyError
 from tests.fixtures import create_test_pdf, create_test_citation
 
 
@@ -263,6 +269,88 @@ class TestAutoExtractCitation:
         )
 
         assert response.status_code == 404
+
+    @pytest.mark.parametrize(
+        "source_url",
+        [
+            "http://127.0.0.1/private.pdf",
+            "http://10.0.0.1/private.pdf",
+            "http://169.254.169.254/latest/meta-data",
+        ],
+    )
+    async def test_unsafe_linked_pdf_url_returns_422(
+        self, source_url, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            github_sha=None,
+        )
+        pdf.source_url = source_url
+        await db_session.commit()
+
+        response = await client.post(
+            f"/v1/pdfs/{pdf.id}/citation/auto",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 422
+
+    async def test_unsafe_redirect_returns_422(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            github_sha=None,
+        )
+        pdf.source_url = "https://example.com/paper.pdf"
+        await db_session.commit()
+
+        with (
+            patch("app.api.routes.citations.validate_external_url"),
+            patch("app.api.routes.citations.httpx.AsyncClient") as mock_client,
+        ):
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                side_effect=UrlSafetyError("redirected to loopback")
+            )
+            response = await client.post(
+                f"/v1/pdfs/{pdf.id}/citation/auto",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 422
+
+    async def test_public_upstream_failure_returns_502(
+        self, client: AsyncClient, auth_headers, db_session, test_user
+    ) -> None:
+        pdf = await create_test_pdf(
+            db_session,
+            user_id=test_user.id,
+            github_sha=None,
+        )
+        pdf.source_url = "https://example.com/paper.pdf"
+        await db_session.commit()
+        request = httpx.Request("GET", pdf.source_url)
+        upstream_response = httpx.Response(503, request=request)
+
+        with (
+            patch("app.api.routes.citations.validate_external_url"),
+            patch("app.api.routes.citations.httpx.AsyncClient") as mock_client,
+        ):
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "upstream unavailable",
+                    request=request,
+                    response=upstream_response,
+                )
+            )
+            response = await client.post(
+                f"/v1/pdfs/{pdf.id}/citation/auto",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 502
 
 
 class TestBulkExportCitations:

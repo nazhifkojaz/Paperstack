@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
+from app.core.url_safety import UrlSafetyError, ssrf_request_hook, validate_external_url
 from app.db.models import User, Pdf, Citation
 from app.schemas.citation import (
     CitationResponse,
@@ -142,10 +143,25 @@ async def auto_extract_citation(
     if not pdf:
         raise HTTPException(status_code=404, detail="PDF not found")
 
+    is_linked_pdf = bool(
+        pdf.source_url and not pdf.github_sha and not pdf.drive_file_id
+    )
+    if is_linked_pdf:
+        try:
+            validate_external_url(pdf.source_url)
+        except UrlSafetyError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Refused unsafe PDF URL: {exc}"
+            ) from exc
+
     # Download raw PDF bytes (storage backend for stored PDFs, direct URL for linked PDFs)
     try:
-        if pdf.source_url and not pdf.github_sha and not pdf.drive_file_id:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+        if is_linked_pdf:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=60,
+                event_hooks={"request": [ssrf_request_hook]},
+            ) as client:
                 response = await client.get(pdf.source_url)
                 response.raise_for_status()
                 pdf_bytes = response.content
@@ -155,6 +171,10 @@ async def auto_extract_citation(
             backend = await get_storage_backend(current_user, db)
             file_id = pdf.drive_file_id or pdf.github_sha
             pdf_bytes = await backend.download_bytes(file_id, pdf.filename)
+    except UrlSafetyError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Refused unsafe PDF URL: {exc}"
+        ) from exc
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=502, detail=f"Could not fetch linked PDF: {e}")
     except Exception:
