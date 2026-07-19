@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
 import { Folder, Library, Plus, FolderOpen, MessageSquare, MoreHorizontal, ChevronRight } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useLibraryStore } from '@/stores/libraryStore';
-import { useCollections, useCreateCollection, useUpdateCollection, useDeleteCollection, useExportCollection } from '@/api/collections';
+import { useCollections, useCreateCollection, useUpdateCollection, useDeleteCollection, useExportCollection, useSwapCollectionPositions } from '@/api/collections';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -94,6 +94,19 @@ function findNode(tree: TreeNode[], id: string): TreeNode | null {
     return null;
 }
 
+function getRoutedCollectionId(pathname: string): string | null {
+    const routes = [
+        '/library/collection/:collectionId/overview',
+        '/library/collection/:collectionId',
+        '/chat/collection/:collectionId',
+    ];
+    for (const route of routes) {
+        const collectionId = matchPath(route, pathname)?.params.collectionId;
+        if (collectionId) return collectionId;
+    }
+    return null;
+}
+
 export const Sidebar = ({ className }: SidebarProps) => {
     const {
         selectedProjectId,
@@ -103,10 +116,14 @@ export const Sidebar = ({ className }: SidebarProps) => {
     const { data: projects = [] } = useCollections();
     const createProject = useCreateCollection();
     const updateCollection = useUpdateCollection();
+    const swapCollectionPositions = useSwapCollectionPositions();
     const deleteCollection = useDeleteCollection();
     const exportCollection = useExportCollection();
 
     const navigate = useNavigate();
+    const location = useLocation();
+    const routedCollectionId = getRoutedCollectionId(location.pathname);
+    const activeCollectionId = routedCollectionId ?? selectedProjectId;
     const [newProjectName, setNewProjectName] = useState('');
     const [createOpen, setCreateOpen] = useState(false);
 
@@ -137,29 +154,18 @@ export const Sidebar = ({ className }: SidebarProps) => {
         }
     };
 
-    const handleMoveUp = async (collectionId: string) => {
+    const handleReorder = async (collectionId: string, offset: -1 | 1) => {
         const siblings = getSiblings(tree, collectionId);
         const idx = siblings.findIndex((s) => s.id === collectionId);
-        if (idx <= 0) return;
+        const adjacentIdx = idx + offset;
+        if (idx < 0 || adjacentIdx < 0 || adjacentIdx >= siblings.length) return;
         const current = siblings[idx];
-        const above = siblings[idx - 1];
+        const adjacent = siblings[adjacentIdx];
         try {
-            await updateCollection.mutateAsync({ id: current.id, position: above.position });
-            await updateCollection.mutateAsync({ id: above.id, position: current.position });
-        } catch {
-            toast.error('Failed to reorder collection');
-        }
-    };
-
-    const handleMoveDown = async (collectionId: string) => {
-        const siblings = getSiblings(tree, collectionId);
-        const idx = siblings.findIndex((s) => s.id === collectionId);
-        if (idx < 0 || idx >= siblings.length - 1) return;
-        const current = siblings[idx];
-        const below = siblings[idx + 1];
-        try {
-            await updateCollection.mutateAsync({ id: current.id, position: below.position });
-            await updateCollection.mutateAsync({ id: below.id, position: current.position });
+            await swapCollectionPositions.mutateAsync({
+                firstId: current.id,
+                secondId: adjacent.id,
+            });
         } catch {
             toast.error('Failed to reorder collection');
         }
@@ -167,10 +173,15 @@ export const Sidebar = ({ className }: SidebarProps) => {
 
     const handleDelete = async () => {
         if (!deleteTarget) return;
+        const collectionId = deleteTarget;
         try {
-            await deleteCollection.mutateAsync(deleteTarget);
-            if (selectedProjectId === deleteTarget) {
+            await deleteCollection.mutateAsync(collectionId);
+            if (
+                routedCollectionId === collectionId
+                || selectedProjectId === collectionId
+            ) {
                 resetFilters();
+                navigate('/library', { replace: true });
             }
             setDeleteTarget(null);
         } catch {
@@ -180,7 +191,7 @@ export const Sidebar = ({ className }: SidebarProps) => {
     };
 
     const renderProjectNode = (node: TreeNode) => {
-        const isSelected = selectedProjectId === node.id;
+        const isSelected = activeCollectionId === node.id;
         const indentPx = 4 + node.depth * 16;
 
         const handleRenameSubmit = async () => {
@@ -296,10 +307,10 @@ export const Sidebar = ({ className }: SidebarProps) => {
                                     })()}
                                 </DropdownMenuSubContent>
                             </DropdownMenuSub>
-                            <DropdownMenuItem onClick={() => handleMoveUp(node.id)}>
+                            <DropdownMenuItem onClick={() => handleReorder(node.id, -1)}>
                                 Move up
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleMoveDown(node.id)}>
+                            <DropdownMenuItem onClick={() => handleReorder(node.id, 1)}>
                                 Move down
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
@@ -343,7 +354,7 @@ export const Sidebar = ({ className }: SidebarProps) => {
             <ScrollArea className="flex-1 py-4">
                 <div className="px-3 pb-6 border-b mb-4">
                     <Button
-                        variant={!selectedProjectId ? "secondary" : "ghost"}
+                        variant={!activeCollectionId ? "secondary" : "ghost"}
                         className="w-full justify-start font-medium"
                         onClick={() => {
                             resetFilters();

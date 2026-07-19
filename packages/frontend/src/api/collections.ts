@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { apiFetch, apiFetchBlob } from './client';
 import { downloadBlob } from '@/lib/download-utils';
 import { toast } from 'sonner';
@@ -22,6 +22,20 @@ interface PdfCollectionInput {
     pdfId: string;
     collectionId: string;
 }
+
+const invalidateCollectionMembershipQueries = (
+    queryClient: QueryClient,
+    collectionId: string,
+) => {
+    queryClient.invalidateQueries({ queryKey: ['pdfs'] });
+    queryClient.invalidateQueries({ queryKey: ['collections'] });
+    queryClient.invalidateQueries({ queryKey: ['collection-overview', collectionId] });
+    queryClient.invalidateQueries({ queryKey: ['collection-comparison', collectionId] });
+    queryClient.invalidateQueries({ queryKey: ['collection-summaries', collectionId] });
+    queryClient.invalidateQueries({ queryKey: ['collection-insight', collectionId] });
+    queryClient.invalidateQueries({ queryKey: ['collection-recommendations', collectionId] });
+    queryClient.invalidateQueries({ queryKey: ['collection-duplicates', collectionId] });
+};
 
 export const useCollections = () => {
     return useQuery({
@@ -54,9 +68,7 @@ export const useAddPdfToCollection = () => {
             await apiFetch(`/collections/${collectionId}/pdfs?pdf_id=${pdfId}`, { method: 'POST' });
         },
         onSuccess: (_data, variables) => {
-            queryClient.invalidateQueries({ queryKey: ['pdfs'] });
-            queryClient.invalidateQueries({ queryKey: ['collections'] });
-            queryClient.invalidateQueries({ queryKey: ['collection-overview', variables.collectionId] });
+            invalidateCollectionMembershipQueries(queryClient, variables.collectionId);
         },
     });
 };
@@ -71,9 +83,7 @@ export const useRemovePdfFromCollection = () => {
             });
         },
         onSuccess: (_data, variables) => {
-            queryClient.invalidateQueries({ queryKey: ['pdfs'] });
-            queryClient.invalidateQueries({ queryKey: ['collections'] });
-            queryClient.invalidateQueries({ queryKey: ['collection-overview', variables.collectionId] });
+            invalidateCollectionMembershipQueries(queryClient, variables.collectionId);
         },
     });
 };
@@ -89,6 +99,22 @@ export const useUpdateCollection = () => {
             return apiFetch(`/collections/${id}`, {
                 method: 'PATCH',
                 body: JSON.stringify(data),
+            });
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['collections'] });
+        },
+    });
+};
+
+export const useSwapCollectionPositions = () => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async ({ firstId, secondId }: { firstId: string; secondId: string }): Promise<Collection[]> => {
+            return apiFetch('/collections/swap-positions', {
+                method: 'POST',
+                body: JSON.stringify({ first_id: firstId, second_id: secondId }),
             });
         },
         onSuccess: () => {
