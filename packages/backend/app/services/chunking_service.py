@@ -409,25 +409,6 @@ def _get_section_at_offset(
     return current_title, current_level
 
 
-def _compute_overlap_start(full_text: str, chunk_end: int, overlap_chars: int) -> int:
-    """Find overlap start that begins at a sentence boundary.
-
-    Searches for a sentence boundary near the desired overlap position.
-    Falls back to the raw position if no boundary is found.
-    """
-    raw_start = chunk_end - overlap_chars
-    if raw_start <= 0:
-        return max(raw_start, 0)
-
-    search_start = max(0, raw_start - 50)
-    search_end = min(len(full_text), raw_start + 50)
-    boundary = _find_sentence_boundary_reverse(full_text, search_start, search_end)
-    if boundary != -1 and boundary >= raw_start - 50:
-        return boundary
-
-    return max(raw_start, 0)
-
-
 def _is_heading_marker(text: str) -> tuple[bool, str | None, int | None]:
     """Check if text is a [HEADING L{level}] marker.
 

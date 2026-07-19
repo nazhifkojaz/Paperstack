@@ -224,24 +224,6 @@ export function textRangeToNormalizedRects(
 }
 
 // ---------------------------------------------------------------------------
-// Full‑item range convenience
-// ---------------------------------------------------------------------------
-
-/**
- * Return the normalized rect for a single text item (by index).
- */
-export function itemToNormalizedRect(
-  index: PdfPageTextIndex,
-  itemIndex: number,
-  viewport: PdfViewportInfo,
-): NormalizedRect | null {
-  const range = index.itemCharRanges[itemIndex];
-  if (!range) return null;
-  const rects = textRangeToNormalizedRects(index, range.start, range.end, viewport);
-  return rects.length > 0 ? rects[0] : null;
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
