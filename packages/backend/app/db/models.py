@@ -382,9 +382,6 @@ class UserUsageQuota(Base):
     auto_highlight_thorough_remaining: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("3")
     )
-    auto_highlight_thorough_remaining: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("3")
-    )
     summary_uses_remaining: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("10")
     )
