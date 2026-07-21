@@ -37,16 +37,20 @@ const PROVIDERS = [
     },
 ]
 
-type FeatureKey = 'chat_model' | 'auto_highlight_model' | 'explain_model'
+type FeatureKey = 'conversation_model' | 'analysis_model'
 type OpenRouterKeyMode = 'app' | 'byok'
 type PreferenceState = Record<FeatureKey, string | null> & {
     openrouter_key_mode: OpenRouterKeyMode
 }
 
 const FEATURE_LABELS: Record<FeatureKey, string> = {
-    chat_model: 'Chat',
-    auto_highlight_model: 'Auto-highlight',
-    explain_model: 'Explain',
+    conversation_model: 'Conversation',
+    analysis_model: 'Analysis',
+}
+
+const FEATURE_DESCRIPTIONS: Record<FeatureKey, string> = {
+    conversation_model: 'Used for chat and explain (interactive)',
+    analysis_model: 'Used for auto-highlight and summaries (background)',
 }
 
 export function SettingsDialog({ open, onOpenChange }: Props) {
@@ -75,9 +79,8 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
     // LLM state
     const [models, setModels] = useState<LLMModel[]>([])
     const [preferences, setPreferences] = useState<PreferenceState>({
-        chat_model: null,
-        auto_highlight_model: null,
-        explain_model: null,
+        conversation_model: null,
+        analysis_model: null,
         openrouter_key_mode: 'app',
     })
     const byokModelIds = useMemo(
@@ -100,9 +103,8 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
         fetchLLMPreferences()
             .then((prefs) =>
                 setPreferences({
-                    chat_model: prefs.chat_model,
-                    auto_highlight_model: prefs.auto_highlight_model,
-                    explain_model: prefs.explain_model,
+                    conversation_model: prefs.conversation_model,
+                    analysis_model: prefs.analysis_model,
                     openrouter_key_mode: prefs.openrouter_key_mode,
                 }),
             )
@@ -304,6 +306,9 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
                                 <label className="text-xs font-medium text-muted-foreground">
                                     {FEATURE_LABELS[feature]}
                                 </label>
+                                <p className="text-[10px] text-muted-foreground/80 -mt-0.5">
+                                    {FEATURE_DESCRIPTIONS[feature]}
+                                </p>
                                 <Select
                                     value={preferences[feature] ?? '__auto__'}
                                     onValueChange={(v) => handleModelChange(feature, v)}

@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
-import { FileText, MoreVertical, Trash, Edit, Folder, CheckSquare, Check, Link as LinkIcon } from 'lucide-react';
+import { FileText, MoreVertical, Trash, Edit, Folder, CheckSquare, Check, Link as LinkIcon, ChevronRight, ChevronDown, Loader2, Sparkles } from 'lucide-react';
 import { Pdf } from '@/api/pdfs';
+import { usePdfSummary, useGeneratePdfSummary } from '@/api/summaries';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
@@ -18,6 +20,26 @@ export const PdfCard = ({ pdf, onDelete, onEdit, onManageProjects }: PdfCardProp
     const navigate = useNavigate();
     const { isSelectionMode, selectedPdfIds, togglePdfSelection } = useLibraryStore();
     const isSelected = selectedPdfIds.has(pdf.id);
+    const [expanded, setExpanded] = useState(false);
+    const [tldrExpanded, setTldrExpanded] = useState(false);
+    const { data: summary } = usePdfSummary(pdf.id, expanded);
+    const generateSummary = useGeneratePdfSummary();
+
+    const handleToggleTldr = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setExpanded((v) => !v);
+        setTldrExpanded(false);
+    };
+
+    const handleToggleTldrText = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setTldrExpanded((v) => !v);
+    };
+
+    const handleGenerate = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        generateSummary.mutate(pdf.id);
+    };
 
     const handleCardClick = () => {
         if (isSelectionMode) {
@@ -119,6 +141,78 @@ export const PdfCard = ({ pdf, onDelete, onEdit, onManageProjects }: PdfCardProp
                         : pdf.filename.split('/').pop() ?? pdf.filename
                     }
                 </p>
+
+                <div className="mb-3">
+                    <button
+                        type="button"
+                        onClick={handleToggleTldr}
+                        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        {expanded ? (
+                            <ChevronDown className="h-3 w-3" />
+                        ) : (
+                            <ChevronRight className="h-3 w-3" />
+                        )}
+                        TL;DR
+                    </button>
+                    {expanded && (
+                        <div className="pl-4 mt-1 text-xs text-muted-foreground">
+                            {summary?.status === 'complete' && (
+                                <>
+                                    <p
+                                        onClick={handleToggleTldrText}
+                                        className={`cursor-pointer hover:text-foreground transition-colors ${
+                                            tldrExpanded ? '' : 'line-clamp-4'
+                                        }`}
+                                    >
+                                        {summary.tldr}
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={handleToggleTldrText}
+                                        className="mt-0.5 text-[10px] text-muted-foreground/80 hover:text-foreground transition-colors"
+                                    >
+                                        {tldrExpanded ? 'show less' : 'show more'}
+                                    </button>
+                                </>
+                            )}
+                            {summary?.status === 'generating' && (
+                                <p className="flex items-center gap-1">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    Summarizing… {summary.progress_pct}%
+                                </p>
+                            )}
+                            {summary?.status === 'failed' && (
+                                <div className="space-y-1">
+                                    <p>Failed: {summary.error_message}</p>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={handleGenerate}
+                                        disabled={generateSummary.isPending}
+                                    >
+                                        Retry
+                                    </Button>
+                                </div>
+                            )}
+                            {!summary && (
+                                <div className="space-y-1">
+                                    <p>No summary yet.</p>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={handleGenerate}
+                                        disabled={generateSummary.isPending}
+                                        className="gap-1"
+                                    >
+                                        <Sparkles className="h-3 w-3" />
+                                        Generate
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
 
                 <div className="mt-auto flex items-center justify-between text-[11px] text-muted-foreground">
                     <span>{pdf.page_count ? `${pdf.page_count} pages` : 'Unknown pages'}</span>

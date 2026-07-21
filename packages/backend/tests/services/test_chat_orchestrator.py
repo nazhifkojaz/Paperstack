@@ -415,6 +415,165 @@ class TestPrepareCollectionContext:
                     db=mock_db,
                 )
 
+    async def test_prepare_collection_context_uses_rerank_when_enabled(
+        self, orchestrator, mock_user, mock_db, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "app.core.config.settings.RERANKER_MODEL", "cohere/rerank-v3.5"
+        )
+        collection_id = uuid.uuid4()
+
+        rerank_chunk = MagicMock()
+        rerank_chunk.pdf_id = str(uuid.uuid4())
+        rerank_chunk.pdf_title = "Reranked Paper"
+        rerank_chunk.page_number = 1
+        rerank_chunk.end_page_number = None
+        rerank_chunk.content = "reranked collection text"
+        rerank_chunk.section_title = None
+        rerank_chunk.section_level = None
+        rerank_chunk.chunk_id = str(uuid.uuid4())
+        rerank_chunk.score = 0.95
+
+        # Citation fetch mock.
+        cite_scalar_result = MagicMock()
+        cite_scalar_result.scalars = MagicMock()
+        cite_scalar_result.scalars.return_value.all = MagicMock(return_value=[])
+        mock_db.execute = AsyncMock(return_value=cite_scalar_result)
+
+        with (
+            patch(
+                "app.services.reranker_service.get_reranker",
+                return_value=MagicMock(pool_k=50),
+            ) as mock_get,
+            patch(
+                "app.services.reranker_service.retrieve_collection_with_rerank",
+                new_callable=AsyncMock,
+                return_value=[rerank_chunk],
+            ) as mock_rerank,
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_collection",
+                new_callable=AsyncMock,
+            ) as mock_search,
+        ):
+            result = await orchestrator.prepare_context(
+                query="test query",
+                pdf_id=None,
+                collection_id=collection_id,
+                user=mock_user,
+                db=mock_db,
+            )
+
+        assert mock_get.called
+        assert mock_rerank.called
+        assert not mock_search.called  # rerank path taken, plain search skipped
+        assert len(result.top_chunks) == 1
+        assert result.top_chunks[0].content == "reranked collection text"
+
+    async def test_prepare_collection_context_rerank_failure_falls_back(
+        self, orchestrator, mock_user, mock_db, monkeypatch
+    ):
+        from app.services.exceptions import RerankError
+
+        monkeypatch.setattr(
+            "app.core.config.settings.RERANKER_MODEL", "cohere/rerank-v3.5"
+        )
+        collection_id = uuid.uuid4()
+
+        fallback_chunk = MagicMock()
+        fallback_chunk.pdf_id = str(uuid.uuid4())
+        fallback_chunk.pdf_title = "Fallback Paper"
+        fallback_chunk.page_number = 2
+        fallback_chunk.end_page_number = None
+        fallback_chunk.content = "fallback chunk"
+        fallback_chunk.section_title = None
+        fallback_chunk.section_level = None
+        fallback_chunk.chunk_id = str(uuid.uuid4())
+        fallback_chunk.score = 0.5
+
+        cite_scalar_result = MagicMock()
+        cite_scalar_result.scalars = MagicMock()
+        cite_scalar_result.scalars.return_value.all = MagicMock(return_value=[])
+        mock_db.execute = AsyncMock(return_value=cite_scalar_result)
+
+        with (
+            patch(
+                "app.services.reranker_service.get_reranker",
+                return_value=MagicMock(pool_k=50),
+            ),
+            patch(
+                "app.services.reranker_service.retrieve_collection_with_rerank",
+                new_callable=AsyncMock,
+                side_effect=RerankError("boom"),
+            ),
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_collection",
+                new_callable=AsyncMock,
+                return_value=[fallback_chunk],
+            ) as mock_search,
+        ):
+            result = await orchestrator.prepare_context(
+                query="test query",
+                pdf_id=None,
+                collection_id=collection_id,
+                user=mock_user,
+                db=mock_db,
+            )
+
+        assert mock_search.called  # fell back to plain hybrid retrieval
+        assert len(result.top_chunks) == 1
+        assert result.top_chunks[0].content == "fallback chunk"
+
+    async def test_prepare_collection_context_reranker_none_uses_plain_search(
+        self, orchestrator, mock_user, mock_db, monkeypatch
+    ):
+        # RERANKER_MODEL set but get_reranker() returns None (e.g. no key) —
+        # plain search_collection must run.
+        monkeypatch.setattr(
+            "app.core.config.settings.RERANKER_MODEL", "cohere/rerank-v3.5"
+        )
+        collection_id = uuid.uuid4()
+
+        chunk = MagicMock()
+        chunk.pdf_id = str(uuid.uuid4())
+        chunk.pdf_title = "Plain Paper"
+        chunk.page_number = 1
+        chunk.end_page_number = None
+        chunk.content = "plain chunk"
+        chunk.section_title = None
+        chunk.section_level = None
+        chunk.chunk_id = str(uuid.uuid4())
+        chunk.score = 0.7
+
+        cite_scalar_result = MagicMock()
+        cite_scalar_result.scalars = MagicMock()
+        cite_scalar_result.scalars.return_value.all = MagicMock(return_value=[])
+        mock_db.execute = AsyncMock(return_value=cite_scalar_result)
+
+        with (
+            patch("app.services.reranker_service.get_reranker", return_value=None),
+            patch(
+                "app.services.reranker_service.retrieve_collection_with_rerank",
+                new_callable=AsyncMock,
+            ) as mock_rerank,
+            patch(
+                "app.services.chat_orchestrator.vector_search_service.search_collection",
+                new_callable=AsyncMock,
+                return_value=[chunk],
+            ) as mock_search,
+        ):
+            result = await orchestrator.prepare_context(
+                query="test query",
+                pdf_id=None,
+                collection_id=collection_id,
+                user=mock_user,
+                db=mock_db,
+            )
+
+        assert not mock_rerank.called
+        assert mock_search.called
+        assert len(result.top_chunks) == 1
+        assert result.top_chunks[0].content == "plain chunk"
+
 
 # ---------------------------------------------------------------------------
 # build_messages

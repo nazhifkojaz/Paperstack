@@ -8,6 +8,7 @@ import {
 import type { RefObject } from 'react';
 import { useAnnotationStore } from '@/stores/annotationStore';
 import { useChatStore } from '@/stores/chatStore';
+import { useInfoPanelCoordinator } from '@/hooks/useInfoPanelCoordinator';
 import { useAnnotationsContext } from '@/features/annotations/AnnotationsContext';
 import { useAnnotationExplain } from '@/features/annotations/useAnnotationExplain';
 import { useAnnotationParaphrase } from '@/features/annotations/useAnnotationParaphrase';
@@ -219,8 +220,8 @@ export function useAnnotationLayerState({
     annotationParaphrase.paraphrase(ann, pdfId, level);
   };
 
-  const setChatPanelOpen = useChatStore((s) => s.setChatPanelOpen);
   const setPendingAskQuote = useChatStore((s) => s.setPendingAskQuote);
+  const openChat = useInfoPanelCoordinator().openChat;
 
   const handleAskInChat = (annotationId: string) => {
     const ann = pageAnnotations.find((a) => a.id === annotationId);
@@ -231,7 +232,7 @@ export function useAnnotationLayerState({
       text: ann.selected_text,
       pageNumber: ann.page_number,
     });
-    setChatPanelOpen(true);
+    openChat();
   };
 
   return {

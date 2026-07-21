@@ -38,6 +38,8 @@ interface QuotaInfo {
     auto_highlight_quick_total: number;
     auto_highlight_thorough_remaining: number;
     auto_highlight_thorough_total: number;
+    summary_remaining: number;
+    summary_total: number;
     reset_at: string;
     has_own_key: boolean;
     providers: string[];

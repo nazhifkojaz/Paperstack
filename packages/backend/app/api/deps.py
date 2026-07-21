@@ -66,10 +66,11 @@ async def get_embedding_http_client(
 
 
 _PREFERENCE_MAP = {
-    "chat": "chat_model",
-    "explain_paraphrase": "explain_model",
-    "auto_highlight_quick": "auto_highlight_model",
-    "auto_highlight_thorough": "auto_highlight_model",
+    "chat": "conversation_model",
+    "explain_paraphrase": "conversation_model",
+    "auto_highlight_quick": "analysis_model",
+    "auto_highlight_thorough": "analysis_model",
+    "summary": "analysis_model",
 }
 
 _RESOLVER_MAP = {
@@ -77,6 +78,7 @@ _RESOLVER_MAP = {
     "explain_paraphrase": "resolve_for_explain",
     "auto_highlight_quick": "resolve_for_auto_highlight",
     "auto_highlight_thorough": "resolve_for_auto_highlight",
+    "summary": "resolve_for_auto_highlight",
 }
 
 
@@ -88,12 +90,17 @@ async def resolve_api_key_with_quota(
         "explain_paraphrase",
         "auto_highlight_quick",
         "auto_highlight_thorough",
+        "summary",
     ],
+    *,
+    commit: bool = True,
 ):
     """Resolve API key for a feature, check quotas, raise HTTPException on errors.
 
     Queries UserLLMPreferences for the preferred model, resolves the key
     via api_key_service, and decrements daily quotas for in-house OpenRouter.
+    With ``commit=False``, quota and global usage updates remain pending so the
+    caller can commit them atomically with its own reservation.
     """
     from app.services.api_key_service import api_key_service
     from app.services.exceptions import (
@@ -131,5 +138,6 @@ async def resolve_api_key_with_quota(
         raise HTTPException(status_code=402, detail=str(exc))
 
     global_status = await openrouter_usage_service.record_and_check(db)
-    await db.commit()
+    if commit:
+        await db.commit()
     return resolution, quota_result.with_global_warning(global_status.warning_message)

@@ -238,14 +238,44 @@ class ChatOrchestrator:
         if collection_id is None:
             raise ValueError("Conversation has neither pdf_id nor collection_id.")
 
-        top_chunks = await vector_search_service.search_collection(
-            query_vector=query_vector,
-            collection_id=collection_id,
-            user_id=user.id,
-            top_k=settings.CHAT_TOP_K_COLLECTION,
-            db=db,
-            query_text=query_text,
-        )
+        # Two-stage retrieval (hybrid pool → cross-encoder rerank) when enabled.
+        # Falls back to plain hybrid retrieval on any rerank failure so a
+        # Cohere/OpenRouter blip never breaks collection chat. Mirrors the
+        # single-PDF path (_prepare_pdf_context).
+        top_chunks: list | None = None
+        if settings.RERANKER_MODEL:
+            from app.services.reranker_service import (
+                get_reranker,
+                retrieve_collection_with_rerank,
+            )
+
+            reranker = get_reranker()
+            if reranker is not None:
+                try:
+                    top_chunks = await retrieve_collection_with_rerank(
+                        vector_search_service,
+                        reranker,
+                        query_text,
+                        query_vector,
+                        collection_id,
+                        user.id,
+                        settings.CHAT_TOP_K_COLLECTION,
+                        db,
+                    )
+                except RerankError:
+                    logger.warning(
+                        "Rerank failed for collection %s; falling back to hybrid retrieval",
+                        collection_id,
+                    )
+        if not top_chunks:
+            top_chunks = await vector_search_service.search_collection(
+                query_vector=query_vector,
+                collection_id=collection_id,
+                user_id=user.id,
+                top_k=settings.CHAT_TOP_K_COLLECTION,
+                db=db,
+                query_text=query_text,
+            )
         if not top_chunks:
             raise ValueError("No indexed PDFs found in this collection.")
 

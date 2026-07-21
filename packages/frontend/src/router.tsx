@@ -31,6 +31,13 @@ export const router = createBrowserRouter(
                                 })),
                         },
                         {
+                            path: 'library/collection/:collectionId/overview',
+                            lazy: () =>
+                                import('@/features/collections/CollectionDetailPage').then((m) => ({
+                                    Component: m.CollectionDetailPage,
+                                })),
+                        },
+                        {
                             path: 'library/tag/:tagId',
                             lazy: () =>
                                 import('@/features/library/LibraryPage').then((m) => ({

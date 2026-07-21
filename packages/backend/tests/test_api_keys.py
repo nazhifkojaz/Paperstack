@@ -70,7 +70,7 @@ async def test_delete_api_key_resets_byok_preferences(
         "/v1/settings/llm-preferences",
         json={
             "openrouter_key_mode": "byok",
-            "chat_model": "anthropic/claude-fable-5",
+            "conversation_model": "anthropic/claude-fable-5",
         },
         headers=auth_headers,
     )
@@ -88,7 +88,7 @@ async def test_delete_api_key_resets_byok_preferences(
     assert final_prefs.status_code == 200
     data = final_prefs.json()
     assert data["openrouter_key_mode"] == "app"
-    assert data["chat_model"] is None
+    assert data["conversation_model"] is None
 
 
 @pytest.mark.asyncio

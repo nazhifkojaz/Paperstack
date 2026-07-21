@@ -11,6 +11,7 @@ from app.services.reranker_service import (
     RerankerService,
     _reranker_cache,
     get_reranker,
+    retrieve_collection_with_rerank,
     retrieve_with_rerank,
 )
 
@@ -248,6 +249,76 @@ class TestRetrieveWithRerank:
 
         result = await retrieve_with_rerank(
             vector_search, reranker, "q", [0.1], "pdf", "u", 10, MagicMock()
+        )
+
+        assert result == []
+        reranker.order.assert_not_called()
+
+
+@pytest.mark.asyncio
+class TestRetrieveCollectionWithRerank:
+    async def test_per_pdf_cap_limits_one_papers_chunks(self, monkeypatch):
+        """A single long paper must not crowd the rerank pool past the cap."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr("app.core.config.settings.COLLECTION_RERANK_PER_PDF_CAP", 2)
+
+        # 10 chunks: 8 share pdf_id "A", 2 have pdf_id "B".
+        pool = []
+        for _ in range(8):
+            m = MagicMock()
+            m.content = "docA"
+            m.pdf_id = "A"
+            pool.append(m)
+        for _ in range(2):
+            m = MagicMock()
+            m.content = "docB"
+            m.pdf_id = "B"
+            pool.append(m)
+
+        vector_search = MagicMock()
+        vector_search.search_collection = AsyncMock(return_value=pool)
+        reranker = MagicMock(pool_k=50)
+        # Echo indices back as-is so we can inspect what was sent.
+        reranker.order = AsyncMock(side_effect=lambda q, docs: list(range(len(docs))))
+
+        await retrieve_collection_with_rerank(
+            vector_search, reranker, "q", [0.1], "col", "u", 10, MagicMock()
+        )
+
+        docs_passed = reranker.order.call_args.args[1]
+        # cap=2 per PDF -> 2 from A + 2 from B = 4.
+        assert len(docs_passed) == 4
+        assert sum(1 for d in docs_passed if d == "docA") == 2
+        assert sum(1 for d in docs_passed if d == "docB") == 2
+
+    async def test_drops_out_of_range_indices(self):
+        """Malformed provider indices must not raise (would bypass fallback)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        pool = [MagicMock(content=f"doc{i}", pdf_id=f"p{i}") for i in range(4)]
+        vector_search = MagicMock()
+        vector_search.search_collection = AsyncMock(return_value=pool)
+        reranker = MagicMock(pool_k=50)
+        # "x" non-int and 99 out of range dropped; 3 and 0 survive, best-first.
+        reranker.order = AsyncMock(return_value=[3, "x", 99, 0])
+
+        result = await retrieve_collection_with_rerank(
+            vector_search, reranker, "q", [0.1], "col", "u", 10, MagicMock()
+        )
+
+        assert result == [pool[3], pool[0]]
+
+    async def test_empty_pool_returns_empty_without_reranker_call(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        vector_search = MagicMock()
+        vector_search.search_collection = AsyncMock(return_value=[])
+        reranker = MagicMock(pool_k=50)
+        reranker.order = AsyncMock(return_value=[])
+
+        result = await retrieve_collection_with_rerank(
+            vector_search, reranker, "q", [0.1], "col", "u", 10, MagicMock()
         )
 
         assert result == []

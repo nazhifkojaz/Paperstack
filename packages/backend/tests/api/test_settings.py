@@ -218,7 +218,7 @@ class TestLLMSettings:
             "/v1/settings/llm-preferences",
             json={
                 "openrouter_key_mode": "byok",
-                "chat_model": "anthropic/claude-fable-5",
+                "conversation_model": "anthropic/claude-fable-5",
             },
             headers=auth_headers,
         )
@@ -237,7 +237,7 @@ class TestLLMSettings:
 
         resp = await client.patch(
             "/v1/settings/llm-preferences",
-            json={"chat_model": "anthropic/claude-fable-5"},
+            json={"conversation_model": "anthropic/claude-fable-5"},
             headers=auth_headers,
         )
 
@@ -257,13 +257,13 @@ class TestLLMSettings:
             "/v1/settings/llm-preferences",
             json={
                 "openrouter_key_mode": "byok",
-                "chat_model": "anthropic/claude-fable-5",
+                "conversation_model": "anthropic/claude-fable-5",
             },
             headers=auth_headers,
         )
 
         assert resp.status_code == 200
-        assert resp.json()["chat_model"] == "anthropic/claude-fable-5"
+        assert resp.json()["conversation_model"] == "anthropic/claude-fable-5"
         assert resp.json()["openrouter_key_mode"] == "byok"
 
     async def test_accepts_non_byok_models_without_openrouter_key(
@@ -272,16 +272,16 @@ class TestLLMSettings:
         resp = await client.patch(
             "/v1/settings/llm-preferences",
             json={
-                "chat_model": "openai/gpt-oss-120b:free",
-                "explain_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+                "conversation_model": "openai/gpt-oss-120b:free",
+                "analysis_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
             },
             headers=auth_headers,
         )
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["chat_model"] == "openai/gpt-oss-120b:free"
-        assert data["explain_model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
+        assert data["conversation_model"] == "openai/gpt-oss-120b:free"
+        assert data["analysis_model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
         assert data["openrouter_key_mode"] == "app"
 
     async def test_can_switch_to_app_mode_when_byok_models_are_cleared(
@@ -296,7 +296,7 @@ class TestLLMSettings:
             "/v1/settings/llm-preferences",
             json={
                 "openrouter_key_mode": "byok",
-                "chat_model": "anthropic/claude-fable-5",
+                "conversation_model": "anthropic/claude-fable-5",
             },
             headers=auth_headers,
         )
@@ -305,11 +305,11 @@ class TestLLMSettings:
             "/v1/settings/llm-preferences",
             json={
                 "openrouter_key_mode": "app",
-                "chat_model": None,
+                "conversation_model": None,
             },
             headers=auth_headers,
         )
 
         assert resp.status_code == 200
         assert resp.json()["openrouter_key_mode"] == "app"
-        assert resp.json()["chat_model"] is None
+        assert resp.json()["conversation_model"] is None

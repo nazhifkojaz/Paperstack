@@ -16,6 +16,7 @@ from app.api.routes import (
     citations,
     sharing,
     api_keys,
+    summaries,
 )
 from app.api.routes import settings as settings_routes
 from app.api.routes import auto_highlight, chat
@@ -60,6 +61,11 @@ async def health_check():
 
 app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth")
 app.include_router(pdfs.router, prefix=f"{settings.API_V1_STR}/pdfs", tags=["pdfs"])
+app.include_router(
+    summaries.router,
+    prefix=f"{settings.API_V1_STR}/pdfs",
+    tags=["summaries"],
+)
 app.include_router(
     collections.router,
     prefix=f"{settings.API_V1_STR}/collections",

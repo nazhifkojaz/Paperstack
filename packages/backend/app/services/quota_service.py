@@ -21,6 +21,7 @@ QuotaFeature = Literal[
     "explain_paraphrase",
     "auto_highlight_quick",
     "auto_highlight_thorough",
+    "summary",
 ]
 
 
@@ -52,6 +53,8 @@ class UserQuotaSnapshot:
     auto_highlight_quick_total: int
     auto_highlight_thorough_remaining: int
     auto_highlight_thorough_total: int
+    summary_remaining: int
+    summary_total: int
     reset_at: date
     has_own_key: bool
     providers: list[str]
@@ -73,6 +76,7 @@ _FEATURES: dict[QuotaFeature, QuotaFeatureConfig] = {
         "auto_highlight_thorough_remaining",
         "QUOTA_AUTO_HIGHLIGHT_THOROUGH_DAILY",
     ),
+    "summary": QuotaFeatureConfig("summary_uses_remaining", "QUOTA_SUMMARY_DAILY"),
 }
 
 
@@ -188,6 +192,8 @@ class QuotaService:
             auto_highlight_quick_total=settings.QUOTA_AUTO_HIGHLIGHT_QUICK_DAILY,
             auto_highlight_thorough_remaining=quota.auto_highlight_thorough_remaining,
             auto_highlight_thorough_total=settings.QUOTA_AUTO_HIGHLIGHT_THOROUGH_DAILY,
+            summary_remaining=quota.summary_uses_remaining,
+            summary_total=settings.QUOTA_SUMMARY_DAILY,
             reset_at=quota.reset_at,
             has_own_key=bool(providers),
             providers=providers,
@@ -214,6 +220,7 @@ class QuotaService:
                     explain_uses_remaining = :explain_default,
                     auto_highlight_quick_remaining = :quick_default,
                     auto_highlight_thorough_remaining = :thorough_default,
+                    summary_uses_remaining = :summary_default,
                     reset_at = (now() AT TIME ZONE 'UTC')::date,
                     updated_at = now()
                 WHERE user_id = :user_id
@@ -225,6 +232,7 @@ class QuotaService:
                 "explain_default": self._default_for("explain_paraphrase"),
                 "quick_default": self._default_for("auto_highlight_quick"),
                 "thorough_default": self._default_for("auto_highlight_thorough"),
+                "summary_default": self._default_for("summary"),
             },
         )
         await db.flush()

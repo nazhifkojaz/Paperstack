@@ -753,7 +753,7 @@ async def test_run_analysis_background_quick_success():
             new_callable=AsyncMock,
         ) as mock_shortlist,
         patch(
-            "app.api.routes.auto_highlight._extract_abstract_text",
+            "app.api.routes.auto_highlight.extract_abstract_text",
             new_callable=AsyncMock,
         ) as mock_extract_abstract,
     ):
@@ -871,7 +871,7 @@ async def test_run_analysis_background_thorough_combines_non_empty_reasoning_tra
             new_callable=AsyncMock,
         ) as mock_shortlist,
         patch(
-            "app.api.routes.auto_highlight._extract_abstract_text",
+            "app.api.routes.auto_highlight.extract_abstract_text",
             new_callable=AsyncMock,
         ) as mock_extract_abstract,
     ):
@@ -1261,7 +1261,7 @@ async def test_run_analysis_background_setup_failure_no_shortlist():
             new_callable=AsyncMock,
         ) as mock_shortlist,
         patch(
-            "app.api.routes.auto_highlight._extract_abstract_text",
+            "app.api.routes.auto_highlight.extract_abstract_text",
             new_callable=AsyncMock,
         ) as mock_extract_abstract,
         patch(

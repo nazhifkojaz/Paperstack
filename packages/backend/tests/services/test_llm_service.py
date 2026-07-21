@@ -7,6 +7,8 @@ import httpx
 from app.services.llm_service import (
     LLMService,
     _parse_highlights_json,
+    _parse_synthesis_json,
+    _parse_gaps_json,
     DEFAULT_FREE_MODEL,
 )
 from app.services.exceptions import LLMProviderError, LLMRateLimitError
@@ -170,3 +172,80 @@ class TestCallOpenRouter:
         second_payload = captured_payloads[1]
         assert first_payload["reasoning"] == {"effort": "medium"}
         assert "reasoning" not in second_payload
+
+
+# --- _parse_synthesis_json ---
+
+
+class TestParseSynthesisJson:
+    def test_valid_json(self):
+        raw = '{"synthesis": "narrative", "themes": [{"name": "T", "description": "d", "paper_indexes": [1, 2]}]}'
+        data = _parse_synthesis_json(raw, paper_count=3)
+        assert data["synthesis"] == "narrative"
+        assert len(data["themes"]) == 1
+        assert data["themes"][0]["paper_indexes"] == [1, 2]
+
+    def test_fenced_json(self):
+        raw = '```json\n{"synthesis": "fenced narrative"}\n```'
+        data = _parse_synthesis_json(raw, paper_count=1)
+        assert data["synthesis"] == "fenced narrative"
+        assert data["themes"] == []
+
+    def test_missing_synthesis_raises(self):
+        with pytest.raises(ValueError, match="missing required"):
+            _parse_synthesis_json('{"themes": []}', paper_count=1)
+
+    def test_out_of_range_indexes_dropped(self):
+        raw = (
+            '{"synthesis": "x", "themes": [{"name": "T", "paper_indexes": [1, 5, 99]}]}'
+        )
+        data = _parse_synthesis_json(raw, paper_count=3)
+        assert data["themes"][0]["paper_indexes"] == [1]
+
+    def test_garbage_raises(self):
+        with pytest.raises(ValueError, match="Failed to parse"):
+            _parse_synthesis_json("not json at all", paper_count=1)
+
+    def test_empty_synthesis_raises(self):
+        with pytest.raises(ValueError):
+            _parse_synthesis_json('{"synthesis": ""}', paper_count=1)
+
+
+# --- _parse_gaps_json ---
+
+
+class TestParseGapsJson:
+    def test_valid_json(self):
+        raw = (
+            '{"contradictions": [{"title": "C", "description": "d", "paper_indexes": [1, 2]}],'
+            ' "gaps": [{"title": "G", "description": "d", "paper_indexes": []}],'
+            ' "lineages": [{"title": "L", "description": "d", "paper_indexes": [3]}]}'
+        )
+        data = _parse_gaps_json(raw, paper_count=3)
+        assert len(data["contradictions"]) == 1
+        assert data["contradictions"][0]["paper_indexes"] == [1, 2]
+        assert len(data["gaps"]) == 1
+        assert data["gaps"][0]["paper_indexes"] == []
+        assert len(data["lineages"]) == 1
+        assert data["lineages"][0]["paper_indexes"] == [3]
+
+    def test_fenced_json(self):
+        raw = '```json\n{"contradictions": [], "gaps": [], "lineages": []}\n```'
+        data = _parse_gaps_json(raw, paper_count=1)
+        assert data == {"contradictions": [], "gaps": [], "lineages": []}
+
+    def test_out_of_range_indexes_dropped(self):
+        raw = '{"contradictions": [{"title": "C", "paper_indexes": [0, 5]}]}'
+        data = _parse_gaps_json(raw, paper_count=3)
+        assert data["contradictions"][0]["paper_indexes"] == []
+
+    def test_garbage_raises(self):
+        with pytest.raises(ValueError, match="Failed to parse"):
+            _parse_gaps_json("not json at all", paper_count=1)
+
+    def test_missing_lists_default_empty(self):
+        raw = '{"contradictions": [{"title": "C", "paper_indexes": [1]}]}'
+        data = _parse_gaps_json(raw, paper_count=1)
+        assert len(data["contradictions"]) == 1
+        assert data["gaps"] == []
+        assert data["lineages"] == []

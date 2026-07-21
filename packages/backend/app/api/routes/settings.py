@@ -106,24 +106,21 @@ class LLMModelsListResponse(BaseModel):
 
 
 class LLMPreferencesResponse(BaseModel):
-    chat_model: Optional[str] = None
-    auto_highlight_model: Optional[str] = None
-    explain_model: Optional[str] = None
+    conversation_model: Optional[str] = None
+    analysis_model: Optional[str] = None
     openrouter_key_mode: Literal["app", "byok"] = "app"
 
 
 class LLMPreferencesUpdate(BaseModel):
-    chat_model: Optional[str] = None
-    auto_highlight_model: Optional[str] = None
-    explain_model: Optional[str] = None
+    conversation_model: Optional[str] = None
+    analysis_model: Optional[str] = None
     openrouter_key_mode: Literal["app", "byok"] = "app"
 
 
 VALID_MODEL_IDS = OPENROUTER_MODEL_IDS
 MODEL_PREFERENCE_FIELDS = {
-    "chat_model",
-    "auto_highlight_model",
-    "explain_model",
+    "conversation_model",
+    "analysis_model",
 }
 
 
@@ -184,9 +181,8 @@ async def get_llm_preferences(
     """Return the user's current LLM model preferences per feature."""
     prefs = await _get_or_create_prefs(current_user.id, db)
     return LLMPreferencesResponse(
-        chat_model=prefs.chat_model,
-        auto_highlight_model=prefs.auto_highlight_model,
-        explain_model=prefs.explain_model,
+        conversation_model=prefs.conversation_model,
+        analysis_model=prefs.analysis_model,
         openrouter_key_mode=prefs.openrouter_key_mode,
     )
 
@@ -235,9 +231,8 @@ async def update_llm_preferences(
     await db.refresh(prefs)
 
     return LLMPreferencesResponse(
-        chat_model=prefs.chat_model,
-        auto_highlight_model=prefs.auto_highlight_model,
-        explain_model=prefs.explain_model,
+        conversation_model=prefs.conversation_model,
+        analysis_model=prefs.analysis_model,
         openrouter_key_mode=prefs.openrouter_key_mode,
     )
 

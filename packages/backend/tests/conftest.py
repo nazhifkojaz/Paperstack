@@ -3,6 +3,7 @@
 Uses PostgreSQL via testcontainers to match production behavior.
 """
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator, Generator
 
@@ -10,8 +11,8 @@ import pytest
 import pytest_asyncio
 import respx
 from httpx import AsyncClient, ASGITransport, Response
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import delete, text
 from testcontainers.postgres import PostgresContainer
 
 
@@ -121,6 +122,64 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
             yield ac
     finally:
         app.dependency_overrides = {}
+
+
+@pytest_asyncio.fixture
+async def concurrent_session_factory(test_engine, _db_tables):
+    """Create independent committed sessions for lock/concurrency tests."""
+    return async_sessionmaker(test_engine, expire_on_commit=False, autoflush=False)
+
+
+@pytest_asyncio.fixture
+async def concurrent_clients(concurrent_session_factory):
+    """Two HTTP clients whose requests each receive a fresh DB session."""
+    from app.api import deps
+
+    previous_overrides = app.dependency_overrides.copy()
+
+    async def override_get_db():
+        async with concurrent_session_factory() as session:
+            try:
+                yield session
+            finally:
+                await session.rollback()
+
+    app.dependency_overrides[deps.get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    try:
+        async with (
+            AsyncClient(transport=transport, base_url="http://test") as first,
+            AsyncClient(transport=transport, base_url="http://test") as second,
+        ):
+            yield first, second
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
+
+
+@pytest_asyncio.fixture
+async def concurrent_user(concurrent_session_factory) -> AsyncGenerator[User, None]:
+    """A committed user visible to independent request transactions."""
+    from app.core import security
+
+    user = User(
+        id=uuid.uuid4(),
+        github_id=uuid.uuid4().int % 2_000_000_000 + 10_000_000,
+        github_login=f"concurrent-{uuid.uuid4().hex}",
+        display_name="Concurrent User",
+        avatar_url="https://example.com/concurrent.png",
+        access_token=security.encrypt_token("gh_concurrent_token"),
+    )
+    async with concurrent_session_factory() as session:
+        session.add(user)
+        await session.commit()
+
+    try:
+        yield user
+    finally:
+        async with concurrent_session_factory() as session:
+            await session.execute(delete(User).where(User.id == user.id))
+            await session.commit()
 
 
 @pytest_asyncio.fixture

@@ -36,6 +36,11 @@ def _openrouter_model(
 
 OPENROUTER_MODELS = [
     _openrouter_model(
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "Nemotron 3 Super 120B",
+        "NVIDIA's Nemotron 3 Super model (default)",
+    ),
+    _openrouter_model(
         "openai/gpt-oss-120b:free",
         "GPT-OSS 120B",
         "OpenAI's open-source 120B model",
@@ -194,6 +199,162 @@ def _parse_queries_json(
         if cat in data and isinstance(data[cat], str) and data[cat].strip():
             result[cat] = data[cat].strip()
     return result
+
+
+SUMMARY_FIELDS = (
+    "tldr",
+    "problem",
+    "method",
+    "dataset",
+    "result",
+    "contribution",
+)
+
+
+def _parse_summary_json(raw_response: str | None) -> dict[str, Any]:
+    """Parse the paper-summary LLM response into a validated dict."""
+    if not raw_response:
+        raise ValueError("Empty LLM response in summary generation")
+    cleaned = strip_markdown_fences(raw_response)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', " ", cleaned)
+        try:
+            data = json.loads(sanitized)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse summary JSON: {e}: {cleaned[:200]}")
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+    parsed: dict[str, Any] = {}
+    for field in SUMMARY_FIELDS:
+        value = data.get(field)
+        parsed[field] = (
+            value.strip() if isinstance(value, str) and value.strip() else None
+        )
+    claims = data.get("key_claims")
+    if isinstance(claims, list):
+        parsed["key_claims"] = [
+            c.strip() for c in claims if isinstance(c, str) and c.strip()
+        ][:5]
+    else:
+        parsed["key_claims"] = []
+    if not parsed["tldr"]:
+        raise ValueError("Summary response missing required 'tldr' field")
+    return parsed
+
+
+def _parse_paper_indexes(raw_indexes: Any, paper_count: int) -> list[int]:
+    """Coerce an LLM-provided paper_indexes value into a filtered list[int].
+
+    Accepts ints or numeric strings; drops anything out of range
+    (1 <= i <= paper_count) or non-numeric. De-duplicates while preserving
+    order.
+    """
+    if not isinstance(raw_indexes, list):
+        return []
+    result: list[int] = []
+    seen: set[int] = set()
+    for item in raw_indexes:
+        try:
+            idx = int(item)
+        except (ValueError, TypeError):
+            continue
+        if idx < 1 or idx > paper_count or idx in seen:
+            continue
+        seen.add(idx)
+        result.append(idx)
+    return result
+
+
+def _parse_synthesis_json(raw_response: str | None, paper_count: int) -> dict[str, Any]:
+    """Parse the collection-synthesis LLM response into a validated dict."""
+    if not raw_response:
+        raise ValueError("Empty LLM response in synthesis generation")
+    cleaned = strip_markdown_fences(raw_response)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', " ", cleaned)
+        try:
+            data = json.loads(sanitized)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse synthesis JSON: {e}: {cleaned[:200]}")
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+    synthesis = data.get("synthesis")
+    if not isinstance(synthesis, str) or not synthesis.strip():
+        raise ValueError("Synthesis response missing required 'synthesis' field")
+
+    themes_raw = data.get("themes", [])
+    if not isinstance(themes_raw, list):
+        themes_raw = []
+    themes = []
+    for theme in themes_raw:
+        if not isinstance(theme, dict):
+            continue
+        name = theme.get("name", "")
+        description = theme.get("description", "")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        themes.append(
+            {
+                "name": name.strip(),
+                "description": str(description).strip() if description else "",
+                "paper_indexes": _parse_paper_indexes(
+                    theme.get("paper_indexes"), paper_count
+                ),
+            }
+        )
+    return {"synthesis": synthesis.strip(), "themes": themes}
+
+
+def _parse_gaps_json(raw_response: str | None, paper_count: int) -> dict[str, Any]:
+    """Parse the gaps/contradictions/lineages LLM response."""
+    if not raw_response:
+        raise ValueError("Empty LLM response in gaps generation")
+    cleaned = strip_markdown_fences(raw_response)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        sanitized = re.sub(r'(?<=[^\\])\n(?=[^"]*")', " ", cleaned)
+        try:
+            data = json.loads(sanitized)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse gaps JSON: {e}: {cleaned[:200]}")
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+    def _parse_list(key: str) -> list[dict[str, Any]]:
+        raw = data.get(key, [])
+        if not isinstance(raw, list):
+            return []
+        items = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("title", "")
+            description = item.get("description", "")
+            if not isinstance(title, str) or not title.strip():
+                continue
+            items.append(
+                {
+                    "title": title.strip(),
+                    "description": str(description).strip() if description else "",
+                    "paper_indexes": _parse_paper_indexes(
+                        item.get("paper_indexes"), paper_count
+                    ),
+                }
+            )
+        return items
+
+    return {
+        "contradictions": _parse_list("contradictions"),
+        "gaps": _parse_list("gaps"),
+        "lineages": _parse_list("lineages"),
+    }
 
 
 class LLMService:
@@ -536,3 +697,179 @@ CRITICAL:
             return {}
 
         return _parse_queries_json(raw, categories)
+
+    async def generate_paper_summary(
+        self,
+        title: str,
+        source_text: str,
+        provider: str,
+        api_key: str,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a structured summary of a paper from its abstract/conclusion.
+
+        Returns {tldr, problem, method, dataset, result, contribution,
+        key_claims}. Raises ValueError on unparseable responses and
+        LLMProviderError/LLMRateLimitError on provider failures.
+        """
+        system_prompt = (
+            "You are an academic paper analysis assistant. You produce faithful, "
+            "compact structured summaries of research papers. Only state facts "
+            "supported by the provided text; use null when a field cannot be "
+            "determined."
+        )
+        user_prompt = (
+            f"Paper Title: {title}\n\n"
+            f"Text (abstract, and conclusion when available):\n{source_text[:6000]}\n\n"
+            "Summarize into JSON (no markdown fences) with EXACTLY these keys:\n"
+            "{\n"
+            '  "tldr": "2-3 sentence plain-language summary",\n'
+            '  "problem": "the problem addressed, 1-2 sentences or null",\n'
+            '  "method": "the approach/technique, 1-2 sentences or null",\n'
+            '  "dataset": "datasets/corpora/benchmarks used, or null",\n'
+            '  "result": "headline quantitative/qualitative results, or null",\n'
+            '  "contribution": "the main novel contribution, or null",\n'
+            '  "key_claims": ["3-5 short verbatim-or-near-verbatim claims"]\n'
+            "}\n\n"
+            "CRITICAL: use the paper's actual terminology; do not invent "
+            "numbers or datasets not present in the text."
+        )
+        if provider != "openrouter":
+            raise ValueError(f"Unknown provider: {provider}")
+        reasoning_effort = (
+            settings.OPENROUTER_REASONING_EFFORT
+            if settings.OPENROUTER_REASONING_ENABLED
+            else None
+        )
+        raw = await self.call_openrouter(
+            system_prompt,
+            user_prompt,
+            api_key,
+            model=model or DEFAULT_FREE_MODEL,
+            reasoning_effort=reasoning_effort,
+        )
+        return _parse_summary_json(raw)
+
+    # --- Collection-level analysis (Phase 3: synthesis + gaps) ---
+
+    _COLLECTION_SYSTEM_PROMPT = (
+        "You are an academic literature-review assistant. You synthesize "
+        "cross-paper insights and identify gaps, contradictions, and lineages "
+        "strictly from the provided paper summaries. Only reference papers by "
+        "their bracketed index. Do not invent findings not present in the "
+        "summaries."
+    )
+
+    def _build_collection_user_prompt(
+        self, collection_name: str, papers_bundle: str, output_contract: str
+    ) -> str:
+        return (
+            f"Collection: {collection_name}\n\n"
+            f"Below are numbered summaries of the member papers:\n\n"
+            f"{papers_bundle}\n\n"
+            f"{output_contract}\n\n"
+            "Prompt rules:\n"
+            "- Only reference papers by their bracketed index (e.g. [1], [3]).\n"
+            "- Do not invent findings not present in the summaries.\n"
+            "- Return 2-5 items per list; return an empty list when nothing "
+            "qualifies.\n"
+            "CRITICAL: respond with JSON only, no markdown fences."
+        )
+
+    async def _call_collection_analysis(
+        self,
+        collection_name: str,
+        papers_bundle: str,
+        output_contract: str,
+        provider: str,
+        api_key: str,
+        model: str | None,
+    ) -> str:
+        """Shared OpenRouter call for collection-level analysis.
+
+        Both synthesis and gaps build their output contract, then delegate
+        here for the provider guard + reasoning + call_openrouter pattern.
+        """
+        user_prompt = self._build_collection_user_prompt(
+            collection_name, papers_bundle, output_contract
+        )
+        if provider != "openrouter":
+            raise ValueError(f"Unknown provider: {provider}")
+        reasoning_effort = (
+            settings.OPENROUTER_REASONING_EFFORT
+            if settings.OPENROUTER_REASONING_ENABLED
+            else None
+        )
+        return await self.call_openrouter(
+            self._COLLECTION_SYSTEM_PROMPT,
+            user_prompt,
+            api_key,
+            model=model or DEFAULT_FREE_MODEL,
+            reasoning_effort=reasoning_effort,
+        )
+
+    async def generate_collection_synthesis(
+        self,
+        collection_name: str,
+        papers_bundle: str,
+        paper_count: int,
+        provider: str,
+        api_key: str,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a cross-paper synthesis (narrative + themes).
+
+        Returns {"synthesis": str, "themes": [{"name", "description",
+        "paper_indexes": [int]}]}. Raises ValueError on unparseable output.
+        """
+        output_contract = (
+            "Return JSON (no markdown fences) with EXACTLY this shape:\n"
+            "{\n"
+            '  "synthesis": "3-6 paragraph literature-review narrative of '
+            'how these papers relate",\n'
+            '  "themes": [\n'
+            '    {"name": "short theme name", '
+            '"description": "1-2 sentences", "paper_indexes": [1, 3]}\n'
+            "  ]\n"
+            "}"
+        )
+        raw = await self._call_collection_analysis(
+            collection_name, papers_bundle, output_contract, provider, api_key, model
+        )
+        return _parse_synthesis_json(raw, paper_count)
+
+    async def generate_collection_gaps(
+        self,
+        collection_name: str,
+        papers_bundle: str,
+        paper_count: int,
+        provider: str,
+        api_key: str,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate gap/contradiction/lineage analysis across papers.
+
+        Returns {"contradictions": [...], "gaps": [...], "lineages": [...]}.
+        Raises ValueError on unparseable output.
+        """
+        output_contract = (
+            "Return JSON (no markdown fences) with EXACTLY this shape:\n"
+            "{\n"
+            '  "contradictions": [\n'
+            '    {"title": "short label", "description": "what disagrees and '
+            'how", "paper_indexes": [2, 5]}\n'
+            "  ],\n"
+            '  "gaps": [\n'
+            '    {"title": "short label", "description": "what none of these '
+            'papers address", "paper_indexes": []}\n'
+            "  ],\n"
+            '  "lineages": [\n'
+            '    {"title": "short label", "description": "how idea X evolved '
+            'across papers", "paper_indexes": [1, 4, 6]}\n'
+            "  ]\n"
+            "}"
+        )
+        raw = await self._call_collection_analysis(
+            collection_name, papers_bundle, output_contract, provider, api_key, model
+        )
+        return _parse_gaps_json(raw, paper_count)

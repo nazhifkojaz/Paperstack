@@ -1,6 +1,9 @@
 """Shared test helpers for mocking quota/API-key resolution results."""
 
+import asyncio
 from unittest.mock import MagicMock
+
+from app.services.quota_service import quota_service
 
 
 TEST_EMBEDDING = [0.01] * 1024
@@ -40,6 +43,51 @@ def setup_http_client_mocks() -> None:
 
     deps.get_llm_http_client = override_get_llm_http_client
     deps.get_embedding_http_client = override_get_embedding_http_client
+
+
+def make_create_task_stub(real_create_task, *captured_names: str):
+    """Capture and close selected background coroutines during route tests."""
+    background_tasks = []
+
+    def _create_task(coro):
+        coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
+        if coro_name in captured_names:
+            background_tasks.append(coro)
+            coro.close()
+            return MagicMock()
+        return real_create_task(coro)
+
+    _create_task.background_tasks = background_tasks
+    return _create_task
+
+
+class GatedSummaryResolver:
+    """Hold the first quota resolution so a second request contends on its lock."""
+
+    def __init__(self) -> None:
+        self.first_entered = asyncio.Event()
+        self.release_first = asyncio.Event()
+        self.second_entered = asyncio.Event()
+        self.call_count = 0
+
+    async def __call__(self, user, db, feature, *, commit=True):
+        assert feature == "summary"
+        assert commit is False
+        self.call_count += 1
+        if self.call_count == 1:
+            self.first_entered.set()
+            await self.release_first.wait()
+        else:
+            self.second_entered.set()
+
+        quota_result = await quota_service.check_and_decrement(user.id, db, "summary")
+        resolution = MagicMock(
+            provider="openrouter",
+            api_key="test-key",
+            model=None,
+            is_in_house=True,
+        )
+        return resolution, quota_result
 
 
 def make_quota_result(

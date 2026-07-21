@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     QUOTA_EXPLAIN_PARAPHRASE_DAILY: int = 30
     QUOTA_AUTO_HIGHLIGHT_QUICK_DAILY: int = 5
     QUOTA_AUTO_HIGHLIGHT_THOROUGH_DAILY: int = 3
+    QUOTA_SUMMARY_DAILY: int = 10
+    # Bulk collection summarization: papers processed concurrently (VPS is
+    # 2 vCPU — mirror the auto-highlight thorough cap rationale).
+    SUMMARY_BULK_CONCURRENCY: int = 2
+
+    # Near-duplicate detection threshold (cosine similarity) for collections.
+    DUPLICATE_SIMILARITY_THRESHOLD: float = 0.95
 
     # OpenRouter reasoning (thinking) mode
     OPENROUTER_REASONING_ENABLED: bool = True
@@ -122,6 +129,20 @@ class Settings(BaseSettings):
     RERANKER_BACKEND: str = "openrouter"
     RERANKER_FALLBACK_MODEL: str | None = None
     RERANKER_POOL_K: int = 50
+
+    # In collection chat, cap how many pool candidates a single PDF may
+    # contribute before reranking, so one long paper can't crowd out the rest.
+    COLLECTION_RERANK_PER_PDF_CAP: int = 6
+
+    # --- OpenAlex (related-work recommender) ---
+    # mailto for OpenAlex's polite pool (faster, more reliable rate limits).
+    OPENALEX_MAILTO: str = "paperstack@example.com"  # override in env
+    RECOMMENDATIONS_MAX_RESULTS: int = 10
+    # A work must be cited by at least this many member papers to be suggested.
+    RECOMMENDATIONS_MIN_CITING: int = 2
+    # Cap OpenAlex backfill lookups per recommendations request (first call on a
+    # large collection stays bounded; the rest fill in on subsequent requests).
+    RECOMMENDATIONS_MAX_BACKFILL: int = 25
 
     # Training data logging
     TRAINING_DATA_LOGGING_ENABLED: bool = False
